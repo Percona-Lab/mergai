@@ -1,0 +1,338 @@
+from git import Repo, Commit, Blob
+import hashlib
+from typing import Iterator, Tuple, Optional
+import logging
+from pathlib import Path
+from enum import StrEnum
+
+log = logging.getLogger(__name__)
+
+BlobsMapType = dict[str, list[Tuple[int, Blob]]]
+
+
+class ConflictType(StrEnum):
+    BOTH_MODIFIED = "both modified"
+    BOTH_ADDED = "both added"
+    DELETED_BY_THEM = "deleted by them"
+    ADDED_BY_US = "added by us"
+    DELETED_BY_US = "deleted by us"
+    ADDED_BY_THEM = "added by them"
+    UNKNOWN = "unknown"
+
+
+def short_sha(sha: str) -> str:
+    return sha[:12]
+
+
+def author_to_dict(author):
+    return {
+        "name": author.name,
+        "email": author.email,
+    }
+
+
+def commit_to_dict(commit):
+    return {
+        "hexsha": commit.hexsha,
+        "short_sha": short_sha(commit.hexsha),
+        "author": author_to_dict(commit.author),
+        "authored_date": commit.authored_date,
+        "summary": commit.summary,
+        "message": commit.message,
+        "parents": [p.hexsha for p in commit.parents],
+    }
+
+
+def is_merge_in_progress(repo: Repo) -> bool:
+    merge_head = Path(repo.git_dir) / "MERGE_HEAD"
+    return merge_head.exists()
+
+
+def get_path_hash(path: str) -> str:
+    return hashlib.sha256(path.encode("utf-8")).hexdigest()
+
+
+def get_current_branch(repo: Repo) -> str:
+    try:
+        return repo.active_branch.name
+    except TypeError:
+        # Detached HEAD state
+        return short_sha(repo.head.commit.hexsha)
+
+
+def remove_branch_if_exists(repo: Repo, branch_name: str):
+    try:
+        repo.git.branch("-D", branch_name)
+    except Exception:
+        pass
+
+
+def github_file_compare_url(
+    owner: str, name: str, base_commit: str, head_commit: str, path: str
+) -> str:
+    """
+    Build a GitHub compare URL that scrolls to a single file's diff.
+    Uses anchor: #diff-<SHA256(path)>
+    """
+    # path must be repo-relative, no leading slash – same as from unmerged_blobs()
+    anchor = hashlib.sha256(path.encode("utf-8")).hexdigest()
+    # You can shorten SHAs if you like; full SHA is also fine
+    base = base_commit[:12]
+    head = head_commit[:12]
+
+    return f"https://github.com/{owner}/{name}/compare/{base}...{head}#diff-{anchor}"
+
+
+def conflict_type_supports_diff(conflict_type: ConflictType) -> bool:
+    return conflict_type in {
+        ConflictType.BOTH_MODIFIED,
+        ConflictType.BOTH_ADDED,
+    }
+
+
+def compress_unified_diff(
+    diff_text: str,
+    *,
+    block_threshold: int = 30,  # minimum block size to start folding
+    head: int = 5,  # keep first N lines of big block
+    tail: int = 5,  # keep last M lines
+) -> str:
+    """
+    Compress large +/- blocks in a unified diff for display purposes.
+
+    - Only affects contiguous blocks of lines starting with '+' or '-'
+      (but not '+++'/'---' file headers).
+    - For blocks longer than `block_threshold`, keeps `head` first lines
+      and `tail` last lines, and inserts a summary line in the middle.
+    """
+    lines = diff_text.splitlines()
+    out: list[str] = []
+
+    i = 0
+    n = len(lines)
+
+    def is_change_line(line: str) -> bool:
+        if not line:
+            return False
+        if line.startswith("+++ ") or line.startswith("--- "):
+            return False
+        return line[0] in {"+", "-"}
+
+    while i < n:
+        line = lines[i]
+
+        if not is_change_line(line):
+            out.append(line)
+            i += 1
+            continue
+
+        # start of a +/- block
+        sign = line[0]
+        block_start = i
+        j = i
+
+        while j < n and is_change_line(lines[j]) and lines[j][0] == sign:
+            j += 1
+
+        block = lines[block_start:j]
+        block_len = len(block)
+
+        if block_len >= block_threshold and head + tail < block_len:
+            # keep head + tail, fold the middle
+            kept_head = block[:head]
+            kept_tail = block[-tail:]
+
+            middle_count = block_len - head - tail
+
+            if sign == "-":
+                summary = f"- (... {middle_count} more deleted lines...)"
+            else:
+                summary = f"+ (... {middle_count} more added lines...)"
+
+            out.extend(kept_head)
+            out.append(summary)
+            out.extend(kept_tail)
+        else:
+            out.extend(block)
+
+        i = j
+
+    return "\n".join(out)
+
+
+def get_diffs(
+    repo: Repo,
+    blobs_map: BlobsMapType,
+    lines_of_context: int = 0,
+    use_compressed_diffs: bool = False,
+) -> dict:
+    diffs = {}
+    args = [
+        "--cc",
+        f"-U{lines_of_context}",  # lines of context
+        "--no-color",
+    ]
+
+    for file_path, stages in blobs_map.items():
+        conflict_type = get_conflict_type(stages)
+        if not conflict_type_supports_diff(conflict_type):
+            continue
+        diff = repo.git.diff(*args + [file_path])
+
+        if use_compressed_diffs:
+            diff = compress_unified_diff(diff)
+
+        diffs[file_path] = diff
+
+    return diffs
+
+
+def get_their_commits(
+    repo: Repo, base: Commit, theirs: Commit, blobs_map: BlobsMapType
+) -> dict:
+    their_commits = {}
+    for file_path, _ in blobs_map.items():
+        file_commits = list(
+            repo.iter_commits(f"{base.hexsha}..{theirs.hexsha}", paths=[file_path])
+        )
+        if file_commits:
+            their_commits[file_path] = [
+                commit_to_dict(commit) for commit in file_commits
+            ]
+
+    return their_commits
+
+
+def get_conflict_type(stages: list) -> ConflictType:
+    stage_numbers = {stage for stage, _ in stages}
+
+    has_base = 1 in stage_numbers
+    has_ours = 2 in stage_numbers
+    has_theirs = 3 in stage_numbers
+
+    if has_ours and has_theirs:
+        if has_base:
+            return ConflictType.BOTH_MODIFIED
+        else:
+            return ConflictType.BOTH_ADDED
+    elif has_ours and not has_theirs:
+        if has_base:
+            return ConflictType.DELETED_BY_THEM
+        else:
+            return ConflictType.ADDED_BY_US
+    elif has_theirs and not has_ours:
+        if has_base:
+            return ConflictType.DELETED_BY_US
+        else:
+            return ConflictType.ADDED_BY_THEM
+    else:
+        return ConflictType.UNKNOWN
+
+
+def get_conflict_context(
+    repo: Repo,
+    use_diffs: bool = True,
+    lines_of_context: int = 0,
+    use_compressed_diffs: bool = False,
+    use_their_commits: bool = False,
+) -> dict:
+    if not is_merge_in_progress(repo):
+        return None
+
+    blobs_map = repo.index.unmerged_blobs()
+
+    ours_commit = repo.head.commit
+    theirs_commit = repo.commit("MERGE_HEAD")
+    base_commit = repo.merge_base(ours_commit, theirs_commit)[0]
+
+    context = {}
+    context.update(
+        {
+            "ours_commit": commit_to_dict(ours_commit),
+            "theirs_commit": commit_to_dict(theirs_commit),
+            "base_commit": commit_to_dict(base_commit),
+            "files": list(blobs_map.keys()),
+            "conflict_types": {
+                file_path: get_conflict_type(stages)
+                for file_path, stages in blobs_map.items()
+            },
+        }
+    )
+
+    if use_diffs:
+        context["diffs"] = get_diffs(
+            repo,
+            blobs_map,
+            lines_of_context=lines_of_context,
+            use_compressed_diffs=use_compressed_diffs,
+        )
+
+    if use_their_commits:
+        context["their_commits"] = get_their_commits(
+            repo, base_commit, theirs_commit, blobs_map
+        )
+
+    return context
+
+
+def merge_has_conflicts(repo: Repo, parent1: Commit, parent2: Commit) -> bool:
+    try:
+        # Try to perform a dry-run merge to see if there are conflicts
+        repo.git.merge_tree(parent1, parent2)
+    except Exception as e:
+        return True
+
+
+def is_valid_commit(repo: Repo, commit_sha: str) -> bool:
+    try:
+        repo.commit(commit_sha)
+        return True
+    except Exception:
+        return False
+
+
+def is_merge_commit(commit: Commit) -> bool:
+    return len(commit.parents) >= 2
+
+
+def commit_has_conflicts(repo: Repo, commit: Commit) -> bool:
+    # A merge commit must have at least two parents
+    if len(commit.parents) < 2:
+        return False
+
+    parent1 = commit.parents[0]
+    parent2 = commit.parents[1]
+
+    return merge_has_conflicts(repo, parent1, parent2)
+
+
+def get_merge_conflicts(
+    repo: Repo, revision: str, max_count: int = 0
+) -> Iterator[Commit]:
+    merge_commits = list(repo.iter_commits(revision, merges=True))
+    total = len(merge_commits)
+
+    count = 0
+    for commit in merge_commits:
+        has_conflict = commit_has_conflicts(repo, commit)
+        if has_conflict:
+            count += 1
+            if max_count > 0 and count > max_count:
+                break
+            yield commit
+
+
+def read_commit_note(repo: Repo, ref: str, commit: str) -> Optional[str]:
+    try:
+        note = repo.git.notes("--ref", ref, "show", repo.commit(commit).hexsha)
+        return note
+    except Exception as e:
+        return None
+
+
+def is_merge_conflict_style_diff3(repo: Repo) -> bool:
+    try:
+        merge_conflict_style = repo.git.config("merge.conflictstyle")
+        return merge_conflict_style.lower() == "diff3"
+    except Exception:
+        return False

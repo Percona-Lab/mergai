@@ -1,0 +1,66 @@
+import click
+import logging
+from .app import AppContext
+import git
+
+LOG_FORMAT = "[%(levelname)s] %(message)s"
+
+from dotenv import load_dotenv
+
+load_dotenv()
+
+
+def register_commands(cli):
+    from .commands.conflict_context import create_conflict_context
+
+    cli.add_command(create_conflict_context)
+
+    from .commands.resolve import resolve
+
+    cli.add_command(resolve)
+
+    from .commands.utils import get_merge_conflicts
+
+    cli.add_command(get_merge_conflicts)
+
+    from .commands.replay import replay
+
+    cli.add_command(replay)
+
+    from .commands.pull_request import pr
+
+    cli.add_command(pr)
+
+    from .commands.notes import show, commit, status, log, prompt, drop
+
+    cli.add_command(show)
+    cli.add_command(commit)
+    cli.add_command(status)
+    cli.add_command(log)
+    cli.add_command(prompt)
+    cli.add_command(drop)
+
+
+@click.group()
+@click.pass_obj
+@click.option(
+    "--repo-path",
+    type=click.Path(exists=True, file_okay=False, dir_okay=True),
+    default=".",
+    help="Path to the git repository",
+)
+def cli(app: AppContext, repo_path: str = "."):
+    app.repo = git.Repo(repo_path)
+
+
+def main():
+    logging.basicConfig(
+        level=logging.INFO,
+        format=LOG_FORMAT,
+    )
+    register_commands(cli)
+    cli(obj=AppContext())
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mergai"
+version = "0.1.0"
+dependencies = [
+    "click==8.3.1",
+    "pyaml==25.7.0",
+    "jinja2==3.1.6",
+    "GitPython==3.1.45",
+    "langchain==1.1.0",
+    "langchain_google_genai==3.2.0",
+    "python-dotenv==1.2.1",
+    "tiktoken==0.7.0",
+    "rich==14.2.0",
+    "pygithub==2.8.1",
+]
+
+[project.scripts]
+mergai = "mergai.main:main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
