@@ -343,3 +343,25 @@ class AppContext:
         )
 
         self.drop_all()
+
+    def commit_conflict(self):
+        hint_msg = "Please prepare the conflict context by running:\nmergai create-conflict-context"
+        note = self.load_note()
+        if note is None:
+            raise Exception(f"No note found.\n\n{hint_msg}")
+
+        context = note.get("conflict_context")
+        if context is None:
+            raise Exception(f"No conflict context found in the note.\n\n{hint_msg}")
+
+        ours_sha = context["ours_commit"]["short_sha"]
+        theirs_sha = context["theirs_commit"]["short_sha"]
+        message = f"MergeAI: baseline for merging {theirs_sha} to {ours_sha}"
+
+        for path in context["files"]:
+            self.repo.git.add(path)
+
+        self.repo.git.commit(
+            "-m",
+            message,
+        )
