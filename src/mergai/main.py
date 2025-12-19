@@ -11,10 +11,9 @@ load_dotenv()
 
 
 def register_commands(cli):
-    from .commands.conflict_context import create_conflict_context, commit_conflict
+    from .commands.conflict_context import create_conflict_context
 
     cli.add_command(create_conflict_context)
-    cli.add_command(commit_conflict)
 
     from .commands.resolve import resolve
 
@@ -32,14 +31,20 @@ def register_commands(cli):
 
     cli.add_command(pr)
 
-    from .commands.notes import show, commit, status, log, prompt, drop
+    from .commands.notes import show, status, log, prompt, drop
 
     cli.add_command(show)
-    cli.add_command(commit)
     cli.add_command(status)
     cli.add_command(log)
     cli.add_command(prompt)
     cli.add_command(drop)
+
+    from .commands.repo import commit, commit_conflict, get_merge_conflict, finalize
+
+    cli.add_command(commit)
+    cli.add_command(commit_conflict)
+    cli.add_command(get_merge_conflict)
+    cli.add_command(finalize)
 
 
 @click.group()

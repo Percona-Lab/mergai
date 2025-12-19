@@ -76,13 +76,3 @@ def create_conflict_context(
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
-
-
-@click.command()
-@click.pass_obj
-def commit_conflict(app: AppContext):
-    try:
-        app.commit_conflict()
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)

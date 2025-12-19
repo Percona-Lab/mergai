@@ -9,7 +9,7 @@ from .state_store import StateStore
 import github
 from github import Repository as GithubRepository
 import json
-from typing import Optional
+from typing import Optional, Tuple
 import tempfile
 from pathlib import Path
 from .agents.base import Agent
@@ -68,6 +68,9 @@ class AppContext:
         self.gh_repo_str: Optional[str] = None
         self.gh = github.Github(gh_auth_token()) if gh_token else None
 
+    def get_repo(self) -> git.Repo:
+        return self.repo
+
     def get_gh_repo(self) -> GithubRepository.Repository:
         if self.gh is None:
             raise Exception(
@@ -77,10 +80,10 @@ class AppContext:
             raise Exception("GitHub repository not set. Please provide --repo option.")
         return self.gh.get_repo(self.gh_repo_str)
 
-    def read_note(self, commit: str) -> dict:
+    def read_note(self, commit: str) -> Optional[dict]:
         note_str = git_utils.read_commit_note(self.repo, "mergai", commit)
         if not note_str:
-            raise Exception(f"No note found for commit {commit}")
+            return None
 
         try:
             note = json.loads(note_str)
@@ -365,3 +368,26 @@ class AppContext:
             "-m",
             message,
         )
+
+    def get_merge_conflict(
+        self, ref: str
+    ) -> Tuple[Optional[git.Commit], Optional[dict]]:
+        note = None
+        conflict_context = None
+        for commit in self.repo.iter_commits(ref):
+            note = self.read_note(commit.hexsha)
+
+            if not conflict_context and note and "conflict_context" in note:
+                conflict_context = note["conflict_context"]
+
+            if git_utils.is_merge_commit(commit) and conflict_context:
+                parent1_sha = commit.parents[0].hexsha
+                parent2_sha = commit.parents[1].hexsha
+
+                ours_sha = conflict_context["ours_commit"]["hexsha"]
+                theirs_sha = conflict_context["theirs_commit"]["hexsha"]
+
+                if ours_sha == parent1_sha and theirs_sha == parent2_sha:
+                    return (commit, conflict_context)
+
+        return (None, conflict_context)

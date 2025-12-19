@@ -57,8 +57,8 @@ from ..app import AppContext, convert_note
 @click.option("--pretty", is_flag=True, help="Pretty-print the JSON output.")
 @click.option(
     "--format",
-    type=click.Choice(["json", "markdown"]),
-    default="markdown",
+    type=click.Choice(["json", "markdown", "text"]),
+    default="text",
     help="Output format.",
 )
 @click.argument(
@@ -84,6 +84,8 @@ def show(
         commit = "HEAD" if commit is None else commit
 
         note = app.read_note(commit)
+        if not note:
+            raise Exception(f"No note found for commit {commit}.")
         show_summary = (
             not (
                 show_solution
@@ -137,16 +139,6 @@ def show(
         if output_str:
             util.print_or_page(output_str, format=format)
 
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)
-
-
-@click.command()
-@click.pass_obj
-def commit(app: AppContext):
-    try:
-        app.commit()
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)

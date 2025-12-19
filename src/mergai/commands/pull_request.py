@@ -31,6 +31,8 @@ def pr(app: AppContext, repo: str):
 def create(app: AppContext, base: str):
     try:
         note = app.read_note("HEAD")
+        if not note:
+            raise Exception("No note found for HEAD.")
 
         context = note.get("conflict_context")
         if not context:
@@ -281,6 +283,8 @@ def add_comment_with_solution(app: AppContext, pr_number: Optional[int], commit:
     pr = get_pr_by_number(app, pr_number)
 
     note = app.read_note(commit)
+    if not note:
+        raise Exception(f"No note found for commit {commit}.")
 
     solution = note.get("solution")
     if not solution:

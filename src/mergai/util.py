@@ -365,6 +365,16 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
     output_str += f"Content:\n"
     if "conflict_context" in note:
         output_str += f"  - Conflict Context\n"
+        conflict_context = note["conflict_context"]
+        output_str += (
+            f"    - Base Commit: {conflict_context['base_commit']['hexsha']}\n"
+        )
+        output_str += (
+            f"    - Ours Commit: {conflict_context['ours_commit']['hexsha']}\n"
+        )
+        output_str += (
+            f"    - Theirs Commit: {conflict_context['theirs_commit']['hexsha']}\n"
+        )
     if "pr_comments" in note:
         output_str += f"  - PR Comments (total: {len(note['pr_comments'])})\n"
         stats = get_comments_stats(note["pr_comments"])
