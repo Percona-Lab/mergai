@@ -62,6 +62,7 @@ def finalize(app: AppContext):
         message += "\nModified:\n"
         message += "        TODO\n"
         message += "\n"
+        # TODO: add more details
         message += "MergAI-Note: TODO\n"
         message += "Reviewed-by: TODO\n"
         message += "Approved-by: TODO\n"
