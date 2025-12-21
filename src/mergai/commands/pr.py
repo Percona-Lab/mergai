@@ -306,7 +306,14 @@ def add_comment_with_solution(app: AppContext, pr_number: Optional[int], commit:
 
 @pr.command()
 @click.pass_obj
-def list(app: AppContext):
+@click.option(
+    "--all",
+    "all",
+    is_flag=True,
+    default=False,
+    help="List all PRs in the repository, not just the ones in 'open' state.",
+)
+def list(app: AppContext, all: bool):
     try:
         gh_repo = app.get_gh_repo()
 
@@ -318,11 +325,15 @@ def list(app: AppContext):
         def filter_pr(pr):
             return pr.head.ref.startswith("mergai/")
 
-        pulls = filter(filter_pr, gh_repo.get_pulls())
+        pulls = filter(filter_pr, gh_repo.get_pulls(state="all" if all else "open"))
+        current_branch = git_utils.get_current_branch(app.repo)
 
         for pr in pulls:
-            click.echo(f"#{pr.number}: [{pr.created_at}] title: {pr.title}")
-        # show_prs(pulls)
+            line = f"#{pr.number}: [{pr.created_at}] title: {pr.title} [{pr.head.ref}]"
+            if pr.head.ref == current_branch:
+                # TODO: hardcoded value
+                line = click.style(line, fg="green")
+            click.echo(line)
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
