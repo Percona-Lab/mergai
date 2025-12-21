@@ -15,10 +15,16 @@ from typing import Optional, List, Iterable
     "--repo",
     "repo",
     type=str,
-    required=True,
+    required=False,
+    envvar="GH_REPO",
     help="The repository where the PR is located.",
 )
-def pr(app: AppContext, repo: str):
+def pr(app: AppContext, repo: Optional[str]):
+    if repo is None:
+        raise click.ClickException(
+            "GitHub repository not set. Use --repo or set GH_REPO environment variable."
+        )
+
     app.gh_repo_str = repo
     pass
 
@@ -296,3 +302,27 @@ def add_comment_with_solution(app: AppContext, pr_number: Optional[int], commit:
     body = util.conflict_solution_to_str(solution, format="markdown")
 
     pr.create_issue_comment(body=body)
+
+
+@pr.command()
+@click.pass_obj
+def list(app: AppContext):
+    try:
+        gh_repo = app.get_gh_repo()
+
+        click.echo(
+            f"WARNING: Filtering PRs by branch name. This may be unreliable (but there is TODO)."
+        )
+
+        # TODO: this should check if a branch has commits with mergai notes
+        def filter_pr(pr):
+            return pr.head.ref.startswith("mergai/")
+
+        pulls = filter(filter_pr, gh_repo.get_pulls())
+
+        for pr in pulls:
+            click.echo(f"#{pr.number}: [{pr.created_at}] title: {pr.title}")
+        # show_prs(pulls)
+    except Exception as e:
+        click.echo(f"Error: {e}")
+        exit(1)

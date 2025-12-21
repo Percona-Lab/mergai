@@ -27,7 +27,7 @@ def register_commands(cli):
 
     cli.add_command(replay)
 
-    from .commands.pull_request import pr
+    from .commands.pr import pr
 
     cli.add_command(pr)
 
