@@ -47,6 +47,14 @@ from ..app import AppContext, convert_note
     help="Show the PR comments.",
 )
 @click.option(
+    "--user-comment",
+    "show_user_comment",
+    is_flag=True,
+    default=False,
+    show_default=False,
+    help="Show the user comment.",
+)
+@click.option(
     "--prompt",
     "show_prompt",
     is_flag=True,
@@ -75,6 +83,7 @@ def show(
     show_context: bool,
     show_prompt: bool,
     show_pr_comments: bool,
+    show_user_comment: bool,
     show_raw: bool,
     pretty: bool,
     format: str,
@@ -92,6 +101,7 @@ def show(
                 or show_context
                 or show_prompt
                 or show_pr_comments
+                or show_user_comment
                 or show_raw
             )
             or show_summary
@@ -128,6 +138,13 @@ def show(
                 raise Exception("No PR comments found in the note.")
 
             output_str += util.pr_comments_to_str(pr_comments, format, pretty=pretty)
+
+        if show_user_comment:
+            user_comment = note.get("user_comment")
+            if not user_comment:
+                raise Exception("No user comment found in the note.")
+
+            output_str += util.user_comment_to_str(user_comment, format, pretty=pretty)
 
         if show_solution:
             solution = note.get("solution")
@@ -237,3 +254,95 @@ def drop(app: AppContext, choice: str):
         click.echo(f"Error: {e}")
         exit(1)
     pass
+
+
+COMMENT_FILE_TEMPLATE = """\
+
+# MergAI comment
+#
+# Please write your comment below. Lines starting with '#' will be ignored.
+# An empty comment will abort the operation.
+#
+# TODO:
+# - add support for having comments per file
+"""
+
+
+def strip_comment_lines(edited: str) -> str:
+    lines = edited.splitlines()
+    stripped_lines = [line for line in lines if not line.strip().startswith("#")]
+    return "\n".join(stripped_lines).strip()
+
+
+def now_utc_iso() -> str:
+    from datetime import datetime
+    from datetime import timezone
+
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def get_cur_comment(c: dict) -> str:
+    if not c:
+        return ""
+    return f"# Date: {c.get('date')}\n# User: {c.get('user', '')} [{c.get('email')}]\n\n{c.get('body') or ''}\n"
+
+
+def get_comment_from_cli(body: str, file: str) -> str:
+    parts = []
+    if body:
+        parts.append(body)
+    if file:
+        with open(file, "r") as f:
+            parts.append("```")
+            parts.append(f.read())
+            parts.append("```")
+    stripped = "\n".join(parts).strip()
+    return stripped
+
+
+@click.command()
+@click.pass_obj
+@click.option(
+    "--file",
+    type=click.Path(exists=True),
+    help="Path to a file containing the comment.",
+)
+@click.option(
+    "-f/--force", "force", is_flag=True, default=False, help="Force overwrite."
+)
+@click.argument("body", required=False)
+def comment(app: AppContext, file: str, force: bool, body: str):
+    note = app.load_or_create_note()
+    # TODO: support multiple comments
+    user_comment = note.get("user_comment", "")
+    cur_comment = ""
+    if user_comment:
+        cur_comment = get_cur_comment(user_comment)
+
+    if (body or file) and user_comment and not force:
+        raise click.ClickException(
+            "Comment already exists. Use -f/--force to overwrite."
+        )
+
+    if body or file:
+        stripped = get_comment_from_cli(body, file)
+    else:
+        edited = click.edit(cur_comment + COMMENT_FILE_TEMPLATE + "\n", extension=".sh")
+        if edited is None:
+            raise click.ClickException("No comment provided, aborting.")
+        stripped = strip_comment_lines(edited)
+
+    if not stripped:
+        click.echo("Empty comment, cancelling.")
+        exit(0)
+
+    comment = {
+        "user": app.get_repo().git.config("user.name"),
+        "email": app.get_repo().git.config("user.email"),
+        "date": now_utc_iso(),
+        "body": stripped,
+    }
+
+    note["user_comment"] = comment
+
+    app.state.save_note(note)

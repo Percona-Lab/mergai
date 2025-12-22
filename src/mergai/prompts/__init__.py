@@ -15,3 +15,7 @@ def load_pr_comments_prompt() -> str:
 
 def load_conflict_context_prompt() -> str:
     return load_prompt("conflict_context.md")
+
+
+def load_user_comment_prompt() -> str:
+    return load_prompt("user_comment.md")

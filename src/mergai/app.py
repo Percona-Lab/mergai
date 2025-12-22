@@ -40,6 +40,7 @@ def convert_note(
     show_context: bool = True,
     show_solution: bool = True,
     show_pr_comments: bool = True,
+    show_user_comment: bool = True,
     show_summary: bool = True,
 ) -> str:
     if format == "json":
@@ -52,6 +53,8 @@ def convert_note(
             )
         if show_pr_comments and "pr_comments" in note:
             output_str += util.pr_comments_to_markdown(note["pr_comments"]) + "\n"
+        if show_user_comment and "user_comment" in note:
+            output_str += util.user_comment_to_markdown(note["user_comment"]) + "\n"
         if show_solution and "solution" in note:
             output_str += util.conflict_solution_to_markdown(note["solution"]) + "\n"
 
@@ -143,6 +146,9 @@ class AppContext:
 
         if "pr_comments" in current_note:
             prompt += prompts.load_pr_comments_prompt() + "\n\n"
+
+        if "user_comment" in current_note:
+            prompt += prompts.load_user_comment_prompt() + "\n\n"
 
         prompt += "## Note Data\n\n"
         prompt += "```json\n"

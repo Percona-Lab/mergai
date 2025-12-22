@@ -31,13 +31,14 @@ def register_commands(cli):
 
     cli.add_command(pr)
 
-    from .commands.notes import show, status, log, prompt, drop
+    from .commands.notes import show, status, log, prompt, drop, comment
 
     cli.add_command(show)
     cli.add_command(status)
     cli.add_command(log)
     cli.add_command(prompt)
     cli.add_command(drop)
+    cli.add_command(comment)
 
     from .commands.repo import (
         commit,

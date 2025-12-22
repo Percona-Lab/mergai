@@ -1,7 +1,6 @@
 
 ## PR comments
 
-- The comments refer to files modified in the previous attempt to fix the merge conflict,
 - All comments **MUST** be adressed,
 - All modified files should be included in the `resolved` field (see `Output format`)
 - In case of comments which were not adressed, add appropriate explanation in:
@@ -13,6 +12,7 @@
 - There are two types of comments:
   - review comments - refer to specific line in a file for a given commit
   - normal comment - general comment
+- The comments **CAN** refer to files modified in the previous attempt to fix the merge conflict,
 
 ### Note format
 

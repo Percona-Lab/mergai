@@ -284,6 +284,29 @@ def pr_comments_to_str(comments: dict, format: str, pretty: bool = False):
     return str(comments)
 
 
+USER_COMMENT_TEMPLATE = """\
+# User Comment
+{{ context.date }}: comment from `{{ context.user }} <{{ context.email }}>`:
+
+{{ context.body }}
+"""
+
+
+def user_comment_to_markdown(user_comment: dict) -> str:
+    return render_from_template(USER_COMMENT_TEMPLATE, user_comment)
+
+
+def user_comment_to_str(user_comment: dict, format: str, pretty: bool = False):
+    if format == "json":
+        return (
+            json.dumps(user_comment, default=str, indent=2 if pretty else None) + "\n"
+        )
+    elif format == "markdown":
+        return user_comment_to_markdown(user_comment) + "\n"
+
+    return str(user_comment)
+
+
 def load_if_exists(filename: str) -> str:
     if not os.path.exists(filename):
         return ""
@@ -336,6 +359,9 @@ def commit_note_to_summary_json(
         summary["content"]["pr_comments"] = True
     if "solution" in note:
         summary["content"]["solution"] = True
+    if "user_comment" in note:
+        summary["content"]["user_comment"] = True
+        summary["user_comment"] = note["user_comment"]
 
     return json.dumps(summary, indent=2 if pretty else None) + "\n"
 
@@ -381,6 +407,7 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
         for user, count in stats.items():
             if user != "total_comments":
                 output_str += f"    - {user}: {count} comment(s)\n"
+
     if "solution" in note:
         output_str += f"  - Solution\n"
         stats = get_solution_stats(note["solution"])
@@ -389,6 +416,15 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
         )
         if stats["unresolved_files"] > 0:
             output_str += f"    - Unresolved Files: {stats['unresolved_files']}/{stats['total_files']}\n"
+
+    if "user_comment" in note:
+        output_str += f"\n"
+        output_str += f"User Comment:"
+        output_str += f" {note['user_comment'].get('user', 'unknown')}"
+        output_str += f" <{note['user_comment'].get('email', 'unknown')}>"
+        output_str += f" at {note['user_comment'].get('date', 'unknown')}\n"
+        output_str += f"{note['user_comment'].get('body', '')}\n"
+        output_str += f"\n"
 
     output_str += f"Message:\n    {commit.message.strip().replace('\n', '\n    ')}\n"
 
