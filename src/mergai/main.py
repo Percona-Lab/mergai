@@ -39,12 +39,23 @@ def register_commands(cli):
     cli.add_command(prompt)
     cli.add_command(drop)
 
-    from .commands.repo import commit, commit_conflict, get_merge_conflict, finalize
+    from .commands.repo import (
+        commit,
+        commit_conflict,
+        get_merge_conflict,
+        cherry_pick_solution,
+        finalize,
+        add_note,
+        update,
+    )
 
     cli.add_command(commit)
     cli.add_command(commit_conflict)
     cli.add_command(get_merge_conflict)
+    cli.add_command(cherry_pick_solution)
     cli.add_command(finalize)
+    cli.add_command(add_note)
+    cli.add_command(update)
 
 
 @click.group()

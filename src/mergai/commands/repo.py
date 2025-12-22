@@ -47,6 +47,76 @@ def get_merge_conflict(app: AppContext, revision: str):
 
 @click.command()
 @click.pass_obj
+@click.option(
+    "-f/--force",
+    "force",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing note",
+)
+@click.argument("commit", required=True)
+def cherry_pick_solution(app: AppContext, commit: str, force: bool):
+    try:
+        note = app.read_note(commit)
+        solution = note.get("solution")
+        if not solution:
+            click.echo(f"No solution found in commit note for {commit}.")
+            exit(1)
+
+        cur_note = app.load_note()
+        if "solution" in cur_note and not force:
+            click.echo(
+                "A solution already exists in the current note. Use --force to overwrite."
+            )
+            exit(1)
+
+        cur_note["solution"] = solution
+        app.save_note(cur_note)
+    except Exception as e:
+        click.echo(f"Error: {e}")
+        exit(1)
+
+
+@click.command()
+@click.pass_obj
+@click.argument("remote", default="origin")
+def update(app: AppContext, remote: str):
+    try:
+        app.get_repo().git.fetch(remote, "refs/notes/mergai*:refs/notes/mergai*")
+    except Exception as e:
+        click.echo(f"Error: {e}")
+        exit(1)
+
+
+@click.command()
+@click.pass_obj
+@click.option(
+    "-f/--force",
+    "force",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing note",
+)
+@click.argument("ref", default="HEAD")
+def add_note(app: AppContext, ref: str, force: bool):
+    try:
+        commit = app.get_repo().commit(ref)
+        note = app.read_note(ref)
+        if note is not None and not force:
+            click.echo(
+                f"A note already exists for commit {commit}. Use --force to overwrite."
+            )
+            exit(1)
+
+        app.add_note(commit)
+        app.drop_all()
+    except Exception as e:
+        click.echo(f"Error: {e}")
+        exit(1)
+
+
+@click.command()
+@click.pass_obj
 def finalize(app: AppContext):
     (commit, conflict_context) = app.get_merge_conflict("HEAD")
     if not commit:

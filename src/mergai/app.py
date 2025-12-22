@@ -302,6 +302,20 @@ class AppContext:
         note["solution"] = solution
         self.save_note(note)
 
+    def add_note(self, commit: str):
+        self.repo.git.notes(
+            "--ref", "mergai", "add", "-f", "-F", self.state.note_path(), commit
+        )
+        self.repo.git.notes(
+            "--ref",
+            "mergai-marker",
+            "add",
+            "-f",
+            "-m",
+            "MergaAI note available, use `mergai show <commit>` to view it.",
+            commit,
+        )
+
     def commit(self):
         if not self.state.note_exists():
             raise Exception("No note found.")
@@ -331,20 +345,7 @@ class AppContext:
             "MergaAI: merge conflict solution\n\n" + solution["response"]["summary"]
         )
 
-        commit_sha = self.repo.head.commit.hexsha
-        self.repo.git.notes(
-            "--ref", "mergai", "add", "-f", "-F", self.state.note_path(), commit_sha
-        )
-        self.repo.git.notes(
-            "--ref",
-            "mergai-marker",
-            "add",
-            "-f",
-            "-m",
-            "MergaAI note available, use `mergai show <commit>` to view it.",
-            commit_sha,
-        )
-
+        self.add_note(self.repo.head.commit.hexsha)
         self.drop_all()
 
     def commit_conflict(self):
