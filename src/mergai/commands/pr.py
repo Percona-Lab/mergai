@@ -69,6 +69,7 @@ def create(app: AppContext, base: str):
 
 def get_prs_for_current_branch(app: AppContext) -> List[GithubPullRequest.PullRequest]:
     gh_repo = app.get_gh_repo()
+    # TODO: the head should include the repo owner
     pulls = gh_repo.get_pulls(
         sort="created", head=git_utils.get_current_branch(app.repo)
     )
@@ -304,7 +305,7 @@ def add_comment_with_solution(app: AppContext, pr_number: Optional[int], commit:
     pr.create_issue_comment(body=body)
 
 
-@pr.command()
+@pr.command(name="list")
 @click.pass_obj
 @click.option(
     "--all",
@@ -313,7 +314,7 @@ def add_comment_with_solution(app: AppContext, pr_number: Optional[int], commit:
     default=False,
     help="List all PRs in the repository, not just the ones in 'open' state.",
 )
-def list(app: AppContext, all: bool):
+def list_prs(app: AppContext, all: bool):
     try:
         gh_repo = app.get_gh_repo()
 
