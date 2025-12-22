@@ -3,7 +3,7 @@ import subprocess
 import click
 from . import git_utils
 from . import util
-from .prompts import load_system_prompt
+from . import prompts
 from .agents.factory import create_agent
 from .state_store import StateStore
 import github
@@ -128,27 +128,26 @@ class AppContext:
         self.state.save_note(note)
 
     def build_prompt(self, current_note: dict, use_history: bool) -> str:
-        system_prompt = load_system_prompt()
+        if use_history:
+            raise Exception("use_history in build_prompt is not supported yet.")
+
+        system_prompt = prompts.load_system_prompt()
         project_invariants = util.load_if_exists(".mergai/invariants.md")
 
         prompt = system_prompt + "\n\n"
         if project_invariants:
             prompt += project_invariants + "\n\n"
 
-        prompt += f"# Current Note\n"
-        prompt += convert_note(current_note, "markdown")
+        if "conflict_context" in current_note:
+            prompt += prompts.load_conflict_context_prompt() + "\n\n"
 
-        if use_history:
-            notes = self.get_notes()
-            for idx, (_, note) in enumerate(notes):
-                prompt += f"# History Note {idx + 1}\n"
-                prompt += (
-                    convert_note(
-                        note,
-                        format="markdown",
-                    )
-                    + "\n\n"
-                )
+        if "pr_comments" in current_note:
+            prompt += prompts.load_pr_comments_prompt() + "\n\n"
+
+        prompt += "## Note Data\n\n"
+        prompt += "```json\n"
+        prompt += json.dumps(current_note, indent=2)
+        prompt += "\n```\n"
 
         return prompt
 
@@ -235,6 +234,9 @@ class AppContext:
     def resolve(
         self, force: bool, use_history: bool, yolo: bool, max_attempts: int = 3
     ):
+        if use_history:
+            raise Exception("use_history is not supported yet.")
+
         note = self.load_note()
         if note is None:
             raise Exception("No note found. Please prepare the context first.")
@@ -247,7 +249,8 @@ class AppContext:
         if "solution" in note:
             del note["solution"]
 
-        prompt = self.build_prompt(note, use_history=use_history)
+        # TODO: implement use_history=True
+        prompt = self.build_prompt(note, use_history=False)
 
         agent = self.get_agent(yolo=yolo)
 

@@ -194,6 +194,8 @@ def log(app: AppContext):
 )
 def prompt(app: AppContext, use_history: bool):
     try:
+        if use_history:
+            raise Exception("use-history option is not supported yet.")
         note = app.load_note()
         if note is None:
             click.echo("No note found. Please prepare the context first.")
@@ -202,7 +204,8 @@ def prompt(app: AppContext, use_history: bool):
                 "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
             )
             exit(1)
-        prompt = app.build_prompt(note, use_history=use_history)
+        # TODO: implement use_history
+        prompt = app.build_prompt(note, use_history=False)
         util.print_or_page(prompt, format="markdown")
     except Exception as e:
         click.echo(f"Error: {e}")
