@@ -113,6 +113,25 @@ def show(app: AppContext):
         click.echo(f"Error: {e}")
         exit(1)
 
+@pr.command()
+@click.pass_obj
+def get_url(app: AppContext):
+    try:
+        prs = get_prs_for_current_branch(app)
+        if len(prs) == 0:
+            click.echo("No open pull requests found for the current branch.")
+            exit(0)
+
+        if len(prs) > 1:
+            click.echo("Multiple open pull requests found for the current branch:")
+            show_prs(prs)
+            exit(1)
+
+        pr = prs[0]
+        click.echo(pr.html_url)
+    except Exception as e:
+        click.echo(f"Error: {e}")
+        exit(1)
 
 def handle_pr_number(app: AppContext, pr_number: Optional[int]):
     if pr_number is None:
