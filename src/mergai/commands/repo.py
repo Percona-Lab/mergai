@@ -90,6 +90,17 @@ def update(app: AppContext, remote: str):
 
 @click.command()
 @click.pass_obj
+@click.argument("remote", default="origin")
+def push(app: AppContext, remote: str):
+    try:
+        app.get_repo().git.push(remote, "refs/notes/mergai*:refs/notes/mergai*")
+    except Exception as e:
+        click.echo(f"Error: {e}")
+        exit(1)
+
+
+@click.command()
+@click.pass_obj
 @click.option(
     "-f/--force",
     "force",

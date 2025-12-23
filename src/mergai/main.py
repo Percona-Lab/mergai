@@ -48,6 +48,7 @@ def register_commands(cli):
         finalize,
         add_note,
         update,
+        push,
     )
 
     cli.add_command(commit)
@@ -57,6 +58,7 @@ def register_commands(cli):
     cli.add_command(finalize)
     cli.add_command(add_note)
     cli.add_command(update)
+    cli.add_command(push)
 
 
 @click.group()
