@@ -17,7 +17,7 @@ can have its own section. Example:
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 import yaml
 
 
@@ -32,11 +32,13 @@ class ForkConfig:
         upstream_url: URL of the upstream repository to sync from.
         upstream_branch: Branch name to use when auto-detecting upstream ref.
         upstream_remote: Name of the git remote for upstream (if not set, derived from URL).
+        merge_picks: Configuration for commit prioritization in fork pick.
     """
 
     upstream_url: Optional[str] = None
     upstream_branch: str = "master"
     upstream_remote: Optional[str] = None
+    merge_picks: Optional["MergePicksConfig"] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "ForkConfig":
@@ -48,10 +50,16 @@ class ForkConfig:
         Returns:
             ForkConfig instance with values from data.
         """
+        merge_picks_data = data.get("merge_picks")
+        merge_picks = (
+            MergePicksConfig.from_dict(merge_picks_data) if merge_picks_data else None
+        )
+
         return cls(
             upstream_url=data.get("upstream_url"),
             upstream_branch=data.get("upstream_branch", cls.upstream_branch),
             upstream_remote=data.get("upstream_remote"),
+            merge_picks=merge_picks,
         )
 
 
@@ -84,13 +92,84 @@ class ResolveConfig:
 
 
 @dataclass
+class HugeCommitConfig:
+    """Configuration for identifying huge commits.
+
+    Attributes:
+        min_changed_files: Minimum number of changed files to consider a commit "huge".
+        min_changed_lines: Minimum number of changed lines to consider a commit "huge".
+    """
+
+    min_changed_files: int = 100
+    min_changed_lines: int = 1000
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "HugeCommitConfig":
+        """Create a HugeCommitConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            HugeCommitConfig instance with values from data.
+        """
+        return cls(
+            min_changed_files=data.get("min_changed_files", cls.min_changed_files),
+            min_changed_lines=data.get("min_changed_lines", cls.min_changed_lines),
+        )
+
+
+@dataclass
+class MergePicksConfig:
+    """Configuration for the merge pick criteria.
+
+    This config controls how commits are prioritized for merging.
+    The criteria are evaluated in order: huge_commits, important_files,
+    conflict. The first matching criterion determines the priority.
+
+    The design is extensible - new criteria can be added in the future.
+
+    Attributes:
+        huge_commits: Config for identifying huge commits to prioritize.
+        important_files: List of file paths that, if modified, should prioritize a commit.
+        conflict: If true, prioritize commits that would cause merge conflicts
+                  (only when no other criterion matches). Not yet fully implemented.
+    """
+
+    huge_commits: Optional[HugeCommitConfig] = None
+    important_files: List[str] = field(default_factory=list)
+    conflict: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MergePicksConfig":
+        """Create a MergePicksConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            MergePicksConfig instance with values from data.
+        """
+        huge_commits_data = data.get("huge_commits")
+        huge_commits = (
+            HugeCommitConfig.from_dict(huge_commits_data) if huge_commits_data else None
+        )
+
+        return cls(
+            huge_commits=huge_commits,
+            important_files=data.get("important_files", []),
+            conflict=data.get("conflict", False),
+        )
+
+
+@dataclass
 class MergaiConfig:
     """Configuration settings for MergAI.
 
     All settings are optional and have sensible defaults.
 
     Attributes:
-        fork: Configuration for the fork subcommand.
+        fork: Configuration for the fork subcommand (includes merge_picks).
         resolve: Configuration for the resolve command.
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
@@ -132,7 +211,9 @@ class MergaiConfig:
 
         # Parse resolve section if present
         resolve_data = data.get("resolve", {})
-        resolve_config = ResolveConfig.from_dict(resolve_data) if resolve_data else ResolveConfig()
+        resolve_config = (
+            ResolveConfig.from_dict(resolve_data) if resolve_data else ResolveConfig()
+        )
 
         return cls(
             fork=fork_config,

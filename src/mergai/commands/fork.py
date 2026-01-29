@@ -1,7 +1,10 @@
 import click
-from typing import Optional
+from typing import Optional, List
+from dataclasses import dataclass
+from git import Commit
 from ..app import AppContext
 from .. import git_utils
+from ..config import MergePicksConfig
 from ..util import format_number, format_commit_info, format_commit_info_oneline
 
 @click.group()
@@ -194,3 +197,251 @@ def status(
         click.echo_via_pager(output)
     else:
         click.echo(output)
+
+
+@dataclass
+class PriorityReason:
+    """Reason why a commit was prioritized.
+
+    Attributes:
+        reason_type: Type of criterion matched (e.g., "huge_commit", "important_file", "branching_point").
+        details: Human-readable details about the match.
+    """
+
+    reason_type: str
+    details: str
+
+
+@dataclass
+class PrioritizedCommit:
+    """A commit with its priority information.
+
+    Attributes:
+        commit: The git commit object.
+        reason: The reason for prioritization, or None if no criterion matched.
+    """
+
+    commit: Commit
+    reason: Optional[PriorityReason]
+
+
+def evaluate_commit_priority(
+    repo,
+    commit: Commit,
+    config: MergePicksConfig,
+) -> Optional[PriorityReason]:
+    """Check if a commit matches any priority criterion.
+
+    Criteria are evaluated in this order:
+    1. huge_commits - commits with many changed files/lines
+    2. important_files - commits modifying specific important files
+
+    Future criteria (not yet implemented):
+    - conflict: prioritize commits that would cause merge conflicts
+
+    Args:
+        repo: GitPython Repo object.
+        commit: The commit to evaluate.
+        config: MergePicksConfig with priority criteria.
+
+    Returns:
+        PriorityReason if a criterion matched, None otherwise.
+    """
+    # Check huge_commits criterion
+    if config.huge_commits:
+        stats = git_utils.get_commit_stats(repo, commit)
+        if (
+            stats.files_changed >= config.huge_commits.min_changed_files
+            or stats.total_lines >= config.huge_commits.min_changed_lines
+        ):
+            return PriorityReason(
+                reason_type="huge_commit",
+                details=f"{stats.files_changed} files, {stats.total_lines} lines",
+            )
+
+    # Check important_files criterion
+    if config.important_files:
+        modified = git_utils.get_commit_modified_files(repo, commit)
+        matches = set(modified) & set(config.important_files)
+        if matches:
+            # Show up to 3 matching files in details
+            match_list = sorted(matches)[:3]
+            suffix = "..." if len(matches) > 3 else ""
+            return PriorityReason(
+                reason_type="important_file",
+                details=f"modifies: {', '.join(match_list)}{suffix}",
+            )
+
+    # TODO: Add conflict detection when config.conflict is True
+    # This would check if cherry-picking/merging this commit would cause conflicts
+    # if config.conflict:
+    #     if git_utils.commit_would_conflict(repo, commit, fork_ref):
+    #         return PriorityReason(
+    #             reason_type="conflict",
+    #             details="this commit would cause merge conflicts",
+    #         )
+
+    return None
+
+
+def get_prioritized_commits(
+    repo,
+    unmerged_commits: List[Commit],
+    config: MergePicksConfig,
+) -> List[PrioritizedCommit]:
+    """Evaluate all unmerged commits and return those matching priority criteria.
+
+    Args:
+        repo: GitPython Repo object.
+        unmerged_commits: List of unmerged commits (in reverse chronological order).
+        config: MergePicksConfig with priority criteria.
+
+    Returns:
+        List of PrioritizedCommit objects for commits that matched criteria,
+        in chronological order (oldest first).
+    """
+    prioritized = []
+
+    # Process in chronological order (oldest first)
+    for commit in reversed(unmerged_commits):
+        reason = evaluate_commit_priority(repo, commit, config)
+        if reason:
+            prioritized.append(PrioritizedCommit(commit=commit, reason=reason))
+
+    return prioritized
+
+
+@fork.command()
+@click.pass_obj
+@click.argument(
+    "upstream_ref",
+    type=str,
+    required=False,
+    default=None,
+    metavar="UPSTREAM-REF",
+)
+@click.argument(
+    "fork_ref",
+    type=str,
+    required=False,
+    default="HEAD",
+    metavar="FORK-REF",
+)
+@click.option(
+    "--next",
+    "-n",
+    "next_only",
+    is_flag=True,
+    default=False,
+    help="Print only the hash of the next commit to merge",
+)
+def pick(
+    app: AppContext,
+    upstream_ref: Optional[str],
+    fork_ref: str,
+    next_only: bool,
+):
+    """Suggest commits to merge based on configured priority criteria.
+
+    Analyzes unmerged commits and lists those that match priority criteria
+    from the fork.merge_picks config section:
+
+    \b
+    - huge_commits: Commits with many changed files/lines
+    - important_files: Commits touching specific important files
+    - conflict: (future) Commits that would cause merge conflicts
+
+    Use --next/-n to get just the hash of the recommended next commit.
+    Output is designed to be easily parseable in scripts.
+
+    \b
+    Examples:
+        mergai fork pick                    # List prioritized commits
+        mergai fork pick --next             # Get next commit hash
+        mergai fork pick mongodb/master     # Use specific upstream ref
+    """
+    # Resolve upstream_ref (same logic as status command)
+    if upstream_ref is None:
+        upstream_url = app.config.fork.upstream_url
+
+        if upstream_url is None:
+            click.echo(
+                "Error: No UPSTREAM-REF provided and fork.upstream_url not configured.",
+                err=True,
+            )
+            click.echo(
+                "Either provide UPSTREAM-REF argument or set fork.upstream_url in .mergai.yaml",
+                err=True,
+            )
+            raise SystemExit(1)
+
+        # Find remote matching the URL
+        remote_name = git_utils.find_remote_by_url(app.repo, upstream_url)
+
+        if remote_name is None:
+            click.echo(
+                f"Error: No remote found matching upstream_url: {upstream_url}",
+                err=True,
+            )
+            click.echo(
+                "Hint: Run 'mergai fork init' to add and fetch the upstream remote.",
+                err=True,
+            )
+            raise SystemExit(1)
+
+        # Build upstream_ref from remote name and branch
+        upstream_branch = app.config.fork.upstream_branch
+        upstream_ref = f"{remote_name}/{upstream_branch}"
+
+    # Get fork status to obtain unmerged commits
+    try:
+        fork_status = git_utils.get_fork_status(app.repo, upstream_ref, fork_ref)
+    except Exception as e:
+        click.echo(f"Error: Failed to get fork status: {e}", err=True)
+        raise SystemExit(1)
+
+    if fork_status.is_up_to_date:
+        # No unmerged commits - nothing to do
+        # For --next, output nothing (success with empty output)
+        # TODO: Consider whether --next should fall back to first unmerged commit
+        # if no priority commits are found, or return error/empty as currently
+        return
+
+    # Get merge_picks config from fork section
+    merge_picks_config = app.config.fork.merge_picks
+    if merge_picks_config is None:
+        # No merge_picks config - use empty config (no criteria will match)
+        merge_picks_config = MergePicksConfig()
+
+    # Get prioritized commits
+    prioritized = get_prioritized_commits(
+        app.repo,
+        fork_status.unmerged_commits,
+        merge_picks_config,
+    )
+
+    if next_only:
+        # Output only the hash of the first prioritized commit
+        if prioritized:
+            click.echo(prioritized[0].commit.hexsha)
+        # If no prioritized commits, output nothing (success)
+        # TODO: Consider fallback to first unmerged commit if no priority match
+        return
+
+    # List all prioritized commits
+    if not prioritized:
+        # No output if no commits match criteria (for script parseability)
+        return
+
+    # Output format matching 'fork status -l' style
+    total_commits = len(prioritized)
+    index_width = len(str(total_commits))
+
+    output_lines = []
+    for i, pc in enumerate(prioritized, 1):
+        commit_info = format_commit_info_oneline(pc.commit)
+        reason_tag = f"[{pc.reason.reason_type}]"
+        details_tag = f"({pc.reason.details})"
+        output_lines.append(f"{i:{index_width}d}: {commit_info} {reason_tag} {details_tag}")
+
+    click.echo("\n".join(output_lines))

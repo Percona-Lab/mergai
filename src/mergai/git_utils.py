@@ -425,6 +425,150 @@ class ForkStatus:
         return (date_range[1] - date_range[0]).days
 
 
+@dataclass
+class CommitStats:
+    """Statistics about a commit's changes.
+
+    Attributes:
+        files_changed: Number of files changed in this commit.
+        lines_added: Number of lines added.
+        lines_deleted: Number of lines deleted.
+        total_lines: Total lines changed (added + deleted).
+        files_modified: List of file paths modified by this commit.
+    """
+
+    files_changed: int
+    lines_added: int
+    lines_deleted: int
+    total_lines: int
+    files_modified: List[str]
+
+
+def get_commit_stats(repo: Repo, commit: Commit) -> CommitStats:
+    """Get statistics about files and lines changed in a commit.
+
+    Args:
+        repo: GitPython Repo object.
+        commit: The commit to analyze.
+
+    Returns:
+        CommitStats with file and line change information.
+    """
+    files_modified = []
+    lines_added = 0
+    lines_deleted = 0
+
+    # Get the parent commit (or empty tree for initial commit)
+    if commit.parents:
+        parent = commit.parents[0]
+        diff_index = parent.diff(commit)
+    else:
+        # For initial commit, compare against empty tree
+        diff_index = commit.diff(None)
+
+    for diff_item in diff_index:
+        # Get the path (a_path for deletions, b_path for additions/modifications)
+        path = diff_item.b_path if diff_item.b_path else diff_item.a_path
+        if path:
+            files_modified.append(path)
+
+    # Use git show --numstat for accurate line counts
+    try:
+        numstat = repo.git.show("--numstat", "--format=", commit.hexsha).strip()
+        if numstat:
+            for line in numstat.split("\n"):
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 2:
+                    # Handle binary files which show as '-'
+                    if parts[0] != "-":
+                        lines_added += int(parts[0])
+                    if parts[1] != "-":
+                        lines_deleted += int(parts[1])
+    except Exception as e:
+        log.warning(f"Failed to get numstat for commit {commit.hexsha}: {e}")
+
+    return CommitStats(
+        files_changed=len(files_modified),
+        lines_added=lines_added,
+        lines_deleted=lines_deleted,
+        total_lines=lines_added + lines_deleted,
+        files_modified=files_modified,
+    )
+
+
+def get_commit_modified_files(repo: Repo, commit: Commit) -> List[str]:
+    """Get list of files modified by a commit.
+
+    This is a lightweight version that only returns file paths without
+    calculating line statistics.
+
+    Args:
+        repo: GitPython Repo object.
+        commit: The commit to analyze.
+
+    Returns:
+        List of file paths modified by the commit.
+    """
+    files_modified = []
+
+    if commit.parents:
+        parent = commit.parents[0]
+        diff_index = parent.diff(commit)
+    else:
+        diff_index = commit.diff(None)
+
+    for diff_item in diff_index:
+        path = diff_item.b_path if diff_item.b_path else diff_item.a_path
+        if path:
+            files_modified.append(path)
+
+    return files_modified
+
+
+def is_branching_point(repo: Repo, commit: Commit, upstream_ref: str) -> bool:
+    """Check if a commit is a branching point.
+
+    A commit is considered a branching point if it has multiple children
+    within the upstream branch. This typically indicates where branches
+    diverged and can be an important merge point.
+
+    Args:
+        repo: GitPython Repo object.
+        commit: The commit to check.
+        upstream_ref: The upstream reference to check children against.
+
+    Returns:
+        True if the commit has multiple children in the upstream history.
+    """
+    try:
+        # Find commits in upstream that have this commit as a parent
+        # Use git rev-list with --children to find children
+        # Alternative: count commits that have this commit as parent
+        children_output = repo.git.rev_list(
+            "--children", f"{commit.hexsha}..{upstream_ref}"
+        ).strip()
+
+        if not children_output:
+            return False
+
+        # Parse the output to find children of this specific commit
+        # Format: "commit_sha child1 child2 ..."
+        child_count = 0
+        for line in children_output.split("\n"):
+            parts = line.split()
+            if len(parts) > 0 and parts[0] == commit.hexsha:
+                # This line shows children of our commit
+                child_count = len(parts) - 1
+                break
+
+        return child_count > 1
+    except Exception as e:
+        log.warning(f"Failed to check branching point for {commit.hexsha}: {e}")
+        return False
+
+
 def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
     """
     Get comprehensive status about how a fork diverges from its upstream base.
