@@ -34,7 +34,7 @@ def resolve(
     yolo: bool,
 ):
     try:
-        app.resolve(force, use_history, yolo)
+        app.resolve(force, use_history, yolo, max_attempts=app.config.resolve.max_attempts)
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)

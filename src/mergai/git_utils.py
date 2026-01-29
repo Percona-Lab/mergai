@@ -1,6 +1,8 @@
 from git import Repo, Commit, Blob
 import hashlib
-from typing import Iterator, Tuple, Optional
+from typing import Iterator, Tuple, Optional, List
+from dataclasses import dataclass
+from datetime import datetime, timezone
 import logging
 from pathlib import Path
 from enum import StrEnum
@@ -330,9 +332,183 @@ def read_commit_note(repo: Repo, ref: str, commit: str) -> Optional[str]:
         return None
 
 
+def find_remote_by_url(repo: Repo, url: str) -> Optional[str]:
+    """Find a remote by its URL.
+
+    Iterates through all remotes in the repository and returns the name
+    of the first remote whose URL matches the provided URL.
+
+    Args:
+        repo: GitPython Repo object
+        url: The URL to search for (exact match)
+
+    Returns:
+        The name of the matching remote, or None if no match is found.
+    """
+    for remote in repo.remotes:
+        # Check all URLs associated with this remote (fetch and push URLs)
+        for remote_url in remote.urls:
+            if remote_url == url:
+                return remote.name
+    return None
+
+
 def is_merge_conflict_style_diff3(repo: Repo) -> bool:
     try:
         merge_conflict_style = repo.git.config("merge.conflictstyle")
         return merge_conflict_style.lower() == "diff3"
     except Exception:
         return False
+
+
+@dataclass
+class ForkStatus:
+    """Status information about a fork compared to its upstream base."""
+    
+    fork_ref: str
+    upstream_ref: str
+    
+    # Commit count
+    commits_behind: int
+    
+    # Key commits
+    last_merged_commit: Optional[Commit]
+    first_unmerged_commit: Optional[Commit]
+    last_unmerged_commit: Optional[Commit]
+    merge_base_commit: Optional[Commit]
+    
+    # List of unmerged commits (for optional listing)
+    unmerged_commits: List[Commit]
+    
+    # Divergence stats
+    files_affected: int
+    total_additions: int
+    total_deletions: int
+
+    @property
+    def is_up_to_date(self) -> bool:
+        """Check if the fork is up to date with upstream."""
+        return self.commits_behind == 0
+    
+    @property
+    def days_behind(self) -> int:
+        """Calculate the number of days since the last merged commit."""
+        if not self.last_merged_commit:
+            return 0
+        
+        last_merged_date = datetime.fromtimestamp(
+            self.last_merged_commit.authored_date, tz=timezone.utc
+        )
+        now = datetime.now(tz=timezone.utc)
+        return (now - last_merged_date).days
+    
+    @property
+    def unmerged_date_range(self) -> Optional[Tuple[datetime, datetime]]:
+        """Get the date range of unmerged commits (first, last)."""
+        if not self.first_unmerged_commit or not self.last_unmerged_commit:
+            return None
+        
+        first_date = datetime.fromtimestamp(
+            self.first_unmerged_commit.authored_date, tz=timezone.utc
+        )
+        last_date = datetime.fromtimestamp(
+            self.last_unmerged_commit.authored_date, tz=timezone.utc
+        )
+        return (first_date, last_date)
+    
+    @property
+    def unmerged_days_span(self) -> int:
+        """Get the number of days spanned by unmerged commits."""
+        date_range = self.unmerged_date_range
+        if not date_range:
+            return 0
+        return (date_range[1] - date_range[0]).days
+
+
+def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
+    """
+    Get comprehensive status about how a fork diverges from its upstream base.
+    
+    Args:
+        repo: GitPython Repo object
+        upstream_ref: The upstream/base branch/ref to compare against
+        fork_ref: The fork branch/ref (downstream, typically HEAD)
+        
+    Returns:
+        ForkStatus object with divergence information showing commits
+        in upstream that need to be merged into the fork.
+    """
+    # Get merge base (common ancestor)
+    try:
+        merge_base = repo.merge_base(fork_ref, upstream_ref)
+        merge_base_commit = merge_base[0] if merge_base else None
+    except Exception:
+        merge_base_commit = None
+    
+    # Get commits behind (in upstream but not in fork)
+    # These are commits we need to merge from upstream
+    # git rev-list fork_ref..upstream_ref = commits in upstream not in fork
+    try:
+        behind_output = repo.git.rev_list(f"{fork_ref}..{upstream_ref}").strip()
+        behind_shas = behind_output.split("\n") if behind_output else []
+        unmerged_commits = [repo.commit(sha) for sha in behind_shas if sha]
+    except Exception:
+        unmerged_commits = []
+    
+    # Find last merged commit (most recent commit in upstream that's also in fork)
+    # This is essentially the merge base
+    last_merged_commit = merge_base_commit
+    
+    # First unmerged commit (oldest commit in upstream not in fork)
+    # unmerged_commits are in reverse chronological order (newest first)
+    first_unmerged_commit = unmerged_commits[-1] if unmerged_commits else None
+    
+    # Last unmerged commit (most recent commit in upstream not in fork)
+    last_unmerged_commit = unmerged_commits[0] if unmerged_commits else None
+    
+    # Get divergence stats using git diff --stat
+    files_affected = 0
+    total_additions = 0
+    total_deletions = 0
+    
+    if unmerged_commits:
+        numstat = None
+        # Try three-dot diff first (uses merge base)
+        # Fall back to two-dot diff if no merge base exists
+        try:
+            numstat = repo.git.diff("--numstat", f"{fork_ref}...{upstream_ref}").strip()
+        except Exception:
+            try:
+                # Fallback: diff between the refs directly
+                numstat = repo.git.diff("--numstat", fork_ref, upstream_ref).strip()
+            except Exception as e:
+                log.warning(f"Failed to get diff stats: {e}")
+        
+        if numstat:
+            # Use numstat for machine-readable output
+            # Format: additions<tab>deletions<tab>filename
+            for line in numstat.split("\n"):
+                if not line:
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    files_affected += 1
+                    # Handle binary files which show as '-'
+                    if parts[0] != "-":
+                        total_additions += int(parts[0])
+                    if parts[1] != "-":
+                        total_deletions += int(parts[1])
+    
+    return ForkStatus(
+        fork_ref=fork_ref,
+        upstream_ref=upstream_ref,
+        commits_behind=len(unmerged_commits),
+        last_merged_commit=last_merged_commit,
+        first_unmerged_commit=first_unmerged_commit,
+        last_unmerged_commit=last_unmerged_commit,
+        merge_base_commit=merge_base_commit,
+        unmerged_commits=unmerged_commits,
+        files_affected=files_affected,
+        total_additions=total_additions,
+        total_deletions=total_deletions,
+    )

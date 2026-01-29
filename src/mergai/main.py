@@ -1,6 +1,7 @@
 import click
 import logging
 from .app import AppContext
+from .config import load_config
 import git
 
 LOG_FORMAT = "[%(levelname)s] %(message)s"
@@ -60,16 +61,32 @@ def register_commands(cli):
     cli.add_command(update)
     cli.add_command(push)
 
+    from .commands.fork import fork
+    cli.add_command(fork)
 
 @click.group()
 @click.pass_obj
+@click.option(
+    "--config",
+    "-c",
+    "config_path",
+    type=click.Path(),
+    default=None,
+    help="Path to config file (default: .mergai.yaml)",
+)
 @click.option(
     "--repo-path",
     type=click.Path(exists=True, file_okay=False, dir_okay=True),
     default=".",
     help="Path to the git repository",
 )
-def cli(app: AppContext, repo_path: str = "."):
+def cli(app: AppContext, config_path: str, repo_path: str = "."):
+    try:
+        app.config = load_config(config_path)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+    except Exception as e:
+        raise click.ClickException(f"Error loading config: {e}")
     app.repo = git.Repo(repo_path)
 
 

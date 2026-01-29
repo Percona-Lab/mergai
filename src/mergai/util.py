@@ -5,11 +5,12 @@ import subprocess
 import sys
 import json
 import git
+from . import git_utils
 from jinja2 import Template
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
-
+from datetime import datetime, timezone
 
 GITHUB_MD_THEME = Theme(
     {
@@ -441,3 +442,37 @@ def commit_note_to_summary_str(
         return commit_note_to_summary_json(commit, note, pretty)
     else:
         return commit_note_to_summary_text(commit, note)
+
+def format_commit_info(commit, indent: str = "  ") -> str:
+    """Format a commit for display."""
+    if not commit:
+        return f"{indent}(none)"
+    
+    authored_date = datetime.fromtimestamp(
+        commit.authored_date, tz=timezone.utc
+    )
+    date_str = authored_date.strftime("%Y-%m-%d %H:%M:%S UTC")
+    
+    lines = [
+        f"{indent}SHA:    {git_utils.short_sha(commit.hexsha)}",
+        f"{indent}Date:   {date_str}",
+        f"{indent}Author: {commit.author.name} <{commit.author.email}>",
+        f"{indent}Title:  {commit.summary}",
+    ]
+    return "\n".join(lines)
+
+def format_commit_info_oneline(commit) -> str:
+    """Format a commit in a single line."""
+    if not commit:
+        return "(none)"
+    
+    authored_date = datetime.fromtimestamp(
+        commit.authored_date, tz=timezone.utc
+    )
+    date_str = authored_date.strftime("%Y-%m-%d")
+    
+    return f"{git_utils.short_sha(commit.hexsha)} {date_str} {commit.summary}"
+
+def format_number(n: int) -> str:
+    """Format a number with thousand separators."""
+    return f"{n:,}"

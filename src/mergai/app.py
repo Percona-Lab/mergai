@@ -6,6 +6,7 @@ from . import util
 from . import prompts
 from .agents.factory import create_agent
 from .state_store import StateStore
+from .config import MergaiConfig
 import github
 from github import Repository as GithubRepository
 import json
@@ -64,7 +65,8 @@ def convert_note(
 
 # TODO: refactor
 class AppContext:
-    def __init__(self):
+    def __init__(self, config: MergaiConfig = None):
+        self.config: MergaiConfig = config if config is not None else MergaiConfig()
         self.repo: git.Repo = git.Repo(".")
         self.state: StateStore = StateStore(self.repo.working_tree_dir)
         gh_token = gh_auth_token()
@@ -212,7 +214,21 @@ class AppContext:
 
         return context
 
-    def get_agent(self, agent_desc: str = "gemini-cli", yolo: bool = False) -> "Agent":
+    def get_agent(self, agent_desc: str = None, yolo: bool = False) -> "Agent":
+        """Get an agent instance for conflict resolution.
+
+        Args:
+            agent_desc: Agent descriptor (e.g., "gemini-cli", "opencode:model").
+                       If None, uses the value from config.resolve.agent.
+            yolo: Enable YOLO mode.
+
+        Returns:
+            An Agent instance configured with the specified settings.
+        """
+        # Use config default if not explicitly provided
+        if agent_desc is None:
+            agent_desc = self.config.resolve.agent
+
         agent_type = agent_desc.split(":")[0]
         model = agent_desc.split(":")[1] if ":" in agent_desc else None
 
@@ -238,8 +254,10 @@ class AppContext:
         return f"An error occurred while trying to process the output: {error}"
 
     def resolve(
-        self, force: bool, use_history: bool, yolo: bool, max_attempts: int = 3
+        self, force: bool, use_history: bool, yolo: bool, max_attempts: int = None
     ):
+        if max_attempts is None:
+            max_attempts = self.config.resolve.max_attempts
         if use_history:
             raise Exception("use_history is not supported yet.")
 
