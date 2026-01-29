@@ -527,7 +527,9 @@ def get_commit_modified_files(repo: Repo, commit: Commit) -> List[str]:
     return files_modified
 
 
-def is_branching_point(repo: Repo, commit: Commit, upstream_ref: str) -> bool:
+def is_branching_point(
+    repo: Repo, commit: Commit, upstream_ref: str
+) -> Tuple[bool, int]:
     """Check if a commit is a branching point.
 
     A commit is considered a branching point if it has multiple children
@@ -540,7 +542,9 @@ def is_branching_point(repo: Repo, commit: Commit, upstream_ref: str) -> bool:
         upstream_ref: The upstream reference to check children against.
 
     Returns:
-        True if the commit has multiple children in the upstream history.
+        Tuple of (is_branching_point, child_count).
+        is_branching_point is True if the commit has multiple children.
+        child_count is the number of children found (0 if none).
     """
     try:
         # Find commits in upstream that have this commit as a parent
@@ -551,7 +555,7 @@ def is_branching_point(repo: Repo, commit: Commit, upstream_ref: str) -> bool:
         ).strip()
 
         if not children_output:
-            return False
+            return (False, 0)
 
         # Parse the output to find children of this specific commit
         # Format: "commit_sha child1 child2 ..."
@@ -563,10 +567,10 @@ def is_branching_point(repo: Repo, commit: Commit, upstream_ref: str) -> bool:
                 child_count = len(parts) - 1
                 break
 
-        return child_count > 1
+        return (child_count > 1, child_count)
     except Exception as e:
         log.warning(f"Failed to check branching point for {commit.hexsha}: {e}")
-        return False
+        return (False, 0)
 
 
 def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:

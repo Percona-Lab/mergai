@@ -17,8 +17,14 @@ can have its own section. Example:
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
+import logging
 import yaml
+
+if TYPE_CHECKING:
+    from .strategies import PickStrategy
+
+log = logging.getLogger(__name__)
 
 
 DEFAULT_CONFIG_PATH = ".mergai.yaml"
@@ -92,74 +98,74 @@ class ResolveConfig:
 
 
 @dataclass
-class HugeCommitConfig:
-    """Configuration for identifying huge commits.
-
-    Attributes:
-        min_changed_files: Minimum number of changed files to consider a commit "huge".
-        min_changed_lines: Minimum number of changed lines to consider a commit "huge".
-    """
-
-    min_changed_files: int = 100
-    min_changed_lines: int = 1000
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "HugeCommitConfig":
-        """Create a HugeCommitConfig from a dictionary.
-
-        Args:
-            data: Dictionary with configuration values.
-
-        Returns:
-            HugeCommitConfig instance with values from data.
-        """
-        return cls(
-            min_changed_files=data.get("min_changed_files", cls.min_changed_files),
-            min_changed_lines=data.get("min_changed_lines", cls.min_changed_lines),
-        )
-
-
-@dataclass
 class MergePicksConfig:
-    """Configuration for the merge pick criteria.
+    """Configuration for merge pick strategies.
 
-    This config controls how commits are prioritized for merging.
-    The criteria are evaluated in order: huge_commits, important_files,
-    conflict. The first matching criterion determines the priority.
+    Strategies are evaluated in the order they appear in the config list.
+    The first matching strategy determines the commit's priority.
 
-    The design is extensible - new criteria can be added in the future.
+    Example YAML config:
+        merge_picks:
+          - huge_commit:
+              min_changed_files: 100
+              min_changed_lines: 1000
+          - important_files:
+              - BUILD.bazel
+              - SConstruct
+          - branching_point: true
+          - conflict: true
+
+    Available strategies:
+        - huge_commit: Prioritize commits with many changed files/lines
+        - important_files: Prioritize commits touching specific files
+        - branching_point: Prioritize commits that are branching points
+        - conflict: Prioritize commits that would cause merge conflicts (not yet implemented)
 
     Attributes:
-        huge_commits: Config for identifying huge commits to prioritize.
-        important_files: List of file paths that, if modified, should prioritize a commit.
-        conflict: If true, prioritize commits that would cause merge conflicts
-                  (only when no other criterion matches). Not yet fully implemented.
+        strategies: Ordered list of pick strategies to evaluate.
     """
 
-    huge_commits: Optional[HugeCommitConfig] = None
-    important_files: List[str] = field(default_factory=list)
-    conflict: bool = False
+    strategies: List["PickStrategy"] = field(default_factory=list)
 
     @classmethod
-    def from_dict(cls, data: dict) -> "MergePicksConfig":
-        """Create a MergePicksConfig from a dictionary.
+    def from_dict(cls, data) -> "MergePicksConfig":
+        """Parse merge_picks config into strategy instances.
 
         Args:
-            data: Dictionary with configuration values.
+            data: List of strategy definitions from YAML, e.g.:
+                [
+                    {"huge_commit": {"min_changed_files": 100}},
+                    {"important_files": ["BUILD.bazel"]},
+                    {"branching_point": True},
+                ]
 
         Returns:
-            MergePicksConfig instance with values from data.
+            MergePicksConfig with instantiated strategies.
         """
-        huge_commits_data = data.get("huge_commits")
-        huge_commits = (
-            HugeCommitConfig.from_dict(huge_commits_data) if huge_commits_data else None
-        )
+        from .strategies import create_strategy
 
-        return cls(
-            huge_commits=huge_commits,
-            important_files=data.get("important_files", []),
-            conflict=data.get("conflict", False),
-        )
+        if not isinstance(data, list):
+            return cls()
+
+        strategies = []
+        for item in data:
+            if not isinstance(item, dict) or len(item) != 1:
+                continue
+
+            strategy_type, strategy_data = next(iter(item.items()))
+            strategy = create_strategy(strategy_type, strategy_data)
+            if strategy:
+                strategies.append(strategy)
+
+        if not strategies:
+            # TODO: Verify this approach - should we warn about empty strategies
+            # or use a default strategy instead?
+            log.warning(
+                "No valid strategies in merge_picks config. "
+                "No commits will be prioritized."
+            )
+
+        return cls(strategies=strategies)
 
 
 @dataclass

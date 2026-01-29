@@ -5,6 +5,7 @@ from git import Commit
 from ..app import AppContext
 from .. import git_utils
 from ..config import MergePicksConfig
+from ..strategies import StrategyResult, StrategyContext
 from ..util import format_number, format_commit_info, format_commit_info_oneline
 
 @click.group()
@@ -200,113 +201,56 @@ def status(
 
 
 @dataclass
-class PriorityReason:
-    """Reason why a commit was prioritized.
-
-    Attributes:
-        reason_type: Type of criterion matched (e.g., "huge_commit", "important_file", "branching_point").
-        details: Human-readable details about the match.
-    """
-
-    reason_type: str
-    details: str
-
-
-@dataclass
 class PrioritizedCommit:
-    """A commit with its priority information.
+    """A commit that matched a priority strategy.
 
     Attributes:
         commit: The git commit object.
-        reason: The reason for prioritization, or None if no criterion matched.
+        strategy_name: Name of the strategy that matched.
+        result: The strategy result with match details.
     """
 
     commit: Commit
-    reason: Optional[PriorityReason]
-
-
-def evaluate_commit_priority(
-    repo,
-    commit: Commit,
-    config: MergePicksConfig,
-) -> Optional[PriorityReason]:
-    """Check if a commit matches any priority criterion.
-
-    Criteria are evaluated in this order:
-    1. huge_commits - commits with many changed files/lines
-    2. important_files - commits modifying specific important files
-
-    Future criteria (not yet implemented):
-    - conflict: prioritize commits that would cause merge conflicts
-
-    Args:
-        repo: GitPython Repo object.
-        commit: The commit to evaluate.
-        config: MergePicksConfig with priority criteria.
-
-    Returns:
-        PriorityReason if a criterion matched, None otherwise.
-    """
-    # Check huge_commits criterion
-    if config.huge_commits:
-        stats = git_utils.get_commit_stats(repo, commit)
-        if (
-            stats.files_changed >= config.huge_commits.min_changed_files
-            or stats.total_lines >= config.huge_commits.min_changed_lines
-        ):
-            return PriorityReason(
-                reason_type="huge_commit",
-                details=f"{stats.files_changed} files, {stats.total_lines} lines",
-            )
-
-    # Check important_files criterion
-    if config.important_files:
-        modified = git_utils.get_commit_modified_files(repo, commit)
-        matches = set(modified) & set(config.important_files)
-        if matches:
-            # Show up to 3 matching files in details
-            match_list = sorted(matches)[:3]
-            suffix = "..." if len(matches) > 3 else ""
-            return PriorityReason(
-                reason_type="important_file",
-                details=f"modifies: {', '.join(match_list)}{suffix}",
-            )
-
-    # TODO: Add conflict detection when config.conflict is True
-    # This would check if cherry-picking/merging this commit would cause conflicts
-    # if config.conflict:
-    #     if git_utils.commit_would_conflict(repo, commit, fork_ref):
-    #         return PriorityReason(
-    #             reason_type="conflict",
-    #             details="this commit would cause merge conflicts",
-    #         )
-
-    return None
+    strategy_name: str
+    result: StrategyResult
 
 
 def get_prioritized_commits(
     repo,
     unmerged_commits: List[Commit],
     config: MergePicksConfig,
+    context: StrategyContext,
 ) -> List[PrioritizedCommit]:
-    """Evaluate all unmerged commits and return those matching priority criteria.
+    """Evaluate all unmerged commits and return those matching priority strategies.
+
+    Strategies are evaluated in the order they appear in the config.
+    The first matching strategy for each commit determines its priority.
 
     Args:
         repo: GitPython Repo object.
         unmerged_commits: List of unmerged commits (in reverse chronological order).
-        config: MergePicksConfig with priority criteria.
+        config: MergePicksConfig with ordered priority strategies.
+        context: Strategy context with upstream_ref, fork_ref, etc.
 
     Returns:
-        List of PrioritizedCommit objects for commits that matched criteria,
+        List of PrioritizedCommit objects for commits that matched strategies,
         in chronological order (oldest first).
     """
     prioritized = []
 
     # Process in chronological order (oldest first)
     for commit in reversed(unmerged_commits):
-        reason = evaluate_commit_priority(repo, commit, config)
-        if reason:
-            prioritized.append(PrioritizedCommit(commit=commit, reason=reason))
+        for strategy in config.strategies:
+            result = strategy.check(repo, commit, context)
+            if result is not None:
+                prioritized.append(
+                    PrioritizedCommit(
+                        commit=commit,
+                        strategy_name=strategy.name,
+                        result=result,
+                    )
+                )
+                break  # First matching strategy wins
 
     return prioritized
 
@@ -341,15 +285,18 @@ def pick(
     fork_ref: str,
     next_only: bool,
 ):
-    """Suggest commits to merge based on configured priority criteria.
+    """Suggest commits to merge based on configured priority strategies.
 
-    Analyzes unmerged commits and lists those that match priority criteria
-    from the fork.merge_picks config section:
+    Analyzes unmerged commits and lists those that match priority strategies
+    from the fork.merge_picks config section. Strategies are evaluated in
+    the order they appear in the config.
 
     \b
-    - huge_commits: Commits with many changed files/lines
+    Available strategies:
+    - huge_commit: Commits with many changed files/lines
     - important_files: Commits touching specific important files
-    - conflict: (future) Commits that would cause merge conflicts
+    - branching_point: Commits that are branching points (multiple children)
+    - conflict: (not yet implemented) Commits that would cause merge conflicts
 
     Use --next/-n to get just the hash of the recommended next commit.
     Output is designed to be easily parseable in scripts.
@@ -410,14 +357,21 @@ def pick(
     # Get merge_picks config from fork section
     merge_picks_config = app.config.fork.merge_picks
     if merge_picks_config is None:
-        # No merge_picks config - use empty config (no criteria will match)
+        # No merge_picks config - use empty config (no strategies will match)
         merge_picks_config = MergePicksConfig()
+
+    # Create strategy context
+    context = StrategyContext(
+        upstream_ref=upstream_ref,
+        fork_ref=fork_ref,
+    )
 
     # Get prioritized commits
     prioritized = get_prioritized_commits(
         app.repo,
         fork_status.unmerged_commits,
         merge_picks_config,
+        context,
     )
 
     if next_only:
@@ -440,8 +394,8 @@ def pick(
     output_lines = []
     for i, pc in enumerate(prioritized, 1):
         commit_info = format_commit_info_oneline(pc.commit)
-        reason_tag = f"[{pc.reason.reason_type}]"
-        details_tag = f"({pc.reason.details})"
-        output_lines.append(f"{i:{index_width}d}: {commit_info} {reason_tag} {details_tag}")
+        strategy_tag = f"[{pc.strategy_name}]"
+        details_tag = f"({pc.result.format_short()})"
+        output_lines.append(f"{i:{index_width}d}: {commit_info} {strategy_tag} {details_tag}")
 
     click.echo("\n".join(output_lines))
