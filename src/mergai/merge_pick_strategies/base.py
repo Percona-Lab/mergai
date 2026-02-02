@@ -1,7 +1,8 @@
-"""Base classes for pick strategies."""
+"""Base classes for merge-pick strategies."""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from git import Commit
 from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -9,7 +10,7 @@ if TYPE_CHECKING:
 
 
 @dataclass
-class StrategyContext:
+class MergePickStrategyContext:
     """Context passed to strategies during evaluation.
 
     This avoids passing multiple parameters through the call chain.
@@ -24,7 +25,7 @@ class StrategyContext:
     fork_ref: Optional[str] = None
 
 
-class StrategyResult(ABC):
+class MergePickStrategyResult(ABC):
     """Base class for strategy match results.
 
     Each strategy returns its own result subclass with specific details
@@ -35,7 +36,7 @@ class StrategyResult(ABC):
     def format_short(self) -> str:
         """Return a short formatted description of the match.
 
-        This is used for display in the pick command output.
+        This is used for display in the merge-pick command output.
 
         Returns:
             A concise string describing the match details.
@@ -43,17 +44,17 @@ class StrategyResult(ABC):
         pass
 
 
-class PickStrategy(ABC):
-    """Abstract base class for pick strategies.
+class MergePickStrategy(ABC):
+    """Abstract base class for merge-pick strategies.
 
     Each strategy checks if a commit matches its criterion and returns
     a result with match details if successful.
 
     To add a new strategy:
     1. Create a new module in the strategies package
-    2. Define a StrategyConfig dataclass with from_dict() class method
-    3. Define a StrategyResult dataclass with format_short() method
-    4. Define a Strategy class inheriting from PickStrategy
+    2. Define a MergePickStrategyConfig dataclass with from_dict() class method
+    3. Define a MergePickStrategyResult dataclass with format_short() method
+    4. Define a Strategy class inheriting from MergePickStrategy
     5. Register the strategy in registry.py
     """
 
@@ -71,8 +72,8 @@ class PickStrategy(ABC):
 
     @abstractmethod
     def check(
-        self, repo: "Repo", commit: "Commit", context: StrategyContext
-    ) -> Optional[StrategyResult]:
+        self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
+    ) -> Optional[MergePickStrategyResult]:
         """Check if commit matches this strategy.
 
         Args:
@@ -81,6 +82,21 @@ class PickStrategy(ABC):
             context: Additional context (upstream_ref, fork_ref, etc.)
 
         Returns:
-            StrategyResult subclass if matched, None otherwise.
+            MergePickStrategyResult subclass if matched, None otherwise.
         """
         pass
+
+
+@dataclass
+class MergePickCommit:
+    """A commit that matched a priority strategy.
+
+    Attributes:
+        commit: The git commit object.
+        strategy_name: Name of the strategy that matched.
+        result: The strategy result with match details.
+    """
+
+    commit: Commit
+    strategy_name: str
+    result: MergePickStrategyResult

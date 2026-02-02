@@ -3,14 +3,14 @@
 from dataclasses import dataclass, field
 from typing import Optional, List, TYPE_CHECKING
 
-from .base import PickStrategy, StrategyResult, StrategyContext
+from .base import MergePickStrategy, MergePickStrategyResult, MergePickStrategyContext
 
 if TYPE_CHECKING:
     from git import Repo, Commit
 
 
 @dataclass
-class ConflictResult(StrategyResult):
+class ConflictResult(MergePickStrategyResult):
     """Result for conflict strategy match.
 
     Attributes:
@@ -49,7 +49,7 @@ class ConflictStrategyConfig:
         return cls()
 
 
-class ConflictStrategy(PickStrategy):
+class ConflictStrategy(MergePickStrategy):
     """Strategy that prioritizes commits that would cause merge conflicts.
 
     NOTE: Not yet fully implemented. Currently returns None for all commits.
@@ -72,7 +72,7 @@ class ConflictStrategy(PickStrategy):
         return "conflict"
 
     def check(
-        self, repo: "Repo", commit: "Commit", context: StrategyContext
+        self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
     ) -> Optional[ConflictResult]:
         """Check if commit would cause merge conflicts.
 

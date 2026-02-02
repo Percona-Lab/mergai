@@ -23,7 +23,7 @@ class ConflictType(StrEnum):
 
 
 def short_sha(sha: str) -> str:
-    return sha[:12]
+    return sha[:11]
 
 
 def author_to_dict(author):

@@ -3,14 +3,14 @@
 from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
 
-from .base import PickStrategy, StrategyResult, StrategyContext
+from .base import MergePickStrategy, MergePickStrategyResult, MergePickStrategyContext
 
 if TYPE_CHECKING:
     from git import Repo, Commit
 
 
 @dataclass
-class BranchingPointResult(StrategyResult):
+class BranchingPointResult(MergePickStrategyResult):
     """Result for branching point strategy match.
 
     Attributes:
@@ -45,7 +45,7 @@ class BranchingPointStrategyConfig:
         return cls()
 
 
-class BranchingPointStrategy(PickStrategy):
+class BranchingPointStrategy(MergePickStrategy):
     """Strategy that prioritizes commits that are branching points.
 
     A branching point is a commit with multiple children in the upstream
@@ -68,7 +68,7 @@ class BranchingPointStrategy(PickStrategy):
         return "branching_point"
 
     def check(
-        self, repo: "Repo", commit: "Commit", context: StrategyContext
+        self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
     ) -> Optional[BranchingPointResult]:
         """Check if commit is a branching point.
 

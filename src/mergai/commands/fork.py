@@ -5,8 +5,200 @@ from git import Commit
 from ..app import AppContext
 from .. import git_utils
 from ..config import MergePicksConfig
-from ..strategies import StrategyResult, StrategyContext
-from ..util import format_number, format_commit_info, format_commit_info_oneline
+from ..merge_pick_strategies import MergePickCommit, MergePickStrategyContext
+from ..util import format_number, format_commit_info, format_commit_info_oneline, print_or_page
+
+def resolve_upstream_ref(
+    app: AppContext,
+    upstream_ref: Optional[str],
+) -> str:
+    """Resolve upstream ref from argument or config.
+
+    If upstream_ref is provided, returns it unchanged.
+    Otherwise, derives it from fork.upstream_url and fork.upstream_branch config.
+
+    Args:
+        app: Application context with repo and config.
+        upstream_ref: Explicit upstream ref, or None to derive from config.
+
+    Returns:
+        Resolved upstream ref string (e.g., "upstream/master").
+
+    Raises:
+        SystemExit: If config is missing or remote not found.
+    """
+    if upstream_ref is not None:
+        return upstream_ref
+
+    upstream_url = app.config.fork.upstream_url
+
+    if upstream_url is None:
+        click.echo("Error: No UPSTREAM-REF provided and fork.upstream_url not configured.", err=True)
+        click.echo("Either provide UPSTREAM-REF argument or set fork.upstream_url in .mergai.yaml", err=True)
+        raise SystemExit(1)
+
+    remote_name = git_utils.find_remote_by_url(app.repo, upstream_url)
+
+    if remote_name is None:
+        click.echo(f"Error: No remote found matching upstream_url: {upstream_url}", err=True)
+        click.echo("Hint: Run 'mergai fork init' to add and fetch the upstream remote.", err=True)
+        raise SystemExit(1)
+
+    upstream_branch = app.config.fork.upstream_branch
+    return f"{remote_name}/{upstream_branch}"
+
+
+def get_prioritized_commits(
+    repo,
+    unmerged_commits: List[Commit],
+    config: MergePicksConfig,
+    context: MergePickStrategyContext,
+) -> List[MergePickCommit]:
+    """Evaluate all unmerged commits and return those matching priority strategies.
+
+    Strategies are evaluated in the order they appear in the config.
+    The first matching strategy for each commit determines its priority.
+
+    Args:
+        repo: GitPython Repo object.
+        unmerged_commits: List of unmerged commits (in reverse chronological order).
+        config: MergePicksConfig with ordered priority strategies.
+        context: Strategy context with upstream_ref, fork_ref, etc.
+
+    Returns:
+        List of MergePickCommit objects for commits that matched strategies,
+        in chronological order (oldest first).
+    """
+    prioritized = []
+
+    # Process in chronological order (oldest first)
+    for commit in reversed(unmerged_commits):
+        for strategy in config.strategies:
+            result = strategy.check(repo, commit, context)
+            if result is not None:
+                prioritized.append(
+                    MergePickCommit(
+                        commit=commit,
+                        strategy_name=strategy.name,
+                        result=result,
+                    )
+                )
+                break  # First matching strategy wins
+
+    return prioritized
+
+def build_status_summary(
+    app: AppContext,
+    fork_status,
+    upstream_ref: str,
+) -> List[str]:
+    """Build the status summary output lines.
+
+    Args:
+        app: Application context with config.
+        fork_status: ForkStatus object with divergence info.
+        upstream_ref: Resolved upstream ref string.
+
+    Returns:
+        List of formatted output lines for the status summary.
+    """
+    output_lines = []
+
+    # Header with upstream info
+    output_lines.append(f"Upstream URL:    {app.config.fork.upstream_url or '(not configured)'}")
+    output_lines.append(f"Upstream branch: {app.config.fork.upstream_branch}")
+    output_lines.append(f"Upstream ref:    {upstream_ref}")
+    output_lines.append("")
+    output_lines.append(f"Status: {'up to date' if fork_status.is_up_to_date else 'diverged'}")
+
+    # Divergence estimate
+    if not fork_status.is_up_to_date:
+        output_lines.append("Divergence:")
+        output_lines.append(f"  Commits behind:   {format_number(fork_status.commits_behind)}")
+        output_lines.append(f"  Days behind:      {fork_status.days_behind}")
+        date_range = fork_status.unmerged_date_range
+        if date_range:
+            first_date_str = date_range[0].strftime("%Y-%m-%d")
+            last_date_str = date_range[1].strftime("%Y-%m-%d")
+            output_lines.append(f"  Date range:       {first_date_str} to {last_date_str}")
+
+        output_lines.append(f"  Files affected:   {format_number(fork_status.files_affected)}")
+        output_lines.append(f"  Total additions:  +{format_number(fork_status.total_additions)}")
+        output_lines.append(f"  Total deletions:  -{format_number(fork_status.total_deletions)}")
+        output_lines.append("")
+
+        # Last merged commit
+        output_lines.append("Last merged commit:")
+        output_lines.append(format_commit_info(fork_status.last_merged_commit))
+        output_lines.append("")
+
+        # First unmerged commit
+        output_lines.append("First unmerged commit:")
+        output_lines.append(format_commit_info(fork_status.first_unmerged_commit))
+        output_lines.append("")
+
+    return output_lines
+
+def format_commit_list(
+    commits: List[Commit],
+    prioritized_commits: Optional[List[MergePickCommit]] = None,
+    show_all: bool = True,
+    show_prefix: bool = True,
+) -> List[str]:
+    """Format a list of commits for display.
+
+    Args:
+        commits: List of commits in chronological order (oldest first).
+        prioritized_commits: Optional list of prioritized commits with strategy info.
+        show_all: If True, show all commits; if False, only show prioritized commits.
+        show_prefix: If True, show '*N:' prefix; if False, show only commit info with tags.
+
+    Returns:
+        List of formatted output lines.
+    """
+    # Build a lookup dict from commit SHA to MergePickCommit
+    picks_by_sha = {}
+    if prioritized_commits:
+        picks_by_sha = {pc.commit.hexsha: pc for pc in prioritized_commits}
+
+    # Determine which commits to show
+    if show_all:
+        display_commits = commits
+    else:
+        # Only show prioritized commits
+        display_commits = [pc.commit for pc in prioritized_commits] if prioritized_commits else []
+
+    if not display_commits:
+        return []
+
+    total_commits = len(display_commits)
+    index_width = len(str(total_commits))
+
+    output_lines = []
+    for i, commit in enumerate(display_commits, 1):
+        commit_info = format_commit_info_oneline(commit)
+        pc = picks_by_sha.get(commit.hexsha)
+
+        if pc:
+            # This is a merge pick - add strategy info (with colors)
+            strategy_tag = click.style(f" [{pc.strategy_name}]", fg="cyan")
+            details_tag = click.style(f" ({pc.result.format_short()})", fg="bright_black")
+        else:
+            strategy_tag = ""
+            details_tag = ""
+
+        if show_prefix:
+            if pc:
+                prefix = click.style("*", fg="yellow", bold=True)
+            else:
+                prefix = " "
+            output_lines.append(
+                f"{prefix}{i:{index_width}d}: {commit_info}{strategy_tag}{details_tag}"
+            )
+        else:
+            output_lines.append(f"{commit_info}{strategy_tag}{details_tag}")
+
+    return output_lines
 
 @click.group()
 def fork():
@@ -110,152 +302,84 @@ def init(app: AppContext, upstream_url: Optional[str]):
     default=False,
     help="List unmerged commits",
 )
+@click.option(
+    "--show-merge-picks", "-p",
+    "show_merge_picks",
+    is_flag=True,
+    default=False,
+    help="Show merge picks. With -l, marks picks in the commit list.",
+)
 def status(
     app: AppContext,
     upstream_ref: Optional[str],
     fork_ref: str,
     list_commits: bool,
+    show_merge_picks: bool,
 ):
-    # If upstream_ref not provided, try to derive from config
-    if upstream_ref is None:
-        upstream_url = app.config.fork.upstream_url
-
-        if upstream_url is None:
-            click.echo("Error: No UPSTREAM-REF provided and fork.upstream_url not configured.", err=True)
-            click.echo("Either provide UPSTREAM-REF argument or set fork.upstream_url in .mergai.yaml", err=True)
-            raise SystemExit(1)
-
-        # Find remote matching the URL
-        remote_name = git_utils.find_remote_by_url(app.repo, upstream_url)
-
-        if remote_name is None:
-            click.echo(f"Error: No remote found matching upstream_url: {upstream_url}", err=True)
-            click.echo("Hint: Run 'mergai fork init' to add and fetch the upstream remote.", err=True)
-            raise SystemExit(1)
-
-        # Build upstream_ref from remote name and branch
-        upstream_branch = app.config.fork.upstream_branch
-        upstream_ref = f"{remote_name}/{upstream_branch}"
+    upstream_ref = resolve_upstream_ref(app, upstream_ref)
 
     try:
-        status = git_utils.get_fork_status(app.repo, upstream_ref, fork_ref)
+        fork_status = git_utils.get_fork_status(app.repo, upstream_ref, fork_ref)
     except Exception as e:
         click.echo(f"Error: Failed to get fork status: {e}", err=True)
         raise SystemExit(1)
-    
-    output_lines = []
 
-    # Header with upstream info
-    output_lines.append(f"Upstream URL:    {app.config.fork.upstream_url or '(not configured)'}")
-    output_lines.append(f"Upstream branch: {app.config.fork.upstream_branch}")
-    output_lines.append(f"Upstream ref:    {upstream_ref}")
-    output_lines.append("")
-    output_lines.append(f"Status: {"up to date" if status.is_up_to_date else "diverged"}")
-    
-    # Divergence estimate
-    if not status.is_up_to_date:
-        output_lines.append("Divergence:")
-        output_lines.append(f"  Commits behind:   {format_number(status.commits_behind)}")
-        output_lines.append(f"  Days behind:      {status.days_behind}")
-        date_range = status.unmerged_date_range
-        if date_range:
-            first_date_str = date_range[0].strftime("%Y-%m-%d")
-            last_date_str = date_range[1].strftime("%Y-%m-%d")
-            output_lines.append(f"  Date range:       {first_date_str} to {last_date_str}")
-        
-        output_lines.append(f"  Files affected:   {format_number(status.files_affected)}")
-        output_lines.append(f"  Total additions:  +{format_number(status.total_additions)}")
-        output_lines.append(f"  Total deletions:  -{format_number(status.total_deletions)}")
-        output_lines.append("")
+    # Get prioritized commits if -p is specified
+    prioritized = None
+    if show_merge_picks and not fork_status.is_up_to_date:
+        merge_picks_config = app.config.fork.merge_picks
+        if merge_picks_config is None:
+            merge_picks_config = MergePicksConfig()
 
-        # Last merged commit
-        output_lines.append("Last merged commit:")
-        output_lines.append(format_commit_info(status.last_merged_commit))
-        output_lines.append("")
-        
-        # First unmerged commit
-        output_lines.append("First unmerged commit:")
-        output_lines.append(format_commit_info(status.first_unmerged_commit))
-        output_lines.append("")
-    
-    # Optional commit listing
-    if list_commits and not status.is_up_to_date:
-        total_commits = len(status.unmerged_commits)
-        index_width = len(str(total_commits))
-        
-        output_lines.append("Unmerged commits:")
-        output_lines.append("")
-        for i, commit in enumerate(reversed(status.unmerged_commits), 1):
-            
-            commit_info = format_commit_info_oneline(commit)
-            output_lines.append(
-                f"{i:{index_width}d}: {commit_info}"
+        context = MergePickStrategyContext(
+            upstream_ref=upstream_ref,
+            fork_ref=fork_ref,
+        )
+
+        prioritized = get_prioritized_commits(
+            app.repo,
+            fork_status.unmerged_commits,
+            merge_picks_config,
+            context,
+        )
+
+    # Build status summary output
+    output_lines = build_status_summary(app, fork_status, upstream_ref)
+
+    # Commit listing based on options:
+    # -p only: show only merge picks
+    # -l only: show all commits
+    # -l -p: show all commits with picks marked
+    show_commits = (list_commits or show_merge_picks) and not fork_status.is_up_to_date
+    if show_commits:
+        if show_merge_picks and not list_commits:
+            # -p only: show only merge picks
+            output_lines.append("Merge picks:")
+            output_lines.append("")
+            commit_lines = format_commit_list(
+                commits=list(reversed(fork_status.unmerged_commits)),
+                prioritized_commits=prioritized,
+                show_all=False,
             )
-    
+        else:
+            # -l or -l -p: show all commits (with picks marked if -p)
+            output_lines.append("Unmerged commits:")
+            output_lines.append("")
+            commit_lines = format_commit_list(
+                commits=list(reversed(fork_status.unmerged_commits)),
+                prioritized_commits=prioritized if show_merge_picks else None,
+                show_all=True,
+            )
+        output_lines.extend(commit_lines)
+
     # Output via pager if listing commits, otherwise print directly
     output = "\n".join(output_lines)
-    if list_commits:
+    if show_commits:
         click.echo_via_pager(output)
     else:
         click.echo(output)
 
-
-@dataclass
-class PrioritizedCommit:
-    """A commit that matched a priority strategy.
-
-    Attributes:
-        commit: The git commit object.
-        strategy_name: Name of the strategy that matched.
-        result: The strategy result with match details.
-    """
-
-    commit: Commit
-    strategy_name: str
-    result: StrategyResult
-
-
-def get_prioritized_commits(
-    repo,
-    unmerged_commits: List[Commit],
-    config: MergePicksConfig,
-    context: StrategyContext,
-) -> List[PrioritizedCommit]:
-    """Evaluate all unmerged commits and return those matching priority strategies.
-
-    Strategies are evaluated in the order they appear in the config.
-    The first matching strategy for each commit determines its priority.
-
-    Args:
-        repo: GitPython Repo object.
-        unmerged_commits: List of unmerged commits (in reverse chronological order).
-        config: MergePicksConfig with ordered priority strategies.
-        context: Strategy context with upstream_ref, fork_ref, etc.
-
-    Returns:
-        List of PrioritizedCommit objects for commits that matched strategies,
-        in chronological order (oldest first).
-    """
-    prioritized = []
-
-    # Process in chronological order (oldest first)
-    for commit in reversed(unmerged_commits):
-        for strategy in config.strategies:
-            result = strategy.check(repo, commit, context)
-            if result is not None:
-                prioritized.append(
-                    PrioritizedCommit(
-                        commit=commit,
-                        strategy_name=strategy.name,
-                        result=result,
-                    )
-                )
-                break  # First matching strategy wins
-
-    return prioritized
-
-
-@fork.command()
+@fork.command("merge-pick")
 @click.pass_obj
 @click.argument(
     "upstream_ref",
@@ -279,11 +403,20 @@ def get_prioritized_commits(
     default=False,
     help="Print only the hash of the next commit to merge",
 )
-def pick(
+@click.option(
+    "--list",
+    "-l",
+    "list_commits",
+    is_flag=True,
+    default=False,
+    help="List all unmerged commits with picks marked (like fork status -lp)",
+)
+def merge_pick(
     app: AppContext,
     upstream_ref: Optional[str],
     fork_ref: str,
     next_only: bool,
+    list_commits: bool,
 ):
     """Suggest commits to merge based on configured priority strategies.
 
@@ -299,46 +432,16 @@ def pick(
     - conflict: (not yet implemented) Commits that would cause merge conflicts
 
     Use --next/-n to get just the hash of the recommended next commit.
-    Output is designed to be easily parseable in scripts.
+    Use --list/-l to show all unmerged commits with picks marked.
 
     \b
     Examples:
-        mergai fork pick                    # List prioritized commits
-        mergai fork pick --next             # Get next commit hash
-        mergai fork pick mongodb/master     # Use specific upstream ref
+        mergai fork merge-pick                    # List prioritized commits
+        mergai fork merge-pick --list             # List all commits with picks marked
+        mergai fork merge-pick --next             # Get next commit hash
+        mergai fork merge-pick mongodb/master     # Use specific upstream ref
     """
-    # Resolve upstream_ref (same logic as status command)
-    if upstream_ref is None:
-        upstream_url = app.config.fork.upstream_url
-
-        if upstream_url is None:
-            click.echo(
-                "Error: No UPSTREAM-REF provided and fork.upstream_url not configured.",
-                err=True,
-            )
-            click.echo(
-                "Either provide UPSTREAM-REF argument or set fork.upstream_url in .mergai.yaml",
-                err=True,
-            )
-            raise SystemExit(1)
-
-        # Find remote matching the URL
-        remote_name = git_utils.find_remote_by_url(app.repo, upstream_url)
-
-        if remote_name is None:
-            click.echo(
-                f"Error: No remote found matching upstream_url: {upstream_url}",
-                err=True,
-            )
-            click.echo(
-                "Hint: Run 'mergai fork init' to add and fetch the upstream remote.",
-                err=True,
-            )
-            raise SystemExit(1)
-
-        # Build upstream_ref from remote name and branch
-        upstream_branch = app.config.fork.upstream_branch
-        upstream_ref = f"{remote_name}/{upstream_branch}"
+    upstream_ref = resolve_upstream_ref(app, upstream_ref)
 
     # Get fork status to obtain unmerged commits
     try:
@@ -361,7 +464,7 @@ def pick(
         merge_picks_config = MergePicksConfig()
 
     # Create strategy context
-    context = StrategyContext(
+    context = MergePickStrategyContext(
         upstream_ref=upstream_ref,
         fork_ref=fork_ref,
     )
@@ -382,20 +485,29 @@ def pick(
         # TODO: Consider fallback to first unmerged commit if no priority match
         return
 
-    # List all prioritized commits
-    if not prioritized:
-        # No output if no commits match criteria (for script parseability)
-        return
+    if not fork_status.is_up_to_date:
+        output_lines = []
 
-    # Output format matching 'fork status -l' style
-    total_commits = len(prioritized)
-    index_width = len(str(total_commits))
+        if list_commits:
+            # -l: Show all commits with picks marked (like fork status -lp, but no summary)
+            commit_lines = format_commit_list(
+                commits=list(reversed(fork_status.unmerged_commits)),
+                prioritized_commits=prioritized,
+                show_all=True,
+                show_prefix=True,
+            )
+            output_lines.extend(commit_lines)
+        else:
+            # Default: Show only picks without prefix/numbering
+            if prioritized:
+                commit_lines = format_commit_list(
+                    commits=list(reversed(fork_status.unmerged_commits)),
+                    prioritized_commits=prioritized,
+                    show_all=False,
+                    show_prefix=False,
+                )
+                output_lines.extend(commit_lines)
+            else:
+                output_lines.append("(no merge picks found)")
 
-    output_lines = []
-    for i, pc in enumerate(prioritized, 1):
-        commit_info = format_commit_info_oneline(pc.commit)
-        strategy_tag = f"[{pc.strategy_name}]"
-        details_tag = f"({pc.result.format_short()})"
-        output_lines.append(f"{i:{index_width}d}: {commit_info} {strategy_tag} {details_tag}")
-
-    click.echo("\n".join(output_lines))
+        print_or_page("\n".join(output_lines))

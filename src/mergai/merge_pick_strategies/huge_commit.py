@@ -3,14 +3,14 @@
 from dataclasses import dataclass
 from typing import Optional, TYPE_CHECKING
 
-from .base import PickStrategy, StrategyResult, StrategyContext
+from .base import MergePickStrategy, MergePickStrategyResult, MergePickStrategyContext
 
 if TYPE_CHECKING:
     from git import Repo, Commit
 
 
 @dataclass
-class HugeCommitResult(StrategyResult):
+class HugeCommitResult(MergePickStrategyResult):
     """Result for huge commit strategy match.
 
     Attributes:
@@ -57,7 +57,7 @@ class HugeCommitStrategyConfig:
         return cls()
 
 
-class HugeCommitStrategy(PickStrategy):
+class HugeCommitStrategy(MergePickStrategy):
     """Strategy that prioritizes commits with many changed files/lines.
 
     A commit matches if it changes at least min_changed_files files
@@ -78,7 +78,7 @@ class HugeCommitStrategy(PickStrategy):
         return "huge_commit"
 
     def check(
-        self, repo: "Repo", commit: "Commit", context: StrategyContext
+        self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
     ) -> Optional[HugeCommitResult]:
         """Check if commit is a huge commit.
 

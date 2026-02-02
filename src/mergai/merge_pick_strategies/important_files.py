@@ -3,14 +3,14 @@
 from dataclasses import dataclass, field
 from typing import Optional, List, TYPE_CHECKING
 
-from .base import PickStrategy, StrategyResult, StrategyContext
+from .base import MergePickStrategy, MergePickStrategyResult, MergePickStrategyContext
 
 if TYPE_CHECKING:
     from git import Repo, Commit
 
 
 @dataclass
-class ImportantFilesResult(StrategyResult):
+class ImportantFilesResult(MergePickStrategyResult):
     """Result for important files strategy match.
 
     Attributes:
@@ -51,7 +51,7 @@ class ImportantFilesStrategyConfig:
         return cls()
 
 
-class ImportantFilesStrategy(PickStrategy):
+class ImportantFilesStrategy(MergePickStrategy):
     """Strategy that prioritizes commits touching important files.
 
     A commit matches if it modifies any file in the configured list
@@ -72,7 +72,7 @@ class ImportantFilesStrategy(PickStrategy):
         return "important_files"
 
     def check(
-        self, repo: "Repo", commit: "Commit", context: StrategyContext
+        self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
     ) -> Optional[ImportantFilesResult]:
         """Check if commit modifies any important files.
 

@@ -22,7 +22,7 @@ import logging
 import yaml
 
 if TYPE_CHECKING:
-    from .strategies import PickStrategy
+    from .merge_pick_strategies import MergePickStrategy
 
 log = logging.getLogger(__name__)
 
@@ -38,7 +38,7 @@ class ForkConfig:
         upstream_url: URL of the upstream repository to sync from.
         upstream_branch: Branch name to use when auto-detecting upstream ref.
         upstream_remote: Name of the git remote for upstream (if not set, derived from URL).
-        merge_picks: Configuration for commit prioritization in fork pick.
+        merge_picks: Configuration for commit prioritization in fork merge-pick.
     """
 
     upstream_url: Optional[str] = None
@@ -99,7 +99,7 @@ class ResolveConfig:
 
 @dataclass
 class MergePicksConfig:
-    """Configuration for merge pick strategies.
+    """Configuration for merge-pick strategies.
 
     Strategies are evaluated in the order they appear in the config list.
     The first matching strategy determines the commit's priority.
@@ -122,10 +122,10 @@ class MergePicksConfig:
         - conflict: Prioritize commits that would cause merge conflicts (not yet implemented)
 
     Attributes:
-        strategies: Ordered list of pick strategies to evaluate.
+        strategies: Ordered list of merge-pick strategies to evaluate.
     """
 
-    strategies: List["PickStrategy"] = field(default_factory=list)
+    strategies: List["MergePickStrategy"] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data) -> "MergePicksConfig":
@@ -142,7 +142,7 @@ class MergePicksConfig:
         Returns:
             MergePicksConfig with instantiated strategies.
         """
-        from .strategies import create_strategy
+        from .merge_pick_strategies import create_strategy
 
         if not isinstance(data, list):
             return cls()
