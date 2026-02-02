@@ -1,16 +1,23 @@
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
 import json
 import git
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import TYPE_CHECKING, Optional
 from . import git_utils
 from jinja2 import Template
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
 from datetime import datetime, timezone
+
+if TYPE_CHECKING:
+    from .config import BranchConfig
 
 GITHUB_MD_THEME = Theme(
     {
@@ -476,3 +483,292 @@ def format_commit_info_oneline(commit) -> str:
 def format_number(n: int) -> str:
     """Format a number with thousand separators."""
     return f"{n:,}"
+
+
+@dataclass
+class ParsedBranchName:
+    """Parsed components of a mergai branch name.
+
+    This class represents the result of parsing a branch name that was
+    generated using BranchNameBuilder. It extracts the original components
+    from the branch name string.
+
+    Attributes:
+        target_branch: The original target branch name (e.g., "master", "v8.0")
+        merge_commit_short: Short SHA of the merge commit (e.g., "abc12345678")
+        branch_type: The branch type string (e.g., "main", "conflict", "solution")
+        full_name: The full original branch name that was parsed
+    """
+
+    target_branch: str
+    merge_commit_short: str
+    branch_type: str
+    full_name: str
+
+    def is_standard_type(self) -> bool:
+        """Check if the branch type is one of the standard BranchType values."""
+        return self.branch_type in [t.value for t in BranchType]
+
+
+class BranchType(StrEnum):
+    """Standard branch types for merge conflict resolution workflow.
+
+    Attributes:
+        MAIN: Main working branch where all work for merging a given commit
+              will be merged.
+        CONFLICT: Branch containing a merge commit with committed merge markers.
+        SOLUTION: Branch with solution attempt(s). PRs are created from solution
+                  to conflict branch.
+    """
+
+    MAIN = "main"
+    CONFLICT = "conflict"
+    SOLUTION = "solution"
+
+
+class BranchNameBuilder:
+    """Builder for generating standardized branch names.
+
+    The builder uses a format string with tokens that get replaced:
+    - %(target_branch) - The target branch being merged into
+    - %(merge_commit_short) - Short SHA of the merge commit
+    - %(type) - Branch type identifier
+
+    Example format: "mergai/%(target_branch)-%(merge_commit_short)/%(type)"
+    Produces: "mergai/main-abc12345678/solution"
+
+    The class is designed to be instantiated once with all context information,
+    then used multiple times to generate different branch names.
+
+    Usage:
+        builder = BranchNameBuilder(
+            name_format="mergai/%(target_branch)-%(merge_commit_short)/%(type)",
+            target_branch="main",
+            merge_commit_short="abc12345678"
+        )
+
+        # Get specific branch types via properties
+        main_branch = builder.main_branch
+        conflict_branch = builder.conflict_branch
+        solution_branch = builder.solution_branch
+
+        # Or use methods for more control
+        custom_branch = builder.get_branch_name("custom-type")
+        typed_branch = builder.get_branch_name_for_type(BranchType.MAIN)
+    """
+
+    # Token pattern for format string - matches %(token_name)
+    TOKEN_PATTERN = re.compile(r"%\((\w+)\)")
+
+    # Currently supported tokens
+    SUPPORTED_TOKENS = {"target_branch", "merge_commit_short", "type"}
+
+    def __init__(
+        self,
+        name_format: str,
+        target_branch: str,
+        merge_commit_short: str,
+    ):
+        """Initialize the branch name builder.
+
+        Args:
+            name_format: Format string with %(token) placeholders.
+            target_branch: Name of the target branch.
+            merge_commit_short: Short SHA of the merge commit (typically 11 chars).
+        """
+        self._name_format = name_format
+        self._target_branch = target_branch
+        self._merge_commit_short = merge_commit_short
+
+    @classmethod
+    def from_config(
+        cls,
+        config: "BranchConfig",
+        target_branch: str,
+        merge_commit_short: str,
+    ) -> "BranchNameBuilder":
+        """Create a builder from a BranchConfig instance.
+
+        Args:
+            config: BranchConfig with the name_format.
+            target_branch: Name of the target branch.
+            merge_commit_short: Short SHA of the merge commit.
+
+        Returns:
+            Configured BranchNameBuilder instance.
+        """
+        return cls(
+            name_format=config.name_format,
+            target_branch=target_branch,
+            merge_commit_short=merge_commit_short,
+        )
+
+    @classmethod
+    def parse_branch_name(
+        cls,
+        branch_name: str,
+        name_format: str,
+    ) -> Optional[ParsedBranchName]:
+        """Parse a branch name back into its components.
+
+        This method reverses the branch name generation process, extracting
+        the original target_branch, merge_commit_short, and type from a
+        branch name that was created using the given format.
+
+        The parsing is done by converting the format string into a regex
+        pattern with named capture groups for each token.
+
+        Args:
+            branch_name: The branch name to parse
+                        (e.g., "mergai/master-abc12345678/main")
+            name_format: The format string used to generate branch names
+                        (e.g., "mergai/%(target_branch)-%(merge_commit_short)/%(type)")
+
+        Returns:
+            ParsedBranchName if the branch matches the format, None otherwise.
+
+        Example:
+            >>> parsed = BranchNameBuilder.parse_branch_name(
+            ...     "mergai/master-abc12345678/solution",
+            ...     "mergai/%(target_branch)-%(merge_commit_short)/%(type)"
+            ... )
+            >>> parsed.target_branch
+            'master'
+            >>> parsed.merge_commit_short
+            'abc12345678'
+            >>> parsed.branch_type
+            'solution'
+        """
+        # Build regex pattern from format string
+        # 1. Escape regex special characters in the format
+        # 2. Replace tokens with named capture groups
+
+        # First, escape all regex special characters
+        pattern = re.escape(name_format)
+
+        # Define capture patterns for each token type
+        # - target_branch: non-greedy match of any characters except the delimiter
+        #   that follows it in the format (we use .+? and let the rest of the pattern constrain it)
+        # - merge_commit_short: hex characters (git SHA)
+        # - type: word characters and hyphens (for custom types like "attempt-1")
+        token_patterns = {
+            "target_branch": r"(?P<target_branch>.+?)",
+            "merge_commit_short": r"(?P<merge_commit_short>[a-f0-9]+)",
+            "type": r"(?P<type>[\w-]+)",
+        }
+
+        # Replace escaped token placeholders with capture groups
+        # re.escape converts %(token) to %\(token\)
+        for token, capture_pattern in token_patterns.items():
+            escaped_placeholder = re.escape(f"%({token})")
+            pattern = pattern.replace(escaped_placeholder, capture_pattern)
+
+        # Anchor the pattern to match the entire string
+        pattern = f"^{pattern}$"
+
+        # Try to match the branch name
+        match = re.match(pattern, branch_name)
+        if match is None:
+            return None
+
+        return ParsedBranchName(
+            target_branch=match.group("target_branch"),
+            merge_commit_short=match.group("merge_commit_short"),
+            branch_type=match.group("type"),
+            full_name=branch_name,
+        )
+
+    @classmethod
+    def parse_branch_name_with_config(
+        cls,
+        branch_name: str,
+        config: "BranchConfig",
+    ) -> Optional[ParsedBranchName]:
+        """Parse a branch name using format from BranchConfig.
+
+        Convenience method that extracts the name_format from config.
+
+        Args:
+            branch_name: The branch name to parse.
+            config: BranchConfig with the name_format.
+
+        Returns:
+            ParsedBranchName if the branch matches the format, None otherwise.
+        """
+        return cls.parse_branch_name(branch_name, config.name_format)
+
+    def _build_name(self, branch_type: str) -> str:
+        """Build branch name by replacing tokens in format string.
+
+        Args:
+            branch_type: The type string to use for %(type) token.
+
+        Returns:
+            Formatted branch name with all tokens replaced.
+        """
+        values = {
+            "target_branch": self._target_branch,
+            "merge_commit_short": self._merge_commit_short,
+            "type": branch_type,
+        }
+
+        def replace_token(match: re.Match) -> str:
+            token = match.group(1)
+            if token in values:
+                return values[token]
+            # Keep unknown tokens as-is for future extensibility
+            return match.group(0)
+
+        return self.TOKEN_PATTERN.sub(replace_token, self._name_format)
+
+    def get_branch_name(self, branch_type: str) -> str:
+        """Get branch name for a custom type string.
+
+        This method allows using arbitrary type strings beyond the
+        standard BranchType enum values.
+
+        Args:
+            branch_type: Custom type string for the branch.
+
+        Returns:
+            Formatted branch name.
+        """
+        return self._build_name(branch_type)
+
+    def get_branch_name_for_type(self, branch_type: BranchType) -> str:
+        """Get branch name for a standard BranchType.
+
+        Args:
+            branch_type: One of the standard BranchType enum values.
+
+        Returns:
+            Formatted branch name.
+        """
+        return self._build_name(branch_type.value)
+
+    @property
+    def main_branch(self) -> str:
+        """Get the main working branch name.
+
+        The main branch is where all work for merging a given commit
+        will be merged.
+        """
+        return self._build_name(BranchType.MAIN)
+
+    @property
+    def conflict_branch(self) -> str:
+        """Get the conflict branch name.
+
+        The conflict branch contains a merge commit with committed
+        merge markers.
+        """
+        return self._build_name(BranchType.CONFLICT)
+
+    @property
+    def solution_branch(self) -> str:
+        """Get the solution branch name.
+
+        The solution branch contains solution attempt(s). PRs are
+        created from solution to conflict branch.
+        """
+        return self._build_name(BranchType.SOLUTION)

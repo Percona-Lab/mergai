@@ -98,6 +98,37 @@ class ResolveConfig:
 
 
 @dataclass
+class BranchConfig:
+    """Configuration for branch naming.
+
+    The format string uses %(token) syntax for substitution.
+
+    Attributes:
+        name_format: Format string for branch names.
+            Supported tokens:
+            - %(target_branch) - The target branch name
+            - %(merge_commit_short) - Short SHA of the merge commit
+            - %(type) - Branch type (main, conflict, solution, or custom)
+    """
+
+    name_format: str = "mergai/%(target_branch)-%(merge_commit_short)/%(type)"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "BranchConfig":
+        """Create a BranchConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            BranchConfig instance with values from data.
+        """
+        return cls(
+            name_format=data.get("name_format", cls.name_format),
+        )
+
+
+@dataclass
 class MergePicksConfig:
     """Configuration for merge-pick strategies.
 
@@ -177,11 +208,13 @@ class MergaiConfig:
     Attributes:
         fork: Configuration for the fork subcommand (includes merge_picks).
         resolve: Configuration for the resolve command.
+        branch: Configuration for branch naming.
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
 
     fork: ForkConfig = field(default_factory=ForkConfig)
     resolve: ResolveConfig = field(default_factory=ResolveConfig)
+    branch: BranchConfig = field(default_factory=BranchConfig)
     _raw: Dict[str, Any] = field(default_factory=dict)
 
     def get_section(self, name: str) -> Dict[str, Any]:
@@ -221,9 +254,16 @@ class MergaiConfig:
             ResolveConfig.from_dict(resolve_data) if resolve_data else ResolveConfig()
         )
 
+        # Parse branch section if present
+        branch_data = data.get("branch", {})
+        branch_config = (
+            BranchConfig.from_dict(branch_data) if branch_data else BranchConfig()
+        )
+
         return cls(
             fork=fork_config,
             resolve=resolve_config,
+            branch=branch_config,
             _raw=data,
         )
 

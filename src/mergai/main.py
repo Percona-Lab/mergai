@@ -64,6 +64,9 @@ def register_commands(cli):
     from .commands.fork import fork
     cli.add_command(fork)
 
+    from .commands.branch import branch
+    cli.add_command(branch)
+
 @click.group()
 @click.pass_obj
 @click.option(
