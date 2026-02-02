@@ -260,7 +260,7 @@ def resolve(
     click.echo("Resolving merge conflict...")
     app.resolve(force=True, use_history=False, yolo=True)
 
-    app.commit()
+    app.commit_solution()
 
     replay.exec_to_dir(
         "solution.md", "mergai", "show", "--solution", "--format", "markdown"

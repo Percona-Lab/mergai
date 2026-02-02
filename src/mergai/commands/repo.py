@@ -5,26 +5,6 @@ from .. import git_utils
 
 @click.command()
 @click.pass_obj
-def commit(app: AppContext):
-    try:
-        app.commit()
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)
-
-
-@click.command()
-@click.pass_obj
-def commit_conflict(app: AppContext):
-    try:
-        app.commit_conflict()
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)
-
-
-@click.command()
-@click.pass_obj
 @click.argument("revision", default="HEAD")
 def get_merge_conflict(app: AppContext, revision: str):
     (commit, conflict_context) = app.get_merge_conflict(revision)

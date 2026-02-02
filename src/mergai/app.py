@@ -16,6 +16,10 @@ from pathlib import Path
 from .agents.base import Agent
 
 
+# TODO: Make this configurable via settings/config file
+MERGAI_COMMIT_FOOTER = "Note: commit created by mergai"
+
+
 def gh_auth_token() -> str:
     import os
 
@@ -84,6 +88,24 @@ class AppContext:
         if self.gh_repo_str is None:
             raise Exception("GitHub repository not set. Please provide --repo option.")
         return self.gh.get_repo(self.gh_repo_str)
+
+    def _get_target_branch_name(self) -> str:
+        """Get the target branch name for commit messages.
+
+        Returns the target branch name by:
+        1. Parsing the current branch if it's a mergai branch
+        2. Otherwise, returning the current branch name (Git's default behavior)
+
+        Returns:
+            The target branch name to use in commit messages.
+        """
+        current_branch = git_utils.get_current_branch(self.repo)
+        parsed = util.BranchNameBuilder.parse_branch_name_with_config(
+            current_branch, self.config.branch
+        )
+        if parsed:
+            return parsed.target_branch
+        return current_branch
 
     def read_note(self, commit: str) -> Optional[dict]:
         note_str = git_utils.read_commit_note(self.repo, "mergai", commit)
@@ -343,7 +365,7 @@ class AppContext:
             commit,
         )
 
-    def commit(self):
+    def commit_solution(self):
         if not self.state.note_exists():
             raise Exception("No note found.")
 
@@ -355,6 +377,10 @@ class AppContext:
             raise Exception("No changes to commit in the repository.")
 
         solution = note["solution"]
+        conflict_context = note.get("conflict_context")
+
+        # Track modified files (files changed but not in the solution's resolved list)
+        modified_files = []
         if self.repo.is_dirty():
             for item in self.repo.index.diff(None):
                 if item.a_path not in solution["response"]["resolved"]:
@@ -368,9 +394,46 @@ class AppContext:
 
                 self.repo.index.add([item.a_path])
 
-        self.repo.index.commit(
-            "MergaAI: merge conflict solution\n\n" + solution["response"]["summary"]
-        )
+        # Build commit message following Git's merge commit style
+        target_branch = self._get_target_branch_name()
+        if conflict_context:
+            theirs_sha = conflict_context["theirs_commit"]["short_sha"]
+            message = f"Merge commit '{theirs_sha}' into {target_branch}\n\n"
+        else:
+            message = "Merge conflict solution\n\n"
+
+        # Add summary from AI response
+        summary = solution["response"].get("summary", "")
+        if summary:
+            message += f"{summary}\n\n"
+
+        # Add resolved files section
+        resolved_files = solution["response"].get("resolved", {})
+        if resolved_files:
+            message += "Resolved:\n"
+            for file_path in resolved_files.keys():
+                message += f"\t{file_path}\n"
+            message += "\n"
+
+        # Add unresolved files section (with conflict markers warning)
+        unresolved_files = solution["response"].get("unresolved", {})
+        if unresolved_files:
+            message += "Unresolved (contains conflict markers):\n"
+            for file_path in unresolved_files.keys():
+                message += f"\t{file_path}\n"
+            message += "\n"
+
+        # Add modified files section (files not in the solution)
+        if modified_files:
+            message += "Modified:\n"
+            for file_path in modified_files:
+                message += f"\t{file_path}\n"
+            message += "\n"
+
+        # Add MergAI footer
+        message += MERGAI_COMMIT_FOOTER
+
+        self.repo.index.commit(message)
 
         self.add_note(self.repo.head.commit.hexsha)
         self.drop_all()
@@ -385,11 +448,26 @@ class AppContext:
         if context is None:
             raise Exception(f"No conflict context found in the note.\n\n{hint_msg}")
 
-        ours_sha = context["ours_commit"]["short_sha"]
         theirs_sha = context["theirs_commit"]["short_sha"]
-        message = f"MergeAI: baseline for merging {theirs_sha} to {ours_sha}"
+        files = context["files"]
+        target_branch = self._get_target_branch_name()
 
-        for path in context["files"]:
+        # Build commit message following Git's merge commit style
+        message = f"Merge commit '{theirs_sha}' into {target_branch}\n\n"
+
+        # Add conflicts section with tab-prefixed file list
+        message += "Conflicts:\n"
+        for file_path in files:
+            message += f"\t{file_path}\n"
+        message += "\n"
+
+        # Add note about conflict markers
+        message += "Note: This commit contains unresolved conflict markers.\n\n"
+
+        # Add MergAI footer
+        message += MERGAI_COMMIT_FOOTER
+
+        for path in files:
             self.repo.git.add(path)
 
         self.repo.git.commit(
