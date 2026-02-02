@@ -12,9 +12,9 @@ load_dotenv()
 
 
 def register_commands(cli):
-    from .commands.conflict_context import create_conflict_context
+    from .commands.context import context
 
-    cli.add_command(create_conflict_context)
+    cli.add_command(context)
 
     from .commands.resolve import resolve
 

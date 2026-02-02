@@ -4,7 +4,7 @@ from pathlib import Path
 
 from .. import git_utils
 from ..app import AppContext
-from .conflict_context import conflict_context_flags
+from .context import conflict_context_flags
 import subprocess
 from typing import List
 import yaml
