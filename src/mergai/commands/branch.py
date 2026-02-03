@@ -47,59 +47,28 @@ def get_branch_builder(
 ) -> BranchNameBuilder:
     """Create a BranchNameBuilder from CLI arguments.
 
+    Uses app.get_merge_context() to resolve commit and target, which checks:
+    1. merge_info in note.json
+    2. Current mergai branch name
+    3. CLI-provided values override auto-detected ones
+
     Args:
         app: Application context with config and repo.
-        commit: Commit SHA or ref to use for branch naming, or None to extract
-                from current branch.
-        target: Target branch name, or None to detect from current branch.
+        commit: Commit SHA or ref to use for branch naming, or None to auto-detect.
+        target: Target branch name, or None to auto-detect.
 
     Returns:
         Configured BranchNameBuilder instance.
 
     Raises:
         click.ClickException: If commit reference is invalid or cannot be determined.
-
-    Note:
-        If commit or target is not specified, this function will:
-        1. Get the current branch name
-        2. Try to parse it as a mergai branch name
-        3. If parsing succeeds, use the extracted values
-        4. If parsing fails and values are still needed, raise an error
     """
-    # Try to parse current branch for defaults
-    parsed = get_current_branch_parsed(app)
-
-    # Resolve commit
-    if commit is None:
-        if parsed is not None:
-            # Extract from current mergai branch
-            merge_commit_short = parsed.merge_commit_short
-        else:
-            raise click.ClickException(
-                "COMMIT is required when not on a mergai branch. "
-                "Provide a commit SHA or ref."
-            )
-    else:
-        # Resolve provided commit to short SHA
-        try:
-            resolved_commit = app.repo.commit(commit)
-            merge_commit_short = git_utils.short_sha(resolved_commit.hexsha)
-        except Exception as e:
-            raise click.ClickException(f"Invalid commit reference '{commit}': {e}")
-
-    # Resolve target branch
-    if target is None:
-        if parsed is not None:
-            # We're on a mergai branch - use the extracted target
-            target = parsed.target_branch
-        else:
-            # Regular branch - use current branch name as-is
-            target = git_utils.get_current_branch(app.repo)
+    ctx = app.get_merge_context(commit=commit, target=target)
 
     return BranchNameBuilder.from_config(
         app.config.branch,
-        target_branch=target,
-        merge_commit_short=merge_commit_short,
+        target_branch=ctx.target_branch,
+        merge_commit_short=ctx.merge_commit_short,
     )
 
 

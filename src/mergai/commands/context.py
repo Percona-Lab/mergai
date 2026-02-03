@@ -8,8 +8,12 @@ This module provides commands for creating and managing merge context:
 """
 
 import click
+from datetime import datetime, timezone
+from typing import Optional
+
 from ..app import AppContext
 from .. import git_utils
+from ..util import BranchNameBuilder
 
 
 CONTEXT_FLAGS = [
@@ -67,29 +71,94 @@ def context():
 
 @context.command()
 @click.pass_obj
-def init(app: AppContext):
+@click.argument("commit", type=str, required=False, default=None)
+@click.option(
+    "--target",
+    "-t",
+    type=str,
+    default=None,
+    help="Target branch name (default: extracted from current branch or current branch name)",
+)
+@click.option(
+    "-f/--force",
+    "force",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing merge_info.",
+)
+def init(
+    app: AppContext,
+    commit: Optional[str],
+    target: Optional[str],
+    force: bool,
+):
     """Initialize merge context with commit and target branch info.
 
     Prepares the note.json with information about the merge operation
     including the merging commit and target branch.
 
+    COMMIT is the commit SHA or ref being merged. If omitted and currently
+    on a mergai branch, the commit will be extracted from the current branch name.
+
     This command should be run before starting a merge operation to
     establish the context for subsequent merge-related commands.
+
+    \b
+    Examples:
+        mergai context init abc1234
+        mergai context init abc1234 --target v8.0
+        mergai context init HEAD
+        mergai context init              # when on a mergai branch
+        mergai context init -f           # force overwrite existing merge_info
     """
-    # TODO: Implement to add merging commit and target branch to note.json
-    # Design should allow easy extension for additional metadata in the future
-    # Suggested fields for note.json:
-    #   - merge_info.merging_commit: the commit being merged
-    #   - merge_info.target_branch: the branch being merged into
-    #   - merge_info.timestamp: when the merge was initiated
-    #   - merge_info.* : extensible for future metadata
-    raise click.ClickException(
-        "Not implemented yet.\n\n"
-        "TODO: Initialize merge context by storing:\n"
-        "  - merging commit reference\n"
-        "  - target branch name\n"
-        "  - (extensible for future metadata)"
+    # For init, we only use branch parsing for defaults (not note.json)
+    # since we're creating/overwriting merge_info
+    current_branch = git_utils.get_current_branch(app.repo)
+    parsed = BranchNameBuilder.parse_branch_name_with_config(
+        current_branch, app.config.branch
     )
+
+    # Resolve commit to short SHA
+    if commit is not None:
+        try:
+            resolved = app.repo.commit(commit)
+            merge_commit_short = git_utils.short_sha(resolved.hexsha)
+        except Exception as e:
+            raise click.ClickException(f"Invalid commit reference '{commit}': {e}")
+    elif parsed is not None:
+        merge_commit_short = parsed.merge_commit_short
+    else:
+        raise click.ClickException(
+            "COMMIT is required when not on a mergai branch."
+        )
+
+    # Resolve target branch
+    if target is not None:
+        target_branch = target
+    elif parsed is not None:
+        target_branch = parsed.target_branch
+    else:
+        target_branch = current_branch
+
+    note = app.load_or_create_note()
+
+    if "merge_info" in note and not force:
+        raise click.ClickException(
+            "merge_info already exists in the note. Use -f/--force to overwrite."
+        )
+
+    merge_info = {
+        "target_branch": target_branch,
+        "merge_commit_short": merge_commit_short,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+    note["merge_info"] = merge_info
+    app.save_note(note)
+
+    click.echo("Initialized merge context:")
+    click.echo(f"  target_branch: {target_branch}")
+    click.echo(f"  merge_commit_short: {merge_commit_short}")
 
 
 @context.group()

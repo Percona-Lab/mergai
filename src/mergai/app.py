@@ -11,6 +11,7 @@ import github
 from github import Repository as GithubRepository
 import json
 from typing import Optional, Tuple
+from dataclasses import dataclass
 import tempfile
 from pathlib import Path
 from .agents.base import Agent
@@ -18,6 +19,19 @@ from .agents.base import Agent
 
 # TODO: Make this configurable via settings/config file
 MERGAI_COMMIT_FOOTER = "Note: commit created by mergai"
+
+
+@dataclass
+class MergeContext:
+    """Context information for a merge operation.
+
+    Attributes:
+        target_branch: The branch being merged into (e.g., "v8.0", "master").
+        merge_commit_short: Short SHA of the commit being merged (11 chars).
+    """
+
+    target_branch: str
+    merge_commit_short: str
 
 
 def gh_auth_token() -> str:
@@ -89,16 +103,116 @@ class AppContext:
             raise Exception("GitHub repository not set. Please provide --repo option.")
         return self.gh.get_repo(self.gh_repo_str)
 
+    def get_merge_context(
+        self,
+        commit: Optional[str] = None,
+        target: Optional[str] = None,
+    ) -> MergeContext:
+        """Get merge context from note.json or current branch.
+
+        Resolves target_branch and merge_commit_short using the following
+        priority:
+        1. If merge_info exists in note.json, use those values
+        2. Otherwise, try to parse from current mergai branch name
+        3. If neither exists, raise an exception
+        4. If both exist and values differ, raise an exception
+
+        CLI-provided values (commit, target) override the auto-detected values.
+
+        Args:
+            commit: Optional commit SHA or ref to override auto-detection.
+            target: Optional target branch to override auto-detection.
+
+        Returns:
+            MergeContext with target_branch and merge_commit_short.
+
+        Raises:
+            click.ClickException: If context cannot be determined or conflicts.
+        """
+        # Get values from note.json if merge_info exists
+        note = self.load_note()
+        note_target = None
+        note_commit = None
+        if note and "merge_info" in note:
+            merge_info = note["merge_info"]
+            note_target = merge_info.get("target_branch")
+            note_commit = merge_info.get("merge_commit_short")
+
+        # Get values from current branch name
+        current_branch = git_utils.get_current_branch(self.repo)
+        parsed = util.BranchNameBuilder.parse_branch_name_with_config(
+            current_branch, self.config.branch
+        )
+        branch_target = parsed.target_branch if parsed else None
+        branch_commit = parsed.merge_commit_short if parsed else None
+
+        # Check for conflicts between note and branch (when both exist)
+        if note_target and branch_target and note_target != branch_target:
+            raise click.ClickException(
+                f"Conflict: target_branch in note.json ({note_target}) differs from "
+                f"current branch ({branch_target}). Use --target to specify explicitly."
+            )
+        if note_commit and branch_commit and note_commit != branch_commit:
+            raise click.ClickException(
+                f"Conflict: merge_commit_short in note.json ({note_commit}) differs from "
+                f"current branch ({branch_commit}). Use COMMIT argument to specify explicitly."
+            )
+
+        # Resolve final values: CLI args > note.json > branch > error
+        # Resolve merge_commit_short
+        if commit is not None:
+            # CLI-provided commit - resolve to short SHA
+            try:
+                resolved = self.repo.commit(commit)
+                final_commit = git_utils.short_sha(resolved.hexsha)
+            except Exception as e:
+                raise click.ClickException(f"Invalid commit reference '{commit}': {e}")
+        elif note_commit:
+            final_commit = note_commit
+        elif branch_commit:
+            final_commit = branch_commit
+        else:
+            raise click.ClickException(
+                "Cannot determine merge commit. Either:\n"
+                "  - Run 'mergai context init' first, or\n"
+                "  - Switch to a mergai branch, or\n"
+                "  - Provide COMMIT argument explicitly."
+            )
+
+        # Resolve target_branch
+        if target is not None:
+            final_target = target
+        elif note_target:
+            final_target = note_target
+        elif branch_target:
+            final_target = branch_target
+        else:
+            # Fall back to current branch name (matches old behavior)
+            final_target = current_branch
+
+        return MergeContext(
+            target_branch=final_target,
+            merge_commit_short=final_commit,
+        )
+
     def _get_target_branch_name(self) -> str:
         """Get the target branch name for commit messages.
 
         Returns the target branch name by:
-        1. Parsing the current branch if it's a mergai branch
-        2. Otherwise, returning the current branch name (Git's default behavior)
+        1. Checking merge_info in note.json
+        2. Parsing the current branch if it's a mergai branch
+        3. Otherwise, returning the current branch name (Git's default behavior)
 
         Returns:
             The target branch name to use in commit messages.
         """
+        # Try to get from merge context (note.json or branch)
+        note = self.load_note()
+        if note and "merge_info" in note:
+            target = note["merge_info"].get("target_branch")
+            if target:
+                return target
+
         current_branch = git_utils.get_current_branch(self.repo)
         parsed = util.BranchNameBuilder.parse_branch_name_with_config(
             current_branch, self.config.branch
