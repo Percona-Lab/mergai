@@ -250,6 +250,8 @@ def delete(
     # Determine which branch types to delete
     if type == "all":
         types_to_delete = BRANCH_TYPES
+        # When deleting all branches, don't fail on missing - just report
+        ignore_missing = True
     else:
         types_to_delete = [type]
 
