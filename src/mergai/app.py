@@ -319,6 +319,12 @@ class AppContext:
     def drop_conflict_context(self):
         self.drop_note_field("conflict_context")
 
+    def drop_user_comment(self):
+        self.drop_note_field("user_comment")
+
+    def drop_merge_info(self):
+        self.drop_note_field("merge_info")
+
     def create_conflict_context(
         self,
         use_diffs: bool,

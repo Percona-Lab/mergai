@@ -229,33 +229,6 @@ def prompt(app: AppContext, use_history: bool):
         exit(1)
 
 
-@click.command()
-@click.pass_obj
-@click.argument(
-    "choice",
-    type=click.Choice(["all", "solution", "context", "pr_comments"]),
-    required=False,
-    default="all",
-)
-def drop(app: AppContext, choice: str):
-    try:
-        # click.echo(f"Dropping {choice}...")
-        if choice == "all":
-            app.drop_all()
-        elif choice == "solution":
-            app.drop_solution()
-        elif choice == "context":
-            app.drop_conflict_context()
-        elif choice == "pr_comments":
-            app.drop_pr_comments()
-        else:
-            raise Exception(f"Invalid choice: {choice}")
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)
-    pass
-
-
 COMMENT_FILE_TEMPLATE = """\
 
 # MergAI comment

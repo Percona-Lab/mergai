@@ -254,3 +254,58 @@ def create_merge(app: AppContext):
         "  - record merged branches/commits\n"
         "  - store merge metadata"
     )
+
+
+@context.command()
+@click.pass_obj
+@click.argument(
+    "part",
+    type=click.Choice(["conflict", "solution", "pr_comments", "user_comment", "merge_info"]),
+    required=False,
+    default=None,
+)
+def drop(app: AppContext, part: Optional[str]):
+    """Drop all or part of the stored context.
+
+    Without arguments, drops all context (removes the entire note).
+    With an argument, drops only the specified part of the context.
+
+    \b
+    Parts that can be dropped:
+    - conflict: The conflict context (file diffs, conflict markers, etc.)
+    - solution: The generated/stored solution
+    - pr_comments: PR comments added to the context
+    - user_comment: User-provided comments
+    - merge_info: Merge initialization info (target branch, commit)
+
+    \b
+    Examples:
+        mergai context drop              # drops everything
+        mergai context drop conflict     # drops only conflict_context
+        mergai context drop solution     # drops only solution
+        mergai context drop pr_comments  # drops only PR comments
+    """
+    try:
+        if part is None:
+            app.drop_all()
+            click.echo("Dropped all context.")
+        elif part == "conflict":
+            app.drop_conflict_context()
+            click.echo("Dropped conflict context.")
+        elif part == "solution":
+            app.drop_solution()
+            click.echo("Dropped solution.")
+        elif part == "pr_comments":
+            app.drop_pr_comments()
+            click.echo("Dropped PR comments.")
+        elif part == "user_comment":
+            app.drop_user_comment()
+            click.echo("Dropped user comment.")
+        elif part == "merge_info":
+            app.drop_merge_info()
+            click.echo("Dropped merge info.")
+        else:
+            raise Exception(f"Invalid part: {part}")
+    except Exception as e:
+        click.echo(f"Error: {e}")
+        exit(1)
