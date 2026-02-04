@@ -5,8 +5,8 @@ def load_prompt(prompt_name: str) -> str:
     return (files("mergai.prompts") / prompt_name).read_text(encoding="utf-8")
 
 
-def load_system_prompt() -> str:
-    return load_prompt("system_prompt.md")
+def load_system_prompt_resolve() -> str:
+    return load_prompt("system_prompt_resolve.md")
 
 
 def load_pr_comments_prompt() -> str:

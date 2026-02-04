@@ -269,14 +269,14 @@ class AppContext:
     def save_note(self, note: dict):
         self.state.save_note(note)
 
-    def build_prompt(self, current_note: dict, use_history: bool) -> str:
+    def build_resolve_prompt(self, current_note: dict, use_history: bool) -> str:
         if use_history:
-            raise Exception("use_history in build_prompt is not supported yet.")
+            raise Exception("use_history in build_resolve_prompt is not supported yet.")
 
-        system_prompt = prompts.load_system_prompt()
+        system_prompt_resolve = prompts.load_system_prompt_resolve()
         project_invariants = util.load_if_exists(".mergai/invariants.md")
 
-        prompt = system_prompt + "\n\n"
+        prompt = system_prompt_resolve + "\n\n"
         if project_invariants:
             prompt += project_invariants + "\n\n"
 
@@ -514,7 +514,7 @@ class AppContext:
             del note["solution"]
 
         # TODO: implement use_history=True
-        prompt = self.build_prompt(note, use_history=False)
+        prompt = self.build_resolve_prompt(note, use_history=False)
 
         agent = self.get_agent(yolo=yolo)
 

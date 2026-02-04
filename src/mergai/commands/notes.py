@@ -222,7 +222,7 @@ def prompt(app: AppContext, use_history: bool):
             )
             exit(1)
         # TODO: implement use_history
-        prompt = app.build_prompt(note, use_history=False)
+        prompt = app.build_resolve_prompt(note, use_history=False)
         util.print_or_page(prompt, format="markdown")
     except Exception as e:
         click.echo(f"Error: {e}")
