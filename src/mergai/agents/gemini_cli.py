@@ -105,11 +105,13 @@ class GeminiCLIAgent(CliAgent):
     def build_args(self, prompt: str) -> list:
         args = [
             "gemini",
-            "-d" if self.debug else "",
             "--approval-mode", "yolo" if self.yolo else "auto_edit",
             "-o",
             "stream-json",
         ]
+
+        if self.debug:
+            args.append("-d")
 
         if self.session_id:
             args.extend(["-r", self.session_id])
@@ -117,6 +119,7 @@ class GeminiCLIAgent(CliAgent):
         if self.get_model():
             args.extend(["--model", self.get_model()])
 
+        args.append("-p")
         args.append(prompt)
 
         return args
