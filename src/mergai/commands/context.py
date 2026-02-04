@@ -231,36 +231,49 @@ def create_conflict(
 
 @create.command(name="merge")
 @click.pass_obj
-def create_merge(app: AppContext):
-    """Create context for a successful automatic merge commit.
+@click.option(
+    "-f/--force",
+    "force",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing merge context.",
+)
+def create_merge(app: AppContext, force: bool):
+    """Create context for a successful automatic merge.
 
-    Captures information about a merge that completed without conflicts,
-    useful for tracking merge history and context.
+    Captures the list of commits being merged and identifies which
+    important files (from config) were modified. This is useful for
+    AI agents to generate merge descriptions and summaries.
 
-    This command should be run after a successful automatic merge
-    to record the merge context for future reference.
+    This command requires merge_info to be initialized first
+    (via 'mergai context init').
+
+    \b
+    Examples:
+        mergai context init abc1234 --target v8.0
+        mergai context create merge
+        mergai context create merge -f  # force overwrite
     """
-    # TODO: Implement context creation for successful automatic merges
-    # Suggested implementation:
-    #   - Verify HEAD is a merge commit
-    #   - Extract parent commits information
-    #   - Record merged branches/refs
-    #   - Store merge metadata (timestamp, author, etc.)
-    #   - Save to note.json in a format compatible with conflict context
-    raise click.ClickException(
-        "Not implemented yet.\n\n"
-        "TODO: Create context for successful automatic merge commit:\n"
-        "  - capture merge commit information\n"
-        "  - record merged branches/commits\n"
-        "  - store merge metadata"
-    )
+    try:
+        context = app.create_merge_context(force)
+        click.echo("Created merge context:")
+        click.echo(f"  merge_commit: {context['merge_commit']}")
+        click.echo(f"  merged_commits: {len(context['merged_commits'])} commits")
+        if context["important_files_modified"]:
+            click.echo(
+                f"  important_files_modified: {', '.join(context['important_files_modified'])}"
+            )
+        else:
+            click.echo("  important_files_modified: (none)")
+    except Exception as e:
+        raise click.ClickException(str(e))
 
 
 @context.command()
 @click.pass_obj
 @click.argument(
     "part",
-    type=click.Choice(["conflict", "solution", "pr_comments", "user_comment", "merge_info"]),
+    type=click.Choice(["conflict", "solution", "pr_comments", "user_comment", "merge_info", "merge_context"]),
     required=False,
     default=None,
 )
@@ -277,6 +290,7 @@ def drop(app: AppContext, part: Optional[str]):
     - pr_comments: PR comments added to the context
     - user_comment: User-provided comments
     - merge_info: Merge initialization info (target branch, commit)
+    - merge_context: Merge context (list of merged commits, important files)
 
     \b
     Examples:
@@ -304,6 +318,9 @@ def drop(app: AppContext, part: Optional[str]):
         elif part == "merge_info":
             app.drop_merge_info()
             click.echo("Dropped merge info.")
+        elif part == "merge_context":
+            app.drop_merge_context()
+            click.echo("Dropped merge context.")
         else:
             raise Exception(f"Invalid part: {part}")
     except Exception as e:

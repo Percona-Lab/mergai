@@ -527,6 +527,42 @@ def get_commit_modified_files(repo: Repo, commit: Commit) -> List[str]:
     return files_modified
 
 
+def get_merged_commits(
+    repo: Repo,
+    target_branch: str,
+    merge_commit: str,
+) -> List[str]:
+    """Get list of commit hashes being merged.
+
+    Finds the merge base between target_branch and merge_commit,
+    then returns all commit hashes from base..merge_commit.
+
+    Args:
+        repo: GitPython Repo object.
+        target_branch: The branch being merged into.
+        merge_commit: The commit (or ref) being merged.
+
+    Returns:
+        List of commit hexsha strings (full 40-char hashes).
+    """
+    # Resolve commits
+    target = repo.commit(target_branch)
+    merge = repo.commit(merge_commit)
+
+    # Find merge base
+    bases = repo.merge_base(target, merge)
+    if not bases:
+        raise ValueError(
+            f"No common ancestor found between {target_branch} and {merge_commit}"
+        )
+    base = bases[0]
+
+    # Get commits from base to merge_commit (excluding base itself)
+    commits = list(repo.iter_commits(f"{base.hexsha}..{merge.hexsha}"))
+
+    return [commit.hexsha for commit in commits]
+
+
 def is_branching_point(
     repo: Repo, commit: Commit, upstream_ref: str
 ) -> Tuple[bool, int]:

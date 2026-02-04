@@ -10,7 +10,8 @@ from .config import MergaiConfig
 import github
 from github import Repository as GithubRepository
 import json
-from typing import Optional, Tuple
+from typing import Optional, Tuple, List
+from datetime import datetime, timezone
 from dataclasses import dataclass
 import tempfile
 from pathlib import Path
@@ -355,6 +356,103 @@ class AppContext:
         self.save_note(note)
 
         return context
+
+    def create_merge_context(self, force: bool = False) -> dict:
+        """Create merge context from merge_info.
+
+        Calculates the list of commits being merged by finding the
+        merge base between target_branch and merge_commit, then
+        listing all commits from base..merge_commit. Also identifies
+        which important files (from config) were modified.
+
+        Args:
+            force: If True, overwrite existing merge_context.
+
+        Returns:
+            The created merge context dict.
+
+        Raises:
+            Exception: If merge_info is not initialized or merge_context
+                       already exists (without force).
+        """
+        note = self.load_or_create_note()
+
+        # Require merge_info to be initialized
+        if "merge_info" not in note:
+            raise Exception(
+                "merge_info not found. Run 'mergai context init' first."
+            )
+
+        # Check for existing merge_context
+        if "merge_context" in note and not force:
+            raise Exception(
+                "merge_context already exists. Use -f/--force to overwrite."
+            )
+
+        merge_info = note["merge_info"]
+        target_branch = merge_info["target_branch"]
+        merge_commit_short = merge_info["merge_commit_short"]
+
+        # Resolve merge commit to full hexsha
+        merge_commit = self.repo.commit(merge_commit_short)
+        merge_commit_hexsha = merge_commit.hexsha
+
+        # Get the list of merged commits
+        merged_commits = git_utils.get_merged_commits(
+            self.repo,
+            target_branch,
+            merge_commit_short,
+        )
+
+        # Get important files from config
+        important_files = self._get_important_files_from_config()
+
+        # Find which important files were modified by any of the merged commits
+        important_files_modified = []
+        if important_files:
+            all_modified_files = set()
+            for commit_sha in merged_commits:
+                commit = self.repo.commit(commit_sha)
+                modified = git_utils.get_commit_modified_files(self.repo, commit)
+                all_modified_files.update(modified)
+
+            important_files_modified = sorted(
+                set(important_files) & all_modified_files
+            )
+
+        context = {
+            "merge_commit": merge_commit_hexsha,
+            "merged_commits": merged_commits,
+            "important_files_modified": important_files_modified,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        note["merge_context"] = context
+        self.save_note(note)
+
+        return context
+
+    def _get_important_files_from_config(self) -> List[str]:
+        """Extract important files list from merge_picks config.
+
+        Looks for the important_files strategy in fork.merge_picks
+        and returns its file list.
+
+        Returns:
+            List of file paths, or empty list if not configured.
+        """
+        if not self.config.fork.merge_picks:
+            return []
+
+        for strategy in self.config.fork.merge_picks.strategies:
+            if strategy.name == "important_files":
+                return strategy.config.files
+
+        return []
+
+    def drop_merge_context(self):
+        """Drop the merge_context from the note."""
+        self.drop_note_field("merge_context")
 
     def get_agent(self, agent_desc: str = None, yolo: bool = False) -> "Agent":
         """Get an agent instance for conflict resolution.
