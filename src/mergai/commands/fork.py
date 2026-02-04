@@ -374,10 +374,7 @@ def status(
 
     # Output via pager if listing commits, otherwise print directly
     output = "\n".join(output_lines)
-    if show_commits:
-        click.echo_via_pager(output)
-    else:
-        click.echo(output)
+    print_or_page(output)
 
 @fork.command("merge-pick")
 @click.pass_obj
