@@ -229,6 +229,25 @@ def prompt(app: AppContext, use_history: bool):
         exit(1)
 
 
+@click.command()
+@click.pass_obj
+def merge_prompt(app: AppContext):
+    try:
+        note = app.load_note()
+        if note is None:
+            click.echo("No note found. Please prepare the context first.")
+            click.echo("Use `mergai create-conflict-context` to add conflict context.")
+            click.echo(
+                "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
+            )
+            exit(1)
+        # TODO: implement use_history
+        prompt = app.build_describe_prompt(note)
+        util.print_or_page(prompt, format="markdown")
+    except Exception as e:
+        click.echo(f"Error: {e}")
+        exit(1)
+
 COMMENT_FILE_TEMPLATE = """\
 
 # MergAI comment

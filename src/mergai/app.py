@@ -62,11 +62,18 @@ def convert_note(
     show_pr_comments: bool = True,
     show_user_comment: bool = True,
     show_summary: bool = True,
+    show_merge_info: bool = True,
+    show_merge_context: bool = True,
+    show_merge_description: bool = True,
 ) -> str:
     if format == "json":
         return json.dumps(note, indent=2 if pretty else None) + "\n"
     elif format == "markdown":
         output_str = ""
+        if show_merge_info and "merge_info" in note:
+            output_str += util.merge_info_to_markdown(note["merge_info"]) + "\n"
+        if show_merge_context and "merge_context" in note:
+            output_str += util.merge_context_to_markdown(note["merge_context"]) + "\n"
         if show_context and "conflict_context" in note:
             output_str += (
                 util.conflict_context_to_markdown(note["conflict_context"]) + "\n"
@@ -77,6 +84,10 @@ def convert_note(
             output_str += util.user_comment_to_markdown(note["user_comment"]) + "\n"
         if show_solution and "solution" in note:
             output_str += util.conflict_solution_to_markdown(note["solution"]) + "\n"
+        if show_merge_description and "merge_description" in note:
+            output_str += (
+                util.merge_description_to_markdown(note["merge_description"]) + "\n"
+            )
 
         return output_str + "\n"
     return str(note)
@@ -296,6 +307,21 @@ class AppContext:
 
         return prompt
 
+    def build_describe_prompt(self, current_note: dict) -> str:
+        system_prompt_describe = prompts.load_system_prompt_describe()
+        prompt = system_prompt_describe + "\n\n"
+
+        project_invariants = util.load_if_exists(".mergai/invariants.md")
+        if project_invariants:
+            prompt += project_invariants + "\n\n"
+
+        prompt += "## Note Data\n\n"
+        prompt += "```json\n"
+        prompt += json.dumps(current_note, indent=2)
+        prompt += "\n```\n"
+
+        return prompt
+
     def drop_conflict_prompt(self):
         self.state.drop_conflict_prompt()
 
@@ -325,6 +351,9 @@ class AppContext:
 
     def drop_merge_info(self):
         self.drop_note_field("merge_info")
+
+    def drop_merge_description(self):
+        self.drop_note_field("merge_description")
 
     def create_conflict_context(
         self,
@@ -567,6 +596,130 @@ class AppContext:
             raise Exception("Failed to obtain a valid solution from the agent.")
 
         note["solution"] = solution
+        self.save_note(note)
+
+    def check_describe_response_format(self, response: dict) -> Optional[str]:
+        """Check if the describe response has the correct format.
+
+        Args:
+            response: The response dict from the agent.
+
+        Returns:
+            None if valid, or an error message string if invalid.
+        """
+        required_fields = ["summary", "auto_merged", "review_notes"]
+        missing_fields = [f for f in required_fields if f not in response]
+        if missing_fields:
+            return f"Missing required fields: {', '.join(missing_fields)}"
+
+        if not isinstance(response.get("auto_merged"), dict):
+            return "'auto_merged' field must be a dictionary"
+
+        return None
+
+    def describe(self, force: bool, max_attempts: int = None):
+        """Generate a description of the merge using an AI agent.
+
+        This method runs an agent to analyze the merge context and generate
+        a description without modifying any files. The description is stored
+        in the note as 'merge_description'.
+
+        Args:
+            force: If True, overwrite existing merge_description.
+            max_attempts: Maximum number of retry attempts on validation failure.
+
+        Raises:
+            Exception: If no note found, merge_description exists (without force),
+                      or agent fails to produce a valid description.
+        """
+        if max_attempts is None:
+            max_attempts = self.config.resolve.max_attempts
+
+        note = self.load_note()
+        if note is None:
+            raise Exception("No note found. Please prepare the context first.")
+
+        if "merge_description" in note and not force:
+            raise Exception(
+                "Merge description already exists in the note. Use -f/--force to overwrite."
+            )
+
+        if "merge_description" in note:
+            del note["merge_description"]
+
+        prompt = self.build_describe_prompt(note)
+
+        # No YOLO mode for describe - we don't want file modifications
+        agent = self.get_agent(yolo=False)
+
+        # Check repo state before running agent
+        was_dirty_before = self.repo.is_dirty(untracked_files=True)
+
+        tmp = tempfile.NamedTemporaryFile(dir=Path.cwd(), mode="w", delete=False)
+        tmp.write(prompt)
+        tmp.flush()
+        tmp.close()
+        prompt_path = Path(tmp.name)
+
+        prompt = f"See @{prompt_path} make sure the output is in specified format"
+
+        error = None
+        description = None
+        for attempt in range(max_attempts):
+            if error is not None:
+                click.echo(
+                    f"Attempt {attempt + 1} failed with error: {error}. Retrying..."
+                )
+
+            if attempt == max_attempts - 1:
+                click.echo("Max attempts reached. Failed to obtain a valid description.")
+                description = None
+                break
+
+            result = agent.run(prompt)
+            if not result.success():
+                click.echo(f"Agent execution failed: {result.error()}")
+                prompt = self.error_to_prompt(str(result.error()))
+                continue
+
+            click.echo("Agent execution succeeded. Checking result...")
+            description = result.result()
+
+            # Validate response format
+            format_error = self.check_describe_response_format(description["response"])
+            if format_error is not None:
+                click.echo(f"Response format validation failed: {format_error}")
+                prompt = self.error_to_prompt(format_error)
+                error = format_error
+                continue
+
+            # Check that no files were modified
+            is_dirty_after = self.repo.is_dirty(untracked_files=True)
+            if is_dirty_after and not was_dirty_before:
+                error_msg = "Files were modified during describe operation. No file modifications are allowed."
+                click.echo(f"Validation failed: {error_msg}")
+                prompt = self.error_to_prompt(error_msg)
+                error = error_msg
+                continue
+            elif is_dirty_after and was_dirty_before:
+                # Check if new files were modified (compare dirty files)
+                # For simplicity, we'll just warn but allow it if repo was already dirty
+                click.echo(
+                    "Warning: Repository was already dirty before describe. "
+                    "Cannot verify if new modifications were made."
+                )
+
+            click.echo("Description verified.")
+            error = None
+            break
+
+        if tmp is not None:
+            prompt_path.unlink()
+
+        if description is None:
+            raise Exception("Failed to obtain a valid description from the agent.")
+
+        note["merge_description"] = description
         self.save_note(note)
 
     def add_note(self, commit: str):

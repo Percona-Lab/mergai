@@ -315,6 +315,137 @@ def user_comment_to_str(user_comment: dict, format: str, pretty: bool = False):
     return str(user_comment)
 
 
+MERGE_INFO_MARKDOWN_TEMPLATE = """\
+# Merge Info
+
+- **Target Branch:** `{{ context.target_branch }}`
+- **Merge Commit:** `{{ context.merge_commit_short }}`
+{%- if context.timestamp %}
+- **Timestamp:** {{ context.timestamp }}
+{%- endif %}
+"""
+
+
+def merge_info_to_markdown(merge_info: dict) -> str:
+    return render_from_template(MERGE_INFO_MARKDOWN_TEMPLATE, merge_info)
+
+
+def merge_info_to_str(merge_info: dict, format: str, pretty: bool = False):
+    if format == "json":
+        return json.dumps(merge_info, default=str, indent=2 if pretty else None) + "\n"
+    elif format == "markdown":
+        return merge_info_to_markdown(merge_info) + "\n"
+
+    return str(merge_info)
+
+
+MERGE_CONTEXT_MARKDOWN_TEMPLATE = """\
+# Merge Context
+
+- **Merge Commit:** `{{ context.merge_commit }}`
+- **Timestamp:** {{ context.timestamp }}
+
+## Merged Commits
+
+{%- if context.merged_commits | length == 0 %}
+No commits in this merge.
+{%- else %}
+| # | Commit SHA |
+|---|------------|
+{%- for commit_sha in context.merged_commits %}
+| {{ loop.index }} | `{{ commit_sha }}` |
+{%- endfor %}
+{%- endif %}
+
+{%- if context.important_files_modified | length > 0 %}
+
+## Important Files Modified
+
+{%- for file_path in context.important_files_modified %}
+- `{{ file_path }}`
+{%- endfor %}
+{%- endif %}
+"""
+
+
+def merge_context_to_markdown(merge_context: dict) -> str:
+    return render_from_template(MERGE_CONTEXT_MARKDOWN_TEMPLATE, merge_context)
+
+
+def merge_context_to_str(merge_context: dict, format: str, pretty: bool = False):
+    if format == "json":
+        return (
+            json.dumps(merge_context, default=str, indent=2 if pretty else None) + "\n"
+        )
+    elif format == "markdown":
+        return merge_context_to_markdown(merge_context) + "\n"
+
+    return str(merge_context)
+
+
+MERGE_DESCRIPTION_MARKDOWN_TEMPLATE = """\
+# Merge Description
+
+## Summary
+
+{{ context.response.summary }}
+
+## Auto-Merged Files
+
+{%- if context.response.auto_merged | length == 0 %}
+No files were auto-merged.
+{%- else %}
+| File Path | Description |
+|-----------|-------------|
+{%- for file_path, description in context.response.auto_merged.items() %}
+| `{{ file_path }}` | {{ description }} |
+{%- endfor %}
+{%- endif %}
+
+## Review Notes
+
+{{ context.response.review_notes if context.response.review_notes else "No review notes provided." }}
+
+{%- if context.stats %}
+
+## Stats
+
+{%- if context.stats.models | length > 0 %}
+### Models
+
+| Model | Input tokens | Output tokens | Cached tokens | Thoughts tokens | Tool tokens | Total tokens |
+|-------|--------------|------------------|---------------|-----------------|-------------|--------------|
+{%- for model, stat in context.stats.models.items() %}
+| {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
+{%- endfor %}
+{%- endif %}
+{%- endif %}
+
+{%- if context.agent_info %}
+
+## Agent Info
+
+Executed with '{{ context.agent_info.agent_type }}' agent, version '{{ context.agent_info.version }}'.
+{%- endif %}
+"""
+
+
+def merge_description_to_markdown(merge_description: dict) -> str:
+    return render_from_template(MERGE_DESCRIPTION_MARKDOWN_TEMPLATE, merge_description)
+
+
+def merge_description_to_str(merge_description: dict, format: str, pretty: bool = False):
+    if format == "json":
+        return (
+            json.dumps(merge_description, default=str, indent=2 if pretty else None)
+            + "\n"
+        )
+    elif format == "markdown":
+        return merge_description_to_markdown(merge_description) + "\n"
+
+    return str(merge_description)
+
+
 def load_if_exists(filename: str) -> str:
     if not os.path.exists(filename):
         return ""
@@ -330,6 +461,10 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
         f"- Message:\n\n    {commit.message.strip().replace('\n', '\n    ')}\n"
     )
     output_str += f"- Content:\n"
+    if "merge_info" in note:
+        output_str += f"  - Merge Info (use mergai show --merge-info to see the merge info.)\n"
+    if "merge_context" in note:
+        output_str += f"  - Merge Context (use mergai show --merge-context to see the merge context.)\n"
     if "conflict_context" in note:
         output_str += f"  - Conflict Context (use mergai show --context to see the conflict context.)\n"
     if "pr_comments" in note:
@@ -340,6 +475,11 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
     if "solution" in note:
         output_str += (
             f"  - Solution (use mergai show --solution to see the conflict solution.)\n"
+        )
+
+    if "merge_description" in note:
+        output_str += (
+            f"  - Merge Description (use mergai show --merge-description to see the merge description.)\n"
         )
 
     output_str += "\n"
@@ -361,6 +501,11 @@ def commit_note_to_summary_json(
         "content": {},
     }
 
+    if "merge_info" in note:
+        summary["content"]["merge_info"] = True
+        summary["merge_info"] = note["merge_info"]
+    if "merge_context" in note:
+        summary["content"]["merge_context"] = True
     if "conflict_context" in note:
         summary["content"]["conflict_context"] = True
     if "pr_comments" in note:
@@ -370,6 +515,8 @@ def commit_note_to_summary_json(
     if "user_comment" in note:
         summary["content"]["user_comment"] = True
         summary["user_comment"] = note["user_comment"]
+    if "merge_description" in note:
+        summary["content"]["merge_description"] = True
 
     return json.dumps(summary, indent=2 if pretty else None) + "\n"
 
@@ -397,6 +544,19 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
     output_str += f"Author: {commit.author.name} <{commit.author.email}>\n"
     output_str += f"Date:   {commit.authored_datetime}\n"
     output_str += f"Content:\n"
+    if "merge_info" in note:
+        output_str += f"  - Merge Info\n"
+        merge_info = note["merge_info"]
+        output_str += f"    - Target Branch: {merge_info.get('target_branch', 'unknown')}\n"
+        output_str += f"    - Merge Commit: {merge_info.get('merge_commit_short', 'unknown')}\n"
+    if "merge_context" in note:
+        output_str += f"  - Merge Context\n"
+        merge_context = note["merge_context"]
+        output_str += f"    - Merge Commit: {merge_context.get('merge_commit', 'unknown')}\n"
+        output_str += f"    - Merged Commits: {len(merge_context.get('merged_commits', []))}\n"
+        important_files = merge_context.get("important_files_modified", [])
+        if important_files:
+            output_str += f"    - Important Files Modified: {len(important_files)}\n"
     if "conflict_context" in note:
         output_str += f"  - Conflict Context\n"
         conflict_context = note["conflict_context"]
@@ -424,6 +584,13 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
         )
         if stats["unresolved_files"] > 0:
             output_str += f"    - Unresolved Files: {stats['unresolved_files']}/{stats['total_files']}\n"
+
+    if "merge_description" in note:
+        output_str += f"  - Merge Description\n"
+        merge_desc = note["merge_description"]
+        response = merge_desc.get("response", {})
+        auto_merged_count = len(response.get("auto_merged", {}))
+        output_str += f"    - Auto-Merged Files: {auto_merged_count}\n"
 
     if "user_comment" in note:
         output_str += f"\n"

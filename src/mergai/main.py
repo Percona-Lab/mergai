@@ -20,6 +20,10 @@ def register_commands(cli):
 
     cli.add_command(resolve)
 
+    from .commands.describe import describe
+
+    cli.add_command(describe)
+
     from .commands.utils import get_merge_conflicts
 
     cli.add_command(get_merge_conflicts)
@@ -32,13 +36,14 @@ def register_commands(cli):
 
     cli.add_command(pr)
 
-    from .commands.notes import show, status, log, prompt, comment
+    from .commands.notes import show, status, log, prompt, comment, merge_prompt
 
     cli.add_command(show)
     cli.add_command(status)
     cli.add_command(log)
     cli.add_command(prompt)
     cli.add_command(comment)
+    cli.add_command(merge_prompt)
 
     from .commands.commit import commit
 
