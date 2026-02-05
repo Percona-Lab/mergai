@@ -31,35 +31,67 @@ def pr(app: AppContext, repo: Optional[str]):
 
 @pr.command()
 @click.pass_obj
-@click.option(
-    "--base", "base", type=str, required=True, help="The base branch for the PR."
-)
-def create(app: AppContext, base: str):
+@click.argument("pr_type", type=click.Choice(["main", "solution"], case_sensitive=False))
+def create(app: AppContext, pr_type: str):
+    """Create a pull request.
+
+    PR_TYPE specifies which type of PR to create:
+
+    \b
+    - main: Creates a PR from the main branch (created with 'mergai branch create main')
+      against the target_branch from merge_info. Uses merge_info and merge_context
+      for title and body.
+
+    - solution: Not yet implemented.
+
+    \b
+    Examples:
+        mergai pr create main        # Create PR from main branch to target_branch
+        mergai pr create solution    # Not implemented yet
+    """
+    if pr_type.lower() == "solution":
+        raise click.ClickException("PR type 'solution' is not implemented yet.")
+
+    # pr_type == "main"
     try:
-        note = app.read_note("HEAD")
+        note = app.load_note()
         if not note:
-            raise Exception("No note found for HEAD.")
+            raise Exception("No note found. Run 'mergai context init' first.")
 
-        context = note.get("conflict_context")
-        if not context:
-            raise Exception("No conflict context found in the note.")
+        merge_info = note.get("merge_info")
+        if not merge_info:
+            raise Exception("No merge_info found in note. Run 'mergai context init' first.")
 
-        solution = note.get("solution")
-        if not solution:
-            raise Exception("No solution found in the note.")
+        merge_context = note.get("merge_context")
+        if not merge_context:
+            raise Exception("No merge_context found in note. Run 'mergai context create merge' first.")
 
-        body = util.conflict_solution_to_str(solution, format="markdown")
+        # Get target branch (base) from merge_info
+        target_branch = merge_info["target_branch"]
+        merge_commit_short = merge_info["merge_commit_short"]
+
+        # Get current branch (head)
         head = git_utils.get_current_branch(app.repo)
+
+        # Build PR title and body from merge_info and merge_context
+        title = f"MergAI: Merge {merge_commit_short} into {target_branch}"
+
+        # Build body with merge info and context
+        body = util.merge_info_to_markdown(merge_info)
+        body += "\n"
+        body += util.merge_context_to_markdown(merge_context)
+
         gh_repo = app.get_gh_repo()
-        title = f"MergAI: Automated Merge Conflict Resolution [{context["theirs_commit"]["short_sha"]} into {context["ours_commit"]["short_sha"]}]"
+
         click.echo(
-            f"Creating PR:\nrepo:  {gh_repo.full_name}\nfrom:  {head}\nto:    {base}\ntitle: {title}"
+            f"Creating PR:\nrepo:  {gh_repo.full_name}\nfrom:  {head}\nto:    {target_branch}\ntitle: {title}"
         )
+
         pr = gh_repo.create_pull(
             title=title,
             body=body,
             head=head,
-            base=base,
+            base=target_branch,
         )
         print(f"PR created: {pr.html_url}")
     except Exception as e:
