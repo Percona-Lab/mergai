@@ -56,8 +56,9 @@ def get_prioritized_commits(
     unmerged_commits: List[Commit],
     config: MergePicksConfig,
     context: MergePickStrategyContext,
+    limit: Optional[int] = None,
 ) -> List[MergePickCommit]:
-    """Evaluate all unmerged commits and return those matching priority strategies.
+    """Evaluate unmerged commits and return those matching priority strategies.
 
     Strategies are evaluated in the order they appear in the config.
     The first matching strategy for each commit determines its priority.
@@ -67,6 +68,8 @@ def get_prioritized_commits(
         unmerged_commits: List of unmerged commits (in reverse chronological order).
         config: MergePicksConfig with ordered priority strategies.
         context: Strategy context with upstream_ref, fork_ref, etc.
+        limit: Optional maximum number of matches to return. If specified,
+            evaluation stops early once the limit is reached.
 
     Returns:
         List of MergePickCommit objects for commits that matched strategies,
@@ -86,6 +89,8 @@ def get_prioritized_commits(
                         result=result,
                     )
                 )
+                if limit is not None and len(prioritized) >= limit:
+                    return prioritized  # Early return when limit reached
                 break  # First matching strategy wins
 
     return prioritized
@@ -482,6 +487,7 @@ def merge_pick(
         fork_status.unmerged_commits,
         merge_picks_config,
         context,
+        limit=1 if next_only else None,
     )
 
     if next_only:
