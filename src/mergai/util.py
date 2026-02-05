@@ -258,6 +258,77 @@ def conflict_solution_to_markdown(solution: dict) -> str:
     return render_from_template(CONFLICT_SOLUTION_MARKDOWN_TEMPLATE, solution)
 
 
+SOLUTION_PR_BODY_TEMPLATE = """\
+## Solution Summary
+
+{{ context.response.summary }}
+
+## Resolved Files
+
+{%- if context.response.resolved | length == 0 %}
+No files were resolved.
+{%- else %}
+| File Path | Resolution |
+|-----------|------------|
+{%- for file_path, resolution in context.response.resolved.items() %}
+| `{{ file_path }}` | {{ resolution }} |
+{%- endfor %}
+{%- endif %}
+
+## Unresolved Files
+
+{%- if context.response.unresolved | length == 0 %}
+All conflicts have been resolved.
+{%- else %}
+| File Path | Issue |
+|-----------|-------|
+{%- for file_path, issue in context.response.unresolved.items() %}
+| `{{ file_path }}` | {{ issue }} |
+{%- endfor %}
+{%- endif %}
+
+## Review Notes
+
+{{ context.response.review_notes if context.response.review_notes else "No review notes provided." }}
+
+<details>
+<summary>Agent Stats</summary>
+
+{%- if context.agent_info %}
+
+**Agent:** {{ context.agent_info.agent_type }} (version {{ context.agent_info.version }})
+{%- endif %}
+
+{%- if context.stats and context.stats.models | length > 0 %}
+
+| Model | Input | Output | Cached | Thoughts | Tool | Total |
+|-------|-------|--------|--------|----------|------|-------|
+{%- for model, stat in context.stats.models.items() %}
+| {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
+{%- endfor %}
+{%- endif %}
+
+</details>
+"""
+
+
+def solution_pr_body_to_markdown(solution: dict) -> str:
+    """Convert solution data to markdown formatted for PR body.
+
+    This format is optimized for GitHub PR descriptions with:
+    - Clear sections for summary, resolved files, and unresolved files
+    - Review notes for developers
+    - Stats hidden in a collapsible section
+
+    Args:
+        solution: Solution dict with response, stats, and agent_info.
+
+    Returns:
+        Markdown formatted string suitable for PR body.
+    """
+    return render_from_template(SOLUTION_PR_BODY_TEMPLATE, solution)
+
+
 def conflict_solution_to_str(solution: dict, format: str, pretty: bool = False):
     if format == "json":
         return json.dumps(solution, default=str, indent=2 if pretty else None) + "\n"

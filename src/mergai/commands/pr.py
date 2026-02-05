@@ -42,15 +42,70 @@ def create(app: AppContext, pr_type: str):
       against the target_branch from merge_info. Uses merge_info and merge_context
       for title and body.
 
-    - solution: Not yet implemented.
+    - solution: Creates a PR from the current branch (typically a solution branch)
+      against the conflict branch. Uses the solution data from note for title and body.
+      The PR body includes solution summary, resolved/unresolved files, review notes,
+      and agent stats (hidden in a collapsible section).
 
     \b
     Examples:
         mergai pr create main        # Create PR from main branch to target_branch
-        mergai pr create solution    # Not implemented yet
+        mergai pr create solution    # Create PR from solution branch to conflict branch
     """
     if pr_type.lower() == "solution":
-        raise click.ClickException("PR type 'solution' is not implemented yet.")
+        try:
+            note = app.load_note()
+            if not note:
+                raise Exception("No note found. Run 'mergai context init' first.")
+
+            solution = note.get("solution")
+            if not solution:
+                raise Exception(
+                    "No solution found in note. Run 'mergai resolve' first."
+                )
+
+            merge_info = note.get("merge_info")
+            if not merge_info:
+                raise Exception(
+                    "No merge_info found in note. Run 'mergai context init' first."
+                )
+
+            # Get merge context for building branch names
+            target_branch = merge_info["target_branch"]
+            merge_commit_short = merge_info["merge_commit_short"]
+
+            # Build branch names using the config
+            builder = util.BranchNameBuilder.from_config(
+                app.config.branch, target_branch, merge_commit_short
+            )
+
+            # Base branch is the conflict branch
+            conflict_branch = builder.conflict_branch
+
+            # Head branch is the current branch (should be solution branch)
+            head = git_utils.get_current_branch(app.repo)
+
+            # Build PR title and body
+            title = f"MergAI Solution: Resolve conflicts for merge {merge_commit_short}"
+            body = util.solution_pr_body_to_markdown(solution)
+
+            gh_repo = app.get_gh_repo()
+
+            click.echo(
+                f"Creating PR:\nrepo:  {gh_repo.full_name}\nfrom:  {head}\nto:    {conflict_branch}\ntitle: {title}"
+            )
+
+            pr = gh_repo.create_pull(
+                title=title,
+                body=body,
+                head=head,
+                base=conflict_branch,
+            )
+            print(f"PR created: {pr.html_url}")
+        except Exception as e:
+            click.echo(f"Error: {e}")
+            exit(1)
+        return
 
     # pr_type == "main"
     try:
