@@ -59,10 +59,20 @@ def cherry_pick_solution(app: AppContext, commit: str, force: bool):
 
 @click.command()
 @click.pass_obj
+@click.option(
+    "-f/--force",
+    "force",
+    is_flag=True,
+    default=False,
+    help="Force update (overwrite local notes)",
+)
 @click.argument("remote", default="origin")
-def update(app: AppContext, remote: str):
+def update(app: AppContext, remote: str, force: bool):
     try:
-        app.get_repo().git.fetch(remote, "refs/notes/mergai*:refs/notes/mergai*")
+        refspec = "refs/notes/mergai*:refs/notes/mergai*"
+        if force:
+            refspec = "+" + refspec
+        app.get_repo().git.fetch(remote, refspec)
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
