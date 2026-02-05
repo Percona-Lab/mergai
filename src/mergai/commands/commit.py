@@ -29,3 +29,13 @@ def conflict(app: AppContext):
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
+
+@commit.command()
+@click.pass_obj
+def merge(app: AppContext):
+    """Commit the merge."""
+    try:
+        app.commit_merge()
+    except Exception as e:
+        click.echo(f"Error: {e}")
+        exit(1)

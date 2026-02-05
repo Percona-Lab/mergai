@@ -1,6 +1,7 @@
 import git
 import subprocess
 import click
+import logging
 from . import git_utils
 from . import util
 from . import prompts
@@ -17,6 +18,7 @@ import tempfile
 from pathlib import Path
 from .agents.base import Agent
 
+log = logging.getLogger(__name__)
 
 # TODO: Make this configurable via settings/config file
 MERGAI_COMMIT_FOOTER = "Note: commit created by mergai"
@@ -426,12 +428,15 @@ class AppContext:
         merge_commit = self.repo.commit(merge_commit_short)
         merge_commit_hexsha = merge_commit.hexsha
 
+
+        log.info(f"getting merged commits for merge context: target_branch={target_branch}, merge_commit={merge_commit_short}")
         # Get the list of merged commits
         merged_commits = git_utils.get_merged_commits(
             self.repo,
             target_branch,
             merge_commit_short,
         )
+        log.info(f"found {len(merged_commits)} merged commits for merge context")
 
         # Get important files from config
         important_files = self._get_important_files_from_config()
@@ -845,6 +850,38 @@ class AppContext:
             "-m",
             message,
         )
+
+    def commit_merge(self):
+        """Commit the current staged changes as a merge commit.
+
+        Creates a commit with the message "Merge commit '<short sha>'" where
+        the short sha comes from merge_info. Requires merge_info to be
+        initialized in the note.
+
+        Raises:
+            Exception: If no note found or merge_info is missing.
+        """
+        hint_msg = "Please initialize merge context by running:\nmergai context init <commit>"
+        note = self.load_note()
+        if note is None:
+            raise Exception(f"No note found.\n\n{hint_msg}")
+
+        merge_info = note.get("merge_info")
+        if merge_info is None:
+            raise Exception(f"No merge_info found in the note.\n\n{hint_msg}")
+
+        merge_commit_short = merge_info["merge_commit_short"]
+
+        # Build commit message
+        message = f"Merge commit '{merge_commit_short}'\n\n"
+
+        # Add MergAI footer
+        message += MERGAI_COMMIT_FOOTER
+
+        self.repo.git.commit("-m", message)
+
+        self.add_note(self.repo.head.commit.hexsha)
+        self.drop_all()
 
     def get_merge_conflict(
         self, ref: str
