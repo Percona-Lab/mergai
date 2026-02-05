@@ -21,6 +21,9 @@ BRANCH_TYPES = [t.value for t in BranchType]
 # Valid branch types for delete command (includes 'all')
 DELETE_BRANCH_TYPES = BRANCH_TYPES + ["all"]
 
+# Valid branch types for push command (includes 'all')
+PUSH_BRANCH_TYPES = BRANCH_TYPES + ["all"]
+
 # Valid token names for the info command
 TOKEN_NAMES = ["target_branch", "merge_commit_short", "type"]
 
@@ -301,6 +304,88 @@ def delete(
                 click.echo(
                     f"Remote branch 'origin/{branch_name}' does not exist (skipped)"
                 )
+
+
+@branch.command()
+@click.pass_obj
+@click.argument("type", type=click.Choice(PUSH_BRANCH_TYPES, case_sensitive=False))
+@click.option(
+    "--target",
+    "-t",
+    type=str,
+    default=None,
+    help="Target branch name (default: extracted from current branch or current branch name)",
+)
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Force push using --force-with-lease",
+)
+@click.option(
+    "--ignore-missing",
+    is_flag=True,
+    default=False,
+    help="Don't fail if branch doesn't exist locally",
+)
+def push(
+    app: AppContext,
+    type: str,
+    target: Optional[str],
+    force: bool,
+    ignore_missing: bool,
+):
+    """Push a merge-related branch to origin.
+
+    Pushes the specified branch type to origin.
+
+    TYPE is one of: main, conflict, solution, all
+
+    Use 'all' as TYPE to push all three branch types at once (only pushes
+    branches that exist locally).
+    Use --force to force push using --force-with-lease.
+    Use --ignore-missing to not fail if branch doesn't exist locally.
+
+    \b
+    Examples:
+        mergai branch push main
+        mergai branch push solution --force
+        mergai branch push all
+        mergai branch push all -f
+        mergai branch push main --ignore-missing
+    """
+    builder = get_branch_builder(app, None, target)
+
+    # Determine which branch types to push
+    if type == "all":
+        types_to_push = BRANCH_TYPES
+        # When pushing all branches, don't fail on missing - just report
+        ignore_missing = True
+    else:
+        types_to_push = [type]
+
+    for branch_type in types_to_push:
+        branch_name = builder.get_branch_name(branch_type)
+
+        # Check if branch exists locally
+        local_exists = branch_exists_locally(app, branch_name)
+        if local_exists:
+            try:
+                push_args = ["origin", branch_name]
+                if force:
+                    push_args.insert(1, "--force-with-lease")
+                app.repo.git.push(*push_args)
+                force_msg = " (force)" if force else ""
+                click.echo(f"Pushed branch{force_msg}: {branch_name} -> origin/{branch_name}")
+            except Exception as e:
+                raise click.ClickException(
+                    f"Failed to push branch '{branch_name}': {e}"
+                )
+        elif not ignore_missing:
+            raise click.ClickException(f"Local branch '{branch_name}' does not exist")
+        else:
+            click.echo(f"Local branch '{branch_name}' does not exist (skipped)")
 
 
 @branch.command()
