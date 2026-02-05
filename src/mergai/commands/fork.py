@@ -1,4 +1,5 @@
 import click
+import logging
 from typing import Optional, List
 from dataclasses import dataclass
 from git import Commit
@@ -7,6 +8,8 @@ from .. import git_utils
 from ..config import MergePicksConfig
 from ..merge_pick_strategies import MergePickCommit, MergePickStrategyContext
 from ..util import format_number, format_commit_info, format_commit_info_oneline, print_or_page
+
+log = logging.getLogger(__name__)
 
 def resolve_upstream_ref(
     app: AppContext,
@@ -316,6 +319,12 @@ def status(
     list_commits: bool,
     show_merge_picks: bool,
 ):
+    log.info(f"getting fork status for:")
+    log.info(f"  upstream_ref:{upstream_ref}")
+    log.info(f"  fork_ref={fork_ref}")
+    log.info(f"  list_commits={list_commits}")
+    log.info(f"  show_merge_picks={show_merge_picks}")
+
     upstream_ref = resolve_upstream_ref(app, upstream_ref)
 
     try:
@@ -336,6 +345,7 @@ def status(
             fork_ref=fork_ref,
         )
 
+        log.info(f"getting prioritized commits for merge picks")
         prioritized = get_prioritized_commits(
             app.repo,
             fork_status.unmerged_commits,

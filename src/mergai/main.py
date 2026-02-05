@@ -4,7 +4,7 @@ from .app import AppContext
 from .config import load_config
 import git
 
-LOG_FORMAT = "[%(levelname)s] %(message)s"
+LOG_FORMAT = "[%(levelname)s][%(name)s] %(message)s"
 
 from dotenv import load_dotenv
 
@@ -86,7 +86,13 @@ def register_commands(cli):
     default=".",
     help="Path to the git repository",
 )
-def cli(app: AppContext, config_path: str, repo_path: str = "."):
+@click.option(
+    "--verbose",
+    "-v",
+    count=True,
+    help="Increase verbosity level",
+)
+def cli(app: AppContext, config_path: str, repo_path: str = ".", verbose: int = 0):
     try:
         app.config = load_config(config_path)
     except FileNotFoundError as e:
@@ -94,13 +100,12 @@ def cli(app: AppContext, config_path: str, repo_path: str = "."):
     except Exception as e:
         raise click.ClickException(f"Error loading config: {e}")
     app.repo = git.Repo(repo_path)
-
-
-def main():
     logging.basicConfig(
-        level=logging.INFO,
+        level=max(logging.WARNING - (10 * verbose), logging.DEBUG),
         format=LOG_FORMAT,
     )
+def main():
+
     register_commands(cli)
     cli(obj=AppContext())
 
