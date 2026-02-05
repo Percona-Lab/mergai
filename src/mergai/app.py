@@ -812,7 +812,6 @@ class AppContext:
         self.repo.index.commit(message)
 
         self.add_note(self.repo.head.commit.hexsha)
-        self.drop_all()
 
     def commit_conflict(self):
         hint_msg = "Please prepare the conflict context by running:\nmergai create-conflict-context"
@@ -881,7 +880,6 @@ class AppContext:
         self.repo.git.commit("-m", message)
 
         self.add_note(self.repo.head.commit.hexsha)
-        self.drop_all()
 
     def get_merge_conflict(
         self, ref: str
