@@ -794,6 +794,11 @@ class AppContext:
         # Add unresolved files section (with conflict markers warning)
         unresolved_files = solution["response"].get("unresolved", {})
         if unresolved_files:
+            # Mark conflict markers as unresolved and stage the files
+            for file_path in unresolved_files.keys():
+                git_utils.mark_conflict_markers_unresolved(file_path)
+                self.repo.index.add([file_path])
+
             message += "Unresolved (contains conflict markers):\n"
             for file_path in unresolved_files.keys():
                 message += f"\t{file_path}\n"

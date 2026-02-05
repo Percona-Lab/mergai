@@ -1,5 +1,6 @@
 from git import Repo, Commit, Blob
 import hashlib
+import re
 from typing import Iterator, Tuple, Optional, List
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -48,6 +49,43 @@ def commit_to_dict(commit):
 def is_merge_in_progress(repo: Repo) -> bool:
     merge_head = Path(repo.git_dir) / "MERGE_HEAD"
     return merge_head.exists()
+
+
+def mark_conflict_markers_unresolved(file_path: str) -> None:
+    """
+    Add (UNRESOLVED) marker to all conflict markers in the given file.
+
+    Transforms:
+        <<<<<<< HEAD           ->  <<<<<<< HEAD (UNRESOLVED)
+        ||||||| merged common  ->  ||||||| merged common (UNRESOLVED)
+        =======                ->  ======= (UNRESOLVED)
+        >>>>>>> branch-name    ->  >>>>>>> branch-name (UNRESOLVED)
+
+    Args:
+        file_path: Path to the file containing conflict markers.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        log.warning(f"File not found, skipping: {file_path}")
+        return
+
+    content = path.read_text()
+
+    # Pattern matches conflict markers at the start of a line
+    # Group 1: The marker itself (<<<<<<< or ||||||| or ======= or >>>>>>>)
+    # Group 2: Optional text after the marker (branch name, etc.)
+    pattern = r"^(<{7}|>{7}|\|{7}|={7})(.*)$"
+
+    def add_unresolved_marker(match):
+        marker = match.group(1)
+        rest = match.group(2)
+        # Don't add if already marked
+        if "(UNRESOLVED)" in rest:
+            return match.group(0)
+        return f"{marker}{rest} (UNRESOLVED)"
+
+    modified_content = re.sub(pattern, add_unresolved_marker, content, flags=re.MULTILINE)
+    path.write_text(modified_content)
 
 
 def get_path_hash(path: str) -> str:
