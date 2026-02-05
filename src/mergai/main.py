@@ -4,7 +4,7 @@ from .app import AppContext
 from .config import load_config
 import git
 
-LOG_FORMAT = "[%(levelname)s][%(name)s] %(message)s"
+LOG_FORMAT = "[%(asctime)s.%(msecs)03d][%(levelname)s][%(name)s] %(message)s"
 
 from dotenv import load_dotenv
 
@@ -103,6 +103,7 @@ def cli(app: AppContext, config_path: str, repo_path: str = ".", verbose: int = 
     logging.basicConfig(
         level=max(logging.WARNING - (10 * verbose), logging.DEBUG),
         format=LOG_FORMAT,
+        datefmt="%Y-%m-%d %H:%M:%S",
     )
 def main():
 
