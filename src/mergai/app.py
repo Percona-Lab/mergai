@@ -779,6 +779,58 @@ class AppContext:
             commit,
         )
 
+    def add_selective_note(self, commit: str, fields: List[str]):
+        """Add a git note containing only merge_info and specified fields.
+
+        Creates a git note attached to the specified commit containing merge_info
+        (if available) plus the specified fields from the current note. Also updates
+        note_index in note.json to track which commits have which fields attached.
+
+        Args:
+            commit: The commit SHA to attach the note to
+            fields: List of field names to include in the note (in addition to merge_info)
+        """
+        import os
+
+        note = self.state.load_note()
+
+        # Build selective note content - always include merge_info
+        selective_note = {}
+        if "merge_info" in note:
+            selective_note["merge_info"] = note["merge_info"]
+
+        for field in fields:
+            if field in note:
+                selective_note[field] = note[field]
+
+        # Write selective note to temp file and attach as git note
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".json", delete=False
+        ) as f:
+            json.dump(selective_note, f, indent=2)
+            temp_path = f.name
+
+        try:
+            self.repo.git.notes("--ref", "mergai", "add", "-f", "-F", temp_path, commit)
+            self.repo.git.notes(
+                "--ref",
+                "mergai-marker",
+                "add",
+                "-f",
+                "-m",
+                "MergaAI note available, use `mergai show <commit>` to view it.",
+                commit,
+            )
+        finally:
+            os.unlink(temp_path)
+
+        # Update note_index in note.json
+        note_index_entry = {"sha": commit, "fields": fields}
+        if "note_index" not in note:
+            note["note_index"] = []
+        note["note_index"].append(note_index_entry)
+        self.state.save_note(note)
+
     def commit_solution(self):
         if not self.state.note_exists():
             raise Exception("No note found.")
@@ -854,7 +906,7 @@ class AppContext:
 
         self.repo.index.commit(message)
 
-        self.add_note(self.repo.head.commit.hexsha)
+        self.add_selective_note(self.repo.head.commit.hexsha, ["solution"])
 
     def commit_conflict(self):
         hint_msg = "Please prepare the conflict context by running:\nmergai create-conflict-context"
@@ -893,6 +945,8 @@ class AppContext:
             message,
         )
 
+        self.add_selective_note(self.repo.head.commit.hexsha, ["conflict_context"])
+
     def commit_merge(self):
         """Commit the current staged changes as a merge commit.
 
@@ -922,7 +976,7 @@ class AppContext:
 
         self.repo.git.commit("-m", message)
 
-        self.add_note(self.repo.head.commit.hexsha)
+        self.add_selective_note(self.repo.head.commit.hexsha, ["merge_context"])
 
     def get_merge_conflict(
         self, ref: str
