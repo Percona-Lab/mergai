@@ -70,6 +70,9 @@ def register_commands(cli):
     from .commands.branch import branch
     cli.add_command(branch)
 
+    from .commands.merge import merge
+    cli.add_command(merge)
+
 @click.group()
 @click.pass_obj
 @click.option(
