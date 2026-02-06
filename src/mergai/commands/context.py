@@ -96,8 +96,9 @@ def init(
     Prepares the note.json with information about the merge operation
     including the merging commit and target branch.
 
-    COMMIT is the commit SHA or ref being merged. If omitted and currently
-    on a mergai branch, the commit will be extracted from the current branch name.
+    COMMIT is the commit SHA or ref being merged. If omitted, the command will:
+    1. If on a mergai branch, extract commit info from the branch name
+    2. Scan commits for existing mergai notes and rebuild note.json from them
 
     This command should be run before starting a merge operation to
     establish the context for subsequent merge-related commands.
@@ -107,7 +108,7 @@ def init(
         mergai context init abc1234
         mergai context init abc1234 --target v8.0
         mergai context init HEAD
-        mergai context init              # when on a mergai branch
+        mergai context init              # rebuild from commits or use branch info
         mergai context init -f           # force overwrite existing merge_info
     """
     # For init, we only use branch parsing for defaults (not note.json)
@@ -116,6 +117,58 @@ def init(
     parsed = BranchNameBuilder.parse_branch_name_with_config(
         current_branch, app.config.branch
     )
+
+    # If no commit argument provided and no target, try to rebuild from commits
+    if commit is None and target is None:
+        if parsed is not None:
+            # On a mergai branch - can use branch info or rebuild
+            # Try to rebuild from commits first
+            try:
+                note = app.rebuild_note_from_commits()
+                app.save_note(note)
+
+                merge_info = note.get("merge_info", {})
+                click.echo("Rebuilt note.json from commit notes:")
+                click.echo(f"  target_branch: {merge_info.get('target_branch', 'N/A')}")
+                click.echo(f"  target_branch_sha: {merge_info.get('target_branch_sha', 'N/A')}")
+                click.echo(f"  merge_commit: {merge_info.get('merge_commit', 'N/A')}")
+                if "solutions" in note:
+                    committed = len(app._get_committed_solution_indices(note))
+                    total = len(note["solutions"])
+                    click.echo(f"  solutions: {total} ({committed} committed)")
+                if "conflict_context" in note:
+                    click.echo("  conflict_context: present")
+                if "merge_context" in note:
+                    click.echo("  merge_context: present")
+                return
+            except click.ClickException:
+                # Fall back to using branch info
+                pass
+        else:
+            # Not on a mergai branch, try to rebuild from commits
+            try:
+                note = app.rebuild_note_from_commits()
+                app.save_note(note)
+
+                merge_info = note.get("merge_info", {})
+                click.echo("Rebuilt note.json from commit notes:")
+                click.echo(f"  target_branch: {merge_info.get('target_branch', 'N/A')}")
+                click.echo(f"  target_branch_sha: {merge_info.get('target_branch_sha', 'N/A')}")
+                click.echo(f"  merge_commit: {merge_info.get('merge_commit', 'N/A')}")
+                if "solutions" in note:
+                    committed = len(app._get_committed_solution_indices(note))
+                    total = len(note["solutions"])
+                    click.echo(f"  solutions: {total} ({committed} committed)")
+                if "conflict_context" in note:
+                    click.echo("  conflict_context: present")
+                if "merge_context" in note:
+                    click.echo("  merge_context: present")
+                return
+            except click.ClickException as e:
+                raise click.ClickException(
+                    f"Cannot rebuild note from commits: {e.message}\n\n"
+                    "COMMIT is required when not on a mergai branch and no commit notes exist."
+                )
 
     # Resolve commit to full SHA
     if commit is not None:
@@ -292,7 +345,14 @@ def create_merge(app: AppContext, force: bool):
     required=False,
     default=None,
 )
-def drop(app: AppContext, part: Optional[str]):
+@click.option(
+    "--all",
+    "drop_all_solutions",
+    is_flag=True,
+    default=False,
+    help="When dropping solution, drop all solutions including committed ones.",
+)
+def drop(app: AppContext, part: Optional[str], drop_all_solutions: bool):
     """Drop all or part of the stored context.
 
     Without arguments, drops all context (removes the entire note).
@@ -301,7 +361,8 @@ def drop(app: AppContext, part: Optional[str]):
     \b
     Parts that can be dropped:
     - conflict: The conflict context (file diffs, conflict markers, etc.)
-    - solution: The generated/stored solution
+    - solution: The generated/stored solution(s). By default only drops uncommitted
+                solutions. Use --all to drop all solutions including committed ones.
     - pr_comments: PR comments added to the context
     - user_comment: User-provided comments
     - merge_info: Merge initialization info (target branch, commit)
@@ -311,7 +372,8 @@ def drop(app: AppContext, part: Optional[str]):
     Examples:
         mergai context drop              # drops everything
         mergai context drop conflict     # drops only conflict_context
-        mergai context drop solution     # drops only solution
+        mergai context drop solution     # drops only uncommitted solutions
+        mergai context drop solution --all  # drops all solutions
         mergai context drop pr_comments  # drops only PR comments
     """
     try:
@@ -322,8 +384,11 @@ def drop(app: AppContext, part: Optional[str]):
             app.drop_conflict_context()
             click.echo("Dropped conflict context.")
         elif part == "solution":
-            app.drop_solution()
-            click.echo("Dropped solution.")
+            app.drop_solution(all=drop_all_solutions)
+            if drop_all_solutions:
+                click.echo("Dropped all solutions.")
+            else:
+                click.echo("Dropped uncommitted solutions.")
         elif part == "pr_comments":
             app.drop_pr_comments()
             click.echo("Dropped PR comments.")

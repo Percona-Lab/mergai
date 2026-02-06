@@ -543,7 +543,13 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
             f"  - PR Comments (use mergai show --pr-comments to see the PR comments.)\n"
         )
 
-    if "solution" in note:
+    # Handle both legacy "solution" and new "solutions" array
+    if "solutions" in note:
+        count = len(note["solutions"])
+        output_str += (
+            f"  - Solutions ({count}) (use mergai show --solution to see the conflict solutions.)\n"
+        )
+    elif "solution" in note:
         output_str += (
             f"  - Solution (use mergai show --solution to see the conflict solution.)\n"
         )
@@ -581,7 +587,10 @@ def commit_note_to_summary_json(
         summary["content"]["conflict_context"] = True
     if "pr_comments" in note:
         summary["content"]["pr_comments"] = True
-    if "solution" in note:
+    # Handle both legacy "solution" and new "solutions" array
+    if "solutions" in note:
+        summary["content"]["solutions"] = len(note["solutions"])
+    elif "solution" in note:
         summary["content"]["solution"] = True
     if "user_comment" in note:
         summary["content"]["user_comment"] = True
@@ -647,7 +656,16 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
             if user != "total_comments":
                 output_str += f"    - {user}: {count} comment(s)\n"
 
-    if "solution" in note:
+    # Handle both legacy "solution" and new "solutions" array
+    if "solutions" in note:
+        output_str += f"  - Solutions ({len(note['solutions'])})\n"
+        for idx, solution in enumerate(note["solutions"]):
+            stats = get_solution_stats(solution)
+            output_str += f"    [{idx}] Resolved Files: {stats['resolved_files']}/{stats['total_files']}"
+            if stats["unresolved_files"] > 0:
+                output_str += f", Unresolved: {stats['unresolved_files']}"
+            output_str += "\n"
+    elif "solution" in note:
         output_str += f"  - Solution\n"
         stats = get_solution_stats(note["solution"])
         output_str += (

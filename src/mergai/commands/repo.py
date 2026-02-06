@@ -32,25 +32,54 @@ def get_merge_conflict(app: AppContext, revision: str):
     "force",
     is_flag=True,
     default=False,
-    help="Overwrite existing note",
+    help="Replace uncommitted solution if exists",
 )
 @click.argument("commit", required=True)
 def cherry_pick_solution(app: AppContext, commit: str, force: bool):
+    """Copy a solution from another commit's note into the current note.
+
+    The solution is appended to the solutions array. If there's already an
+    uncommitted solution and --force is used, it will be replaced.
+
+    COMMIT is the commit SHA or ref to copy the solution from.
+    """
     try:
         note = app.read_note(commit)
+        if not note:
+            click.echo(f"No note found for commit {commit}.")
+            exit(1)
+
         solution = note.get("solution")
         if not solution:
             click.echo(f"No solution found in commit note for {commit}.")
             exit(1)
 
-        cur_note = app.load_note()
-        if "solution" in cur_note and not force:
+        cur_note = app.load_or_create_note()
+
+        # Migrate legacy solution field
+        cur_note = app._migrate_solution_to_solutions(cur_note)
+
+        # Check for uncommitted solution
+        uncommitted_idx = app._get_uncommitted_solution_index(cur_note)
+        if uncommitted_idx is not None and not force:
             click.echo(
-                "A solution already exists in the current note. Use --force to overwrite."
+                "An uncommitted solution already exists in the current note. Use --force to replace it."
             )
             exit(1)
 
-        cur_note["solution"] = solution
+        # Initialize solutions array if needed
+        if "solutions" not in cur_note:
+            cur_note["solutions"] = []
+
+        if uncommitted_idx is not None and force:
+            # Replace the uncommitted solution
+            cur_note["solutions"][uncommitted_idx] = solution
+            click.echo(f"Replaced uncommitted solution (index {uncommitted_idx}) with solution from {commit}.")
+        else:
+            # Append new solution
+            cur_note["solutions"].append(solution)
+            click.echo(f"Added solution from {commit} as solutions[{len(cur_note['solutions']) - 1}].")
+
         app.save_note(cur_note)
     except Exception as e:
         click.echo(f"Error: {e}")

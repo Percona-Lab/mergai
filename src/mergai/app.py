@@ -87,8 +87,15 @@ def convert_note(
             output_str += util.pr_comments_to_markdown(note["pr_comments"]) + "\n"
         if show_user_comment and "user_comment" in note:
             output_str += util.user_comment_to_markdown(note["user_comment"]) + "\n"
-        if show_solution and "solution" in note:
-            output_str += util.conflict_solution_to_markdown(note["solution"]) + "\n"
+        # Handle both legacy "solution" and new "solutions" array
+        if show_solution:
+            if "solutions" in note:
+                for idx, solution in enumerate(note["solutions"]):
+                    if len(note["solutions"]) > 1:
+                        output_str += f"## Solution {idx + 1}\n\n"
+                    output_str += util.conflict_solution_to_markdown(solution) + "\n"
+            elif "solution" in note:
+                output_str += util.conflict_solution_to_markdown(note["solution"]) + "\n"
         if show_merge_description and "merge_description" in note:
             output_str += (
                 util.merge_description_to_markdown(note["merge_description"]) + "\n"
@@ -379,8 +386,117 @@ class AppContext:
     def drop_all(self):
         self.state.remove_note()
 
-    def drop_solution(self):
-        self.drop_note_field("solution")
+    def drop_solution(self, all: bool = False):
+        """Drop solution(s) from the note.
+
+        Args:
+            all: If True, drop all solutions. If False (default), only drop
+                 uncommitted solutions (those not in note_index).
+        """
+        note = self.load_or_create_note()
+
+        # Handle legacy "solution" field - migrate to "solutions"
+        if "solution" in note:
+            if "solutions" not in note:
+                note["solutions"] = [note["solution"]]
+            del note["solution"]
+
+        if "solutions" not in note:
+            return
+
+        if all:
+            # Drop all solutions
+            del note["solutions"]
+            # Also remove solutions entries from note_index
+            if "note_index" in note:
+                note["note_index"] = [
+                    entry for entry in note["note_index"]
+                    if not any(f.startswith("solutions[") for f in entry.get("fields", []))
+                ]
+        else:
+            # Only drop uncommitted solutions
+            committed_indices = self._get_committed_solution_indices(note)
+            if committed_indices:
+                # Keep only committed solutions
+                note["solutions"] = [
+                    note["solutions"][i] for i in sorted(committed_indices)
+                    if i < len(note["solutions"])
+                ]
+            else:
+                # No committed solutions, drop all
+                del note["solutions"]
+
+        if len(note) == 0:
+            self.state.remove_note()
+        else:
+            self.save_note(note)
+
+    def _get_committed_solution_indices(self, note: dict) -> set:
+        """Get indices of solutions that have been committed.
+
+        Args:
+            note: The note dict containing note_index.
+
+        Returns:
+            Set of solution indices that are in the note_index.
+        """
+        committed = set()
+        if "note_index" not in note:
+            return committed
+
+        import re
+        for entry in note["note_index"]:
+            for field in entry.get("fields", []):
+                # Match "solutions[N]" pattern
+                match = re.match(r"solutions\[(\d+)\]", field)
+                if match:
+                    committed.add(int(match.group(1)))
+                # Also handle legacy "solution" field
+                if field == "solution":
+                    committed.add(0)
+
+        return committed
+
+    def _get_uncommitted_solution_index(self, note: dict) -> Optional[int]:
+        """Get the index of the last uncommitted solution.
+
+        Args:
+            note: The note dict.
+
+        Returns:
+            Index of the last uncommitted solution, or None if all are committed.
+        """
+        solutions = note.get("solutions", [])
+        if not solutions:
+            return None
+
+        committed = self._get_committed_solution_indices(note)
+        # Find the last index that is not committed
+        for i in range(len(solutions) - 1, -1, -1):
+            if i not in committed:
+                return i
+        return None
+
+    def _migrate_solution_to_solutions(self, note: dict) -> dict:
+        """Migrate legacy 'solution' field to 'solutions' array.
+
+        Args:
+            note: The note dict to migrate.
+
+        Returns:
+            The migrated note dict.
+        """
+        if "solution" in note and "solutions" not in note:
+            note["solutions"] = [note["solution"]]
+            del note["solution"]
+            # Also migrate note_index entries
+            if "note_index" in note:
+                for entry in note["note_index"]:
+                    entry["fields"] = [
+                        "solutions[0]" if f == "solution" else f
+                        for f in entry.get("fields", [])
+                    ]
+        return note
 
     def drop_pr_comments(self):
         self.drop_note_field("pr_comments")
@@ -578,13 +694,18 @@ class AppContext:
         if note is None:
             raise Exception("No note found. Please prepare the context first.")
 
-        if "solution" in note and not force:
+        # Migrate legacy solution field
+        note = self._migrate_solution_to_solutions(note)
+
+        # Check if there's an uncommitted solution
+        uncommitted_idx = self._get_uncommitted_solution_index(note)
+        if uncommitted_idx is not None and not force:
             raise Exception(
-                "Solution already exists in the note. Use -f/--force to overwrite."
+                "An uncommitted solution already exists in the note. Use -f/--force to overwrite."
             )
 
-        if "solution" in note:
-            del note["solution"]
+        # If force and there's an uncommitted solution, we'll replace it
+        # Otherwise, we'll append a new solution
 
         # TODO: implement use_history=True
         prompt = self.build_resolve_prompt(note, use_history=False)
@@ -639,7 +760,17 @@ class AppContext:
         if solution is None:
             raise Exception("Failed to obtain a valid solution from the agent.")
 
-        note["solution"] = solution
+        # Add solution to solutions array
+        if "solutions" not in note:
+            note["solutions"] = []
+
+        if uncommitted_idx is not None and force:
+            # Replace the uncommitted solution
+            note["solutions"][uncommitted_idx] = solution
+        else:
+            # Append new solution
+            note["solutions"].append(solution)
+
         self.save_note(note)
 
     def check_describe_response_format(self, response: dict) -> Optional[str]:
@@ -787,13 +918,21 @@ class AppContext:
         (if available) plus the specified fields from the current note. Also updates
         note_index in note.json to track which commits have which fields attached.
 
+        For solutions, use field format "solutions[N]" where N is the solution index.
+        The git note will contain only that single solution (not the entire array).
+
         Args:
             commit: The commit SHA to attach the note to
-            fields: List of field names to include in the note (in addition to merge_info)
+            fields: List of field names to include in the note (in addition to merge_info).
+                    For solutions, use "solutions[N]" format.
         """
         import os
+        import re
 
         note = self.state.load_note()
+
+        # Migrate legacy solution field
+        note = self._migrate_solution_to_solutions(note)
 
         # Build selective note content - always include merge_info
         selective_note = {}
@@ -801,7 +940,14 @@ class AppContext:
             selective_note["merge_info"] = note["merge_info"]
 
         for field in fields:
-            if field in note:
+            # Handle solutions[N] format
+            match = re.match(r"solutions\[(\d+)\]", field)
+            if match:
+                idx = int(match.group(1))
+                if "solutions" in note and idx < len(note["solutions"]):
+                    # In the git note, store as "solution" (singular) for the specific solution
+                    selective_note["solution"] = note["solutions"][idx]
+            elif field in note:
                 selective_note[field] = note[field]
 
         # Write selective note to temp file and attach as git note
@@ -837,14 +983,24 @@ class AppContext:
             raise Exception("No note found.")
 
         note = self.state.load_note()
-        if "solution" not in note:
-            raise Exception("No solution found in the note.")
+
+        # Migrate legacy solution field
+        note = self._migrate_solution_to_solutions(note)
+        self.save_note(note)
+
+        # Find the uncommitted solution
+        uncommitted_idx = self._get_uncommitted_solution_index(note)
+        if uncommitted_idx is None:
+            if "solutions" not in note or len(note["solutions"]) == 0:
+                raise Exception("No solution found in the note.")
+            else:
+                raise Exception("All solutions have already been committed.")
+
+        solution = note["solutions"][uncommitted_idx]
+        conflict_context = note.get("conflict_context")
 
         if not self.repo.is_dirty():
             raise Exception("No changes to commit in the repository.")
-
-        solution = note["solution"]
-        conflict_context = note.get("conflict_context")
 
         # Track modified files (files changed but not in the solution's resolved list)
         modified_files = []
@@ -908,7 +1064,8 @@ class AppContext:
 
         self.repo.index.commit(message)
 
-        self.add_selective_note(self.repo.head.commit.hexsha, ["solution"])
+        # Add note with the specific solution index
+        self.add_selective_note(self.repo.head.commit.hexsha, [f"solutions[{uncommitted_idx}]"])
 
     def commit_conflict(self):
         hint_msg = "Please prepare the conflict context by running:\nmergai create-conflict-context"
@@ -1002,3 +1159,145 @@ class AppContext:
                     return (commit, conflict_context)
 
         return (None, conflict_context)
+
+    def rebuild_note_from_commits(self) -> dict:
+        """Rebuild note.json from git commit notes.
+
+        Scans commits from HEAD backwards to find and collect all mergai notes,
+        reconstructing the local note.json with:
+        - merge_info (from the first commit that has it)
+        - conflict_context (at most one)
+        - merge_context (at most one)
+        - solutions array (collected from all solution commits)
+        - note_index (rebuilt based on which commit has what)
+
+        The scan range is determined by:
+        1. If on a mergai branch, use parsed target_branch_sha as the stop point
+        2. Otherwise, scan until finding a commit with merge_info and use its
+           target_branch_sha as the stop point
+
+        Returns:
+            The rebuilt note dict.
+
+        Raises:
+            click.ClickException: If merge_info is inconsistent across commits
+                                  or cannot determine scan range.
+        """
+        current_branch = git_utils.get_current_branch(self.repo)
+        parsed = util.BranchNameBuilder.parse_branch_name_with_config(
+            current_branch, self.config.branch
+        )
+
+        target_sha = None
+        if parsed:
+            # Mergai branch - we know the target SHA
+            try:
+                target_sha = self.repo.commit(parsed.target_branch_sha).hexsha
+            except Exception:
+                pass
+
+        # Collect commits and their notes
+        commits_with_notes = []
+        for commit in self.repo.iter_commits():
+            git_note = self.read_note(commit.hexsha)
+            if git_note:
+                commits_with_notes.append((commit.hexsha, git_note))
+
+                # If we don't have target_sha yet, try to get it from merge_info
+                if target_sha is None and "merge_info" in git_note:
+                    target_branch_sha = git_note["merge_info"].get("target_branch_sha")
+                    if target_branch_sha:
+                        target_sha = target_branch_sha
+
+            # Stop if we've reached the target
+            if target_sha and commit.hexsha == target_sha:
+                break
+
+        if not commits_with_notes:
+            raise click.ClickException(
+                "No commits with mergai notes found. Cannot rebuild note.json."
+            )
+
+        # Reverse to process oldest first (for consistent indexing)
+        commits_with_notes.reverse()
+
+        # Build the new note
+        note = {
+            "solutions": [],
+            "note_index": [],
+        }
+
+        reference_merge_info = None
+
+        for commit_sha, git_note in commits_with_notes:
+            fields_for_this_commit = []
+
+            # Handle merge_info
+            if "merge_info" in git_note:
+                if reference_merge_info is None:
+                    reference_merge_info = git_note["merge_info"]
+                    note["merge_info"] = git_note["merge_info"]
+                else:
+                    # Check consistency
+                    current_mi = git_note["merge_info"]
+                    if (current_mi.get("target_branch") != reference_merge_info.get("target_branch") or
+                        current_mi.get("merge_commit") != reference_merge_info.get("merge_commit")):
+                        raise click.ClickException(
+                            f"Inconsistent merge_info found across commits.\n"
+                            f"Reference (from earlier commit): target_branch={reference_merge_info.get('target_branch')}, "
+                            f"merge_commit={reference_merge_info.get('merge_commit')}\n"
+                            f"Current (commit {commit_sha[:11]}): target_branch={current_mi.get('target_branch')}, "
+                            f"merge_commit={current_mi.get('merge_commit')}\n\n"
+                            f"Please use 'mergai context init <commit> --target <branch>' to explicitly set merge_info."
+                        )
+
+            # Handle conflict_context (at most one)
+            if "conflict_context" in git_note:
+                if "conflict_context" not in note:
+                    note["conflict_context"] = git_note["conflict_context"]
+                    fields_for_this_commit.append("conflict_context")
+
+            # Handle merge_context (at most one)
+            if "merge_context" in git_note:
+                if "merge_context" not in note:
+                    note["merge_context"] = git_note["merge_context"]
+                    fields_for_this_commit.append("merge_context")
+
+            # Handle solution (singular in git note -> add to solutions array)
+            if "solution" in git_note:
+                idx = len(note["solutions"])
+                note["solutions"].append(git_note["solution"])
+                fields_for_this_commit.append(f"solutions[{idx}]")
+
+            # Handle merge_description
+            if "merge_description" in git_note:
+                if "merge_description" not in note:
+                    note["merge_description"] = git_note["merge_description"]
+                    fields_for_this_commit.append("merge_description")
+
+            # Handle pr_comments
+            if "pr_comments" in git_note:
+                if "pr_comments" not in note:
+                    note["pr_comments"] = git_note["pr_comments"]
+                    fields_for_this_commit.append("pr_comments")
+
+            # Handle user_comment
+            if "user_comment" in git_note:
+                if "user_comment" not in note:
+                    note["user_comment"] = git_note["user_comment"]
+                    fields_for_this_commit.append("user_comment")
+
+            # Add to note_index if we collected any fields
+            if fields_for_this_commit:
+                note["note_index"].append({
+                    "sha": commit_sha,
+                    "fields": fields_for_this_commit,
+                })
+
+        # Clean up empty collections
+        if not note["solutions"]:
+            del note["solutions"]
+        if not note["note_index"]:
+            del note["note_index"]
+
+        return note

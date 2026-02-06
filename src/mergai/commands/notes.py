@@ -147,11 +147,23 @@ def show(
             output_str += util.user_comment_to_str(user_comment, format, pretty=pretty)
 
         if show_solution:
-            solution = note.get("solution")
-            if not solution:
+            # Handle both legacy "solution" and new "solutions" array
+            if "solutions" in note:
+                solutions = note["solutions"]
+                if not solutions:
+                    raise Exception("No solutions found in the note.")
+                for idx, solution in enumerate(solutions):
+                    if len(solutions) > 1:
+                        if format == "markdown":
+                            output_str += f"## Solution {idx + 1}\n\n"
+                        else:
+                            output_str += f"=== Solution {idx + 1} ===\n"
+                    output_str += util.conflict_solution_to_str(solution, format, pretty=pretty)
+            elif "solution" in note:
+                solution = note["solution"]
+                output_str += util.conflict_solution_to_str(solution, format, pretty=pretty)
+            else:
                 raise Exception("No solution found in the note.")
-
-            output_str += util.conflict_solution_to_str(solution, format, pretty=pretty)
 
         if output_str:
             util.print_or_page(output_str, format=format)

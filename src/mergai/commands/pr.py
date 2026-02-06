@@ -58,7 +58,14 @@ def create(app: AppContext, pr_type: str):
             if not note:
                 raise Exception("No note found. Run 'mergai context init' first.")
 
-            solution = note.get("solution")
+            # Handle both legacy "solution" and new "solutions" array
+            # For PR, use the last solution (most recent)
+            solution = None
+            if "solutions" in note and note["solutions"]:
+                solution = note["solutions"][-1]
+            elif "solution" in note:
+                solution = note["solution"]
+
             if not solution:
                 raise Exception(
                     "No solution found in note. Run 'mergai resolve' first."
@@ -407,6 +414,8 @@ def add_comment_with_solution(app: AppContext, pr_number: Optional[int], commit:
     if not note:
         raise Exception(f"No note found for commit {commit}.")
 
+    # Handle both legacy "solution" and new "solutions" array
+    # Git notes store as "solution" (singular)
     solution = note.get("solution")
     if not solution:
         click.echo(
