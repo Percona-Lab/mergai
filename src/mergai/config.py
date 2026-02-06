@@ -105,13 +105,22 @@ class BranchConfig:
 
     Attributes:
         name_format: Format string for branch names.
-            Supported tokens:
-            - %(target_branch) - The target branch name
-            - %(merge_commit_short) - Short SHA of the merge commit
+            Required tokens:
+            - %(target_branch) - The target branch name (required)
+            - %(merge_commit_sha) or %(merge_commit_short_sha) - SHA of the merge commit
+            - %(target_branch_sha) or %(target_branch_short_sha) - SHA of the target branch
+
+            Optional tokens:
             - %(type) - Branch type (main, conflict, solution, or custom)
+
+            SHA token variants:
+            - %(merge_commit_sha) - Full SHA of the merge commit (40 chars)
+            - %(merge_commit_short_sha) - Short SHA of the merge commit (11 chars)
+            - %(target_branch_sha) - Full SHA of the target branch (40 chars)
+            - %(target_branch_short_sha) - Short SHA of the target branch (11 chars)
     """
 
-    name_format: str = "mergai/%(target_branch)-%(merge_commit_short)/%(type)"
+    name_format: str = "mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)"
 
     @classmethod
     def from_dict(cls, data: dict) -> "BranchConfig":

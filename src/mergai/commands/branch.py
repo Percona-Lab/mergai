@@ -25,7 +25,7 @@ DELETE_BRANCH_TYPES = BRANCH_TYPES + ["all"]
 PUSH_BRANCH_TYPES = BRANCH_TYPES + ["all"]
 
 # Valid token names for the info command
-TOKEN_NAMES = ["target_branch", "merge_commit_short", "type"]
+TOKEN_NAMES = ["target_branch", "target_branch_sha", "merge_commit_sha", "type"]
 
 
 def get_current_branch_parsed(app: AppContext) -> Optional[ParsedBranchName]:
@@ -64,15 +64,27 @@ def get_branch_builder(
         Configured BranchNameBuilder instance.
 
     Raises:
-        click.ClickException: If commit reference is invalid or cannot be determined.
+        click.ClickException: If commit reference is invalid, cannot be determined,
+            or branch name format is invalid.
     """
     ctx = app.get_merge_context(commit=commit, target=target)
 
-    return BranchNameBuilder.from_config(
-        app.config.branch,
-        target_branch=ctx.target_branch,
-        merge_commit_short=ctx.merge_commit_short,
-    )
+    try:
+        return BranchNameBuilder.from_config(
+            app.config.branch,
+            target_branch=ctx.target_branch,
+            merge_commit_sha=ctx.merge_commit_sha,
+            target_branch_sha=ctx.target_branch_sha,
+        )
+    except ValueError as e:
+        raise click.ClickException(
+            f"Invalid branch name format in config: {e}\n\n"
+            f"The format string must contain:\n"
+            f"  - %(target_branch)\n"
+            f"  - Either %(merge_commit_sha) or %(merge_commit_short_sha)\n"
+            f"  - Either %(target_branch_sha) or %(target_branch_short_sha)\n\n"
+            f"Current format: {app.config.branch.name_format}"
+        )
 
 
 def branch_exists_on_remote(
@@ -127,7 +139,7 @@ def branch():
     - solution: Branch for solution attempts (PRs from here)
 
     Branch names are generated using the format from .mergai.yaml:
-    branch.name_format (default: "mergai/%(target_branch)-%(merge_commit_short)/%(type)")
+    branch.name_format (default: "mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)")
 
     When on a mergai branch, COMMIT and --target can often be omitted
     as they will be extracted from the current branch name.
@@ -405,14 +417,14 @@ def info(app: AppContext, token: Optional[str], branch_name: Optional[str]):
     Parses the branch name and prints its components. If TOKEN is specified,
     prints only that token's value. Otherwise, prints all components.
 
-    TOKEN is one of: target_branch, merge_commit_short, type
+    TOKEN is one of: target_branch, target_branch_sha, merge_commit_sha, type
 
     \b
     Examples:
         mergai branch info                    # print all info for current branch
         mergai branch info target_branch      # print just the target branch
         mergai branch info type               # print just the branch type
-        mergai branch info -b mergai/v8.0-abc123/main  # parse specific branch
+        mergai branch info -b mergai/v8.0-abc123-def456/main  # parse specific branch
     """
     # Determine which branch to parse
     if branch_name is None:
@@ -436,7 +448,8 @@ def info(app: AppContext, token: Optional[str], branch_name: Optional[str]):
     else:
         # Print all components
         click.echo(f"target_branch: {parsed.target_branch}")
-        click.echo(f"merge_commit_short: {parsed.merge_commit_short}")
+        click.echo(f"target_branch_sha: {parsed.target_branch_sha}")
+        click.echo(f"merge_commit_sha: {parsed.merge_commit_sha}")
         click.echo(f"type: {parsed.branch_type}")
 
 

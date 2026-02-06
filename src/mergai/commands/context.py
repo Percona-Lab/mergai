@@ -8,7 +8,6 @@ This module provides commands for creating and managing merge context:
 """
 
 import click
-from datetime import datetime, timezone
 from typing import Optional
 
 from ..app import AppContext
@@ -118,15 +117,22 @@ def init(
         current_branch, app.config.branch
     )
 
-    # Resolve commit to short SHA
+    # Resolve commit to full SHA
     if commit is not None:
         try:
             resolved = app.repo.commit(commit)
-            merge_commit_short = git_utils.short_sha(resolved.hexsha)
+            merge_commit_sha = resolved.hexsha
         except Exception as e:
             raise click.ClickException(f"Invalid commit reference '{commit}': {e}")
     elif parsed is not None:
-        merge_commit_short = parsed.merge_commit_short
+        # Resolve the SHA from branch name to full SHA
+        try:
+            resolved = app.repo.commit(parsed.merge_commit_sha)
+            merge_commit_sha = resolved.hexsha
+        except Exception as e:
+            raise click.ClickException(
+                f"Cannot resolve commit from branch name '{parsed.merge_commit_sha}': {e}"
+            )
     else:
         raise click.ClickException(
             "COMMIT is required when not on a mergai branch."
@@ -140,6 +146,14 @@ def init(
     else:
         target_branch = current_branch
 
+    # Resolve target branch SHA
+    try:
+        target_branch_sha = app.repo.commit(target_branch).hexsha
+    except Exception as e:
+        raise click.ClickException(
+            f"Cannot resolve target branch '{target_branch}': {e}"
+        )
+
     note = app.load_or_create_note()
 
     if "merge_info" in note and not force:
@@ -149,8 +163,8 @@ def init(
 
     merge_info = {
         "target_branch": target_branch,
-        "merge_commit_short": merge_commit_short,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "target_branch_sha": target_branch_sha,
+        "merge_commit": merge_commit_sha,
     }
 
     note["merge_info"] = merge_info
@@ -158,7 +172,8 @@ def init(
 
     click.echo("Initialized merge context:")
     click.echo(f"  target_branch: {target_branch}")
-    click.echo(f"  merge_commit_short: {merge_commit_short}")
+    click.echo(f"  target_branch_sha: {target_branch_sha}")
+    click.echo(f"  merge_commit: {merge_commit_sha}")
 
 
 @context.group()

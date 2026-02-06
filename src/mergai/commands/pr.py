@@ -72,12 +72,18 @@ def create(app: AppContext, pr_type: str):
 
             # Get merge context for building branch names
             target_branch = merge_info["target_branch"]
-            merge_commit_short = merge_info["merge_commit_short"]
+            target_branch_sha = merge_info["target_branch_sha"]
+            merge_commit_sha = merge_info["merge_commit"]
 
             # Build branch names using the config
-            builder = util.BranchNameBuilder.from_config(
-                app.config.branch, target_branch, merge_commit_short
-            )
+            try:
+                builder = util.BranchNameBuilder.from_config(
+                    app.config.branch, target_branch, merge_commit_sha, target_branch_sha
+                )
+            except ValueError as e:
+                raise click.ClickException(
+                    f"Invalid branch name format in config: {e}"
+                )
 
             # Base branch is the conflict branch
             conflict_branch = builder.conflict_branch
@@ -85,7 +91,8 @@ def create(app: AppContext, pr_type: str):
             # Head branch is the current branch (should be solution branch)
             head = git_utils.get_current_branch(app.repo)
 
-            # Build PR title and body
+            # Build PR title and body (use short SHA for display)
+            merge_commit_short = git_utils.short_sha(merge_commit_sha)
             title = f"MergAI Solution: Resolve conflicts for merge {merge_commit_short}"
             body = util.solution_pr_body_to_markdown(solution)
 
@@ -123,12 +130,13 @@ def create(app: AppContext, pr_type: str):
 
         # Get target branch (base) from merge_info
         target_branch = merge_info["target_branch"]
-        merge_commit_short = merge_info["merge_commit_short"]
+        merge_commit_sha = merge_info["merge_commit"]
 
         # Get current branch (head)
         head = git_utils.get_current_branch(app.repo)
 
-        # Build PR title and body from merge_info and merge_context
+        # Build PR title and body from merge_info and merge_context (use short SHA for display)
+        merge_commit_short = git_utils.short_sha(merge_commit_sha)
         title = f"MergAI: Merge {merge_commit_short} into {target_branch}"
 
         # Build body with merge info and context

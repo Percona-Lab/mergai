@@ -390,10 +390,10 @@ MERGE_INFO_MARKDOWN_TEMPLATE = """\
 # Merge Info
 
 - **Target Branch:** `{{ context.target_branch }}`
-- **Merge Commit:** `{{ context.merge_commit_short }}`
-{%- if context.timestamp %}
-- **Timestamp:** {{ context.timestamp }}
+{%- if context.target_branch_sha %}
+- **Target Branch SHA:** `{{ context.target_branch_sha }}`
 {%- endif %}
+- **Merge Commit:** `{{ context.merge_commit }}`
 """
 
 
@@ -619,7 +619,7 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
         output_str += f"  - Merge Info\n"
         merge_info = note["merge_info"]
         output_str += f"    - Target Branch: {merge_info.get('target_branch', 'unknown')}\n"
-        output_str += f"    - Merge Commit: {merge_info.get('merge_commit_short', 'unknown')}\n"
+        output_str += f"    - Merge Commit: {merge_info.get('merge_commit', 'unknown')}\n"
     if "merge_context" in note:
         output_str += f"  - Merge Context\n"
         merge_context = note["merge_context"]
@@ -733,13 +733,15 @@ class ParsedBranchName:
 
     Attributes:
         target_branch: The original target branch name (e.g., "master", "v8.0")
-        merge_commit_short: Short SHA of the merge commit (e.g., "abc12345678")
+        target_branch_sha: SHA of target branch (short or full depending on branch format)
+        merge_commit_sha: SHA of the merge commit (short or full depending on branch format)
         branch_type: The branch type string (e.g., "main", "conflict", "solution")
         full_name: The full original branch name that was parsed
     """
 
     target_branch: str
-    merge_commit_short: str
+    target_branch_sha: str
+    merge_commit_sha: str
     branch_type: str
     full_name: str
 
@@ -768,21 +770,30 @@ class BranchNameBuilder:
     """Builder for generating standardized branch names.
 
     The builder uses a format string with tokens that get replaced:
-    - %(target_branch) - The target branch being merged into
-    - %(merge_commit_short) - Short SHA of the merge commit
+    - %(target_branch) - The target branch being merged into (required)
+    - %(target_branch_sha) - Full SHA of the target branch (40 chars)
+    - %(target_branch_short_sha) - Short SHA of the target branch (11 chars)
+    - %(merge_commit_sha) - Full SHA of the merge commit (40 chars)
+    - %(merge_commit_short_sha) - Short SHA of the merge commit (11 chars)
     - %(type) - Branch type identifier
 
-    Example format: "mergai/%(target_branch)-%(merge_commit_short)/%(type)"
-    Produces: "mergai/main-abc12345678/solution"
+    The format string must contain:
+    - %(target_branch)
+    - Either %(merge_commit_sha) or %(merge_commit_short_sha)
+    - Either %(target_branch_sha) or %(target_branch_short_sha)
+
+    Example format: "mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)"
+    Produces: "mergai/main-abc12345678-def09876543/solution"
 
     The class is designed to be instantiated once with all context information,
     then used multiple times to generate different branch names.
 
     Usage:
         builder = BranchNameBuilder(
-            name_format="mergai/%(target_branch)-%(merge_commit_short)/%(type)",
+            name_format="mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)",
             target_branch="main",
-            merge_commit_short="abc12345678"
+            merge_commit_sha="abc1234567890abcdef1234567890abcdef12345",
+            target_branch_sha="def0987654321fedcba0987654321fedcba09876"
         )
 
         # Get specific branch types via properties
@@ -799,38 +810,93 @@ class BranchNameBuilder:
     TOKEN_PATTERN = re.compile(r"%\((\w+)\)")
 
     # Currently supported tokens
-    SUPPORTED_TOKENS = {"target_branch", "merge_commit_short", "type"}
+    SUPPORTED_TOKENS = {
+        "target_branch",
+        "target_branch_sha",
+        "target_branch_short_sha",
+        "merge_commit_sha",
+        "merge_commit_short_sha",
+        "type",
+    }
+
+    # Required token groups - at least one from each group must be present
+    REQUIRED_TOKENS = {"target_branch"}
+    REQUIRED_MERGE_COMMIT_TOKENS = {"merge_commit_sha", "merge_commit_short_sha"}
+    REQUIRED_TARGET_BRANCH_SHA_TOKENS = {"target_branch_sha", "target_branch_short_sha"}
 
     def __init__(
         self,
         name_format: str,
         target_branch: str,
-        merge_commit_short: str,
+        merge_commit_sha: str,
+        target_branch_sha: str,
     ):
         """Initialize the branch name builder.
 
         Args:
             name_format: Format string with %(token) placeholders.
             target_branch: Name of the target branch.
-            merge_commit_short: Short SHA of the merge commit (typically 11 chars).
+            merge_commit_sha: Full SHA of the merge commit (40 chars).
+            target_branch_sha: Full SHA of the target branch (40 chars).
+
+        Raises:
+            ValueError: If name_format is missing required tokens.
         """
+        self._validate_format(name_format)
         self._name_format = name_format
         self._target_branch = target_branch
-        self._merge_commit_short = merge_commit_short
+        self._merge_commit_sha = merge_commit_sha
+        self._target_branch_sha = target_branch_sha
+
+    @classmethod
+    def _validate_format(cls, name_format: str) -> None:
+        """Validate that the format string contains all required tokens.
+
+        Args:
+            name_format: The format string to validate.
+
+        Raises:
+            ValueError: If required tokens are missing.
+        """
+        # Extract all tokens from format string
+        tokens_in_format = set(cls.TOKEN_PATTERN.findall(name_format))
+
+        # Check for required target_branch token
+        if not cls.REQUIRED_TOKENS & tokens_in_format:
+            raise ValueError(
+                f"Format string must contain %(target_branch). "
+                f"Got: {name_format}"
+            )
+
+        # Check for at least one merge commit token
+        if not cls.REQUIRED_MERGE_COMMIT_TOKENS & tokens_in_format:
+            raise ValueError(
+                f"Format string must contain either %(merge_commit_sha) or %(merge_commit_short_sha). "
+                f"Got: {name_format}"
+            )
+
+        # Check for at least one target branch SHA token
+        if not cls.REQUIRED_TARGET_BRANCH_SHA_TOKENS & tokens_in_format:
+            raise ValueError(
+                f"Format string must contain either %(target_branch_sha) or %(target_branch_short_sha). "
+                f"Got: {name_format}"
+            )
 
     @classmethod
     def from_config(
         cls,
         config: "BranchConfig",
         target_branch: str,
-        merge_commit_short: str,
+        merge_commit_sha: str,
+        target_branch_sha: str,
     ) -> "BranchNameBuilder":
         """Create a builder from a BranchConfig instance.
 
         Args:
             config: BranchConfig with the name_format.
             target_branch: Name of the target branch.
-            merge_commit_short: Short SHA of the merge commit.
+            merge_commit_sha: Full SHA of the merge commit.
+            target_branch_sha: Full SHA of the target branch.
 
         Returns:
             Configured BranchNameBuilder instance.
@@ -838,7 +904,8 @@ class BranchNameBuilder:
         return cls(
             name_format=config.name_format,
             target_branch=target_branch,
-            merge_commit_short=merge_commit_short,
+            merge_commit_sha=merge_commit_sha,
+            target_branch_sha=target_branch_sha,
         )
 
     @classmethod
@@ -850,7 +917,7 @@ class BranchNameBuilder:
         """Parse a branch name back into its components.
 
         This method reverses the branch name generation process, extracting
-        the original target_branch, merge_commit_short, and type from a
+        the original target_branch, target_branch_sha, merge_commit_sha, and type from a
         branch name that was created using the given format.
 
         The parsing is done by converting the format string into a regex
@@ -858,22 +925,24 @@ class BranchNameBuilder:
 
         Args:
             branch_name: The branch name to parse
-                        (e.g., "mergai/master-abc12345678/main")
+                        (e.g., "mergai/master-abc12345678-def09876543/main")
             name_format: The format string used to generate branch names
-                        (e.g., "mergai/%(target_branch)-%(merge_commit_short)/%(type)")
+                        (e.g., "mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)")
 
         Returns:
             ParsedBranchName if the branch matches the format, None otherwise.
 
         Example:
             >>> parsed = BranchNameBuilder.parse_branch_name(
-            ...     "mergai/master-abc12345678/solution",
-            ...     "mergai/%(target_branch)-%(merge_commit_short)/%(type)"
+            ...     "mergai/master-abc12345678-def09876543/solution",
+            ...     "mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)"
             ... )
             >>> parsed.target_branch
             'master'
-            >>> parsed.merge_commit_short
+            >>> parsed.merge_commit_sha
             'abc12345678'
+            >>> parsed.target_branch_sha
+            'def09876543'
             >>> parsed.branch_type
             'solution'
         """
@@ -887,11 +956,16 @@ class BranchNameBuilder:
         # Define capture patterns for each token type
         # - target_branch: non-greedy match of any characters except the delimiter
         #   that follows it in the format (we use .+? and let the rest of the pattern constrain it)
-        # - merge_commit_short: hex characters (git SHA)
+        # - merge_commit_sha / merge_commit_short_sha: hex characters (git SHA)
+        # - target_branch_sha / target_branch_short_sha: hex characters (git SHA)
         # - type: word characters and hyphens (for custom types like "attempt-1")
+        # Both full and short variants map to the same capture group
         token_patterns = {
             "target_branch": r"(?P<target_branch>.+?)",
-            "merge_commit_short": r"(?P<merge_commit_short>[a-f0-9]+)",
+            "target_branch_sha": r"(?P<target_branch_sha>[a-f0-9]+)",
+            "target_branch_short_sha": r"(?P<target_branch_sha>[a-f0-9]+)",
+            "merge_commit_sha": r"(?P<merge_commit_sha>[a-f0-9]+)",
+            "merge_commit_short_sha": r"(?P<merge_commit_sha>[a-f0-9]+)",
             "type": r"(?P<type>[\w-]+)",
         }
 
@@ -911,7 +985,8 @@ class BranchNameBuilder:
 
         return ParsedBranchName(
             target_branch=match.group("target_branch"),
-            merge_commit_short=match.group("merge_commit_short"),
+            target_branch_sha=match.group("target_branch_sha"),
+            merge_commit_sha=match.group("merge_commit_sha"),
             branch_type=match.group("type"),
             full_name=branch_name,
         )
@@ -946,7 +1021,10 @@ class BranchNameBuilder:
         """
         values = {
             "target_branch": self._target_branch,
-            "merge_commit_short": self._merge_commit_short,
+            "target_branch_sha": self._target_branch_sha,
+            "target_branch_short_sha": git_utils.short_sha(self._target_branch_sha),
+            "merge_commit_sha": self._merge_commit_sha,
+            "merge_commit_short_sha": git_utils.short_sha(self._merge_commit_sha),
             "type": branch_type,
         }
 

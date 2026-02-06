@@ -30,11 +30,13 @@ class MergeContext:
 
     Attributes:
         target_branch: The branch being merged into (e.g., "v8.0", "master").
-        merge_commit_short: Short SHA of the commit being merged (11 chars).
+        target_branch_sha: Full SHA of the target branch HEAD (40 chars).
+        merge_commit_sha: Full SHA of the commit being merged (40 chars).
     """
 
     target_branch: str
-    merge_commit_short: str
+    target_branch_sha: str
+    merge_commit_sha: str
 
 
 def gh_auth_token() -> str:
@@ -124,7 +126,7 @@ class AppContext:
     ) -> MergeContext:
         """Get merge context from note.json or current branch.
 
-        Resolves target_branch and merge_commit_short using the following
+        Resolves target_branch, target_branch_sha, and merge_commit_sha using the following
         priority:
         1. If merge_info exists in note.json, use those values
         2. Otherwise, try to parse from current mergai branch name
@@ -138,7 +140,7 @@ class AppContext:
             target: Optional target branch to override auto-detection.
 
         Returns:
-            MergeContext with target_branch and merge_commit_short.
+            MergeContext with target_branch, target_branch_sha, and merge_commit_sha.
 
         Raises:
             click.ClickException: If context cannot be determined or conflicts.
@@ -146,11 +148,13 @@ class AppContext:
         # Get values from note.json if merge_info exists
         note = self.load_note()
         note_target = None
+        note_target_sha = None
         note_commit = None
         if note and "merge_info" in note:
             merge_info = note["merge_info"]
             note_target = merge_info.get("target_branch")
-            note_commit = merge_info.get("merge_commit_short")
+            note_target_sha = merge_info.get("target_branch_sha")
+            note_commit = merge_info.get("merge_commit")
 
         # Get values from current branch name
         current_branch = git_utils.get_current_branch(self.repo)
@@ -158,33 +162,50 @@ class AppContext:
             current_branch, self.config.branch
         )
         branch_target = parsed.target_branch if parsed else None
-        branch_commit = parsed.merge_commit_short if parsed else None
+        branch_target_sha = parsed.target_branch_sha if parsed else None
+        branch_commit = parsed.merge_commit_sha if parsed else None
 
         # Check for conflicts between note and branch (when both exist)
+        # Compare by resolving both to full SHA for accurate comparison
         if note_target and branch_target and note_target != branch_target:
             raise click.ClickException(
                 f"Conflict: target_branch in note.json ({note_target}) differs from "
                 f"current branch ({branch_target}). Use --target to specify explicitly."
             )
-        if note_commit and branch_commit and note_commit != branch_commit:
-            raise click.ClickException(
-                f"Conflict: merge_commit_short in note.json ({note_commit}) differs from "
-                f"current branch ({branch_commit}). Use COMMIT argument to specify explicitly."
-            )
+        if note_commit and branch_commit:
+            # Resolve branch_commit (possibly short) to full SHA for comparison
+            try:
+                branch_commit_full = self.repo.commit(branch_commit).hexsha
+                if note_commit != branch_commit_full:
+                    raise click.ClickException(
+                        f"Conflict: merge_commit in note.json ({note_commit}) differs from "
+                        f"current branch ({branch_commit}). Use COMMIT argument to specify explicitly."
+                    )
+            except Exception:
+                # If we can't resolve, compare as-is
+                if note_commit != branch_commit:
+                    raise click.ClickException(
+                        f"Conflict: merge_commit in note.json ({note_commit}) differs from "
+                        f"current branch ({branch_commit}). Use COMMIT argument to specify explicitly."
+                    )
 
         # Resolve final values: CLI args > note.json > branch > error
-        # Resolve merge_commit_short
+        # Resolve merge_commit to full SHA
         if commit is not None:
-            # CLI-provided commit - resolve to short SHA
+            # CLI-provided commit - resolve to full SHA
             try:
                 resolved = self.repo.commit(commit)
-                final_commit = git_utils.short_sha(resolved.hexsha)
+                final_commit = resolved.hexsha
             except Exception as e:
                 raise click.ClickException(f"Invalid commit reference '{commit}': {e}")
         elif note_commit:
             final_commit = note_commit
         elif branch_commit:
-            final_commit = branch_commit
+            # Resolve to full SHA
+            try:
+                final_commit = self.repo.commit(branch_commit).hexsha
+            except Exception as e:
+                raise click.ClickException(f"Cannot resolve commit from branch name '{branch_commit}': {e}")
         else:
             raise click.ClickException(
                 "Cannot determine merge commit. Either:\n"
@@ -204,9 +225,27 @@ class AppContext:
             # Fall back to current branch name (matches old behavior)
             final_target = current_branch
 
+        # Resolve target_branch_sha
+        if note_target_sha:
+            final_target_sha = note_target_sha
+        elif branch_target_sha:
+            # Resolve to full SHA
+            try:
+                final_target_sha = self.repo.commit(branch_target_sha).hexsha
+            except Exception:
+                # If can't resolve, use as-is
+                final_target_sha = branch_target_sha
+        else:
+            # Resolve from target branch
+            try:
+                final_target_sha = self.repo.commit(final_target).hexsha
+            except Exception as e:
+                raise click.ClickException(f"Cannot resolve target branch '{final_target}': {e}")
+
         return MergeContext(
             target_branch=final_target,
-            merge_commit_short=final_commit,
+            target_branch_sha=final_target_sha,
+            merge_commit_sha=final_commit,
         )
 
     def _get_target_branch_name(self) -> str:
@@ -422,19 +461,18 @@ class AppContext:
 
         merge_info = note["merge_info"]
         target_branch = merge_info["target_branch"]
-        merge_commit_short = merge_info["merge_commit_short"]
+        merge_commit_sha = merge_info["merge_commit"]
 
-        # Resolve merge commit to full hexsha
-        merge_commit = self.repo.commit(merge_commit_short)
+        # Resolve merge commit
+        merge_commit = self.repo.commit(merge_commit_sha)
         merge_commit_hexsha = merge_commit.hexsha
 
-
-        log.info(f"getting merged commits for merge context: target_branch={target_branch}, merge_commit={merge_commit_short}")
+        log.info(f"getting merged commits for merge context: target_branch={target_branch}, merge_commit={merge_commit_sha}")
         # Get the list of merged commits
         merged_commits = git_utils.get_merged_commits(
             self.repo,
             target_branch,
-            merge_commit_short,
+            merge_commit_sha,
         )
         log.info(f"found {len(merged_commits)} merged commits for merge context")
 
@@ -874,10 +912,10 @@ class AppContext:
         if merge_info is None:
             raise Exception(f"No merge_info found in the note.\n\n{hint_msg}")
 
-        merge_commit_short = merge_info["merge_commit_short"]
+        merge_commit = merge_info["merge_commit"]
 
-        # Build commit message
-        message = f"Merge commit '{merge_commit_short}'\n\n"
+        # Build commit message (use short SHA for display)
+        message = f"Merge commit '{git_utils.short_sha(merge_commit)}'\n\n"
 
         # Add MergAI footer
         message += MERGAI_COMMIT_FOOTER
