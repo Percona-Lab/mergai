@@ -2,6 +2,7 @@ import git
 import subprocess
 import click
 import logging
+import textwrap
 from . import git_utils
 from . import util
 from . import prompts
@@ -864,14 +865,15 @@ class AppContext:
         target_branch = self._get_target_branch_name()
         if conflict_context:
             theirs_sha = conflict_context["theirs_commit"]["short_sha"]
-            message = f"Merge commit '{theirs_sha}' into {target_branch}\n\n"
+            message = f"Resolve conflicts for merge commit '{theirs_sha}' into {target_branch}\n\n"
         else:
-            message = "Merge conflict solution\n\n"
+            message = "Resolve conflicts for merge\n\n"
 
         # Add summary from AI response
         summary = solution["response"].get("summary", "")
         if summary:
-            message += f"{summary}\n\n"
+            wrapped_summary = textwrap.fill(summary, width=72)
+            message += f"{wrapped_summary}\n\n"
 
         # Add resolved files section
         resolved_files = solution["response"].get("resolved", {})
