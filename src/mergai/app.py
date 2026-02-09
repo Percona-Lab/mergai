@@ -245,10 +245,11 @@ class AppContext:
                 final_target_sha = branch_target_sha
         else:
             # Resolve from target branch
+            # Uses fallback to origin/ for remote-only branches (common in CI)
             try:
-                final_target_sha = self.repo.commit(final_target).hexsha
-            except Exception as e:
-                raise click.ClickException(f"Cannot resolve target branch '{final_target}': {e}")
+                final_target_sha = git_utils.resolve_ref_sha(self.repo, final_target)
+            except ValueError as e:
+                raise click.ClickException(str(e))
 
         return MergeContext(
             target_branch=final_target,

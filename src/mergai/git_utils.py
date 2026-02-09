@@ -27,6 +27,44 @@ def short_sha(sha: str) -> str:
     return sha[:11]
 
 
+def resolve_ref_sha(repo: Repo, ref: str, try_remote: bool = True) -> str:
+    """Resolve a git reference (branch, tag, SHA) to its full SHA.
+
+    Tries to resolve the reference directly first. If that fails and try_remote
+    is True, attempts to resolve with 'origin/' prefix for remote-only branches.
+
+    This is useful in CI environments where branches may exist only on the remote
+    (e.g., after 'git fetch' without creating local tracking branches).
+
+    Args:
+        repo: GitPython Repo instance.
+        ref: Git reference to resolve (branch name, tag, SHA, etc.).
+        try_remote: If True, try 'origin/{ref}' when direct resolution fails.
+
+    Returns:
+        The full SHA (hexsha) of the resolved reference.
+
+    Raises:
+        ValueError: If the reference cannot be resolved locally or remotely.
+    """
+    # Try direct resolution first
+    try:
+        return repo.commit(ref).hexsha
+    except Exception as direct_error:
+        if not try_remote:
+            raise ValueError(
+                f"Cannot resolve ref '{ref}': {direct_error}"
+            )
+
+        # Try with origin/ prefix for remote-only branches
+        try:
+            return repo.commit(f"origin/{ref}").hexsha
+        except Exception as remote_error:
+            raise ValueError(
+                f"Cannot resolve ref '{ref}' (tried both local and origin/{ref}): {remote_error}"
+            )
+
+
 def author_to_dict(author):
     return {
         "name": author.name,

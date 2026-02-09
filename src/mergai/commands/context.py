@@ -200,12 +200,11 @@ def init(
         target_branch = current_branch
 
     # Resolve target branch SHA
+    # Uses fallback to origin/ for remote-only branches (common in CI)
     try:
-        target_branch_sha = app.repo.commit(target_branch).hexsha
-    except Exception as e:
-        raise click.ClickException(
-            f"Cannot resolve target branch '{target_branch}': {e}"
-        )
+        target_branch_sha = git_utils.resolve_ref_sha(app.repo, target_branch)
+    except ValueError as e:
+        raise click.ClickException(str(e))
 
     note = app.load_or_create_note()
 
