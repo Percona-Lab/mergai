@@ -1137,6 +1137,313 @@ class AppContext:
 
         self.add_selective_note(self.repo.head.commit.hexsha, ["merge_context"])
 
+    def _collect_commits_for_squash(self, target_sha: str) -> List[Tuple[git.Commit, Optional[dict]]]:
+        """Collect commits from HEAD to target_sha with their notes.
+
+        Iterates from HEAD backwards until reaching target_sha (exclusive),
+        collecting each commit and its mergai git note (if any).
+
+        Args:
+            target_sha: The SHA to stop at (not included in results).
+
+        Returns:
+            List of (commit, note) tuples, ordered from oldest to newest.
+            The note is None if the commit has no mergai note.
+
+        Raises:
+            click.ClickException: If target_sha is not an ancestor of HEAD.
+        """
+        commits_with_notes = []
+        target_sha_full = self.repo.commit(target_sha).hexsha
+
+        for commit in self.repo.iter_commits():
+            if commit.hexsha == target_sha_full:
+                break
+            git_note = self.read_note(commit.hexsha)
+            commits_with_notes.append((commit, git_note))
+        else:
+            # We didn't find target_sha in the history
+            raise click.ClickException(
+                f"Target commit {target_sha[:11]} is not an ancestor of HEAD. "
+                "Cannot determine commits to squash."
+            )
+
+        # Reverse to get oldest-first order
+        commits_with_notes.reverse()
+        return commits_with_notes
+
+    def _build_combined_note(
+        self, commits_with_notes: List[Tuple[git.Commit, Optional[dict]]], new_commit_sha: str
+    ) -> dict:
+        """Build a combined note from multiple commit notes.
+
+        Merges all note data from the provided commits into a single note:
+        - merge_info: taken from the first commit that has it
+        - conflict_context: taken from the first commit that has it
+        - merge_context: taken from the first commit that has it
+        - solutions: all solutions combined into a single array
+        - merge_description: taken from the first commit that has it
+        - pr_comments: taken from the first commit that has it
+        - user_comment: taken from the first commit that has it
+        - note_index: rebuilt to reference the new squashed commit
+
+        Args:
+            commits_with_notes: List of (commit, note) tuples from _collect_commits_for_squash.
+            new_commit_sha: The SHA of the new squashed commit for note_index.
+
+        Returns:
+            The combined note dict.
+        """
+        combined = {}
+        all_fields = []
+
+        for commit, git_note in commits_with_notes:
+            if git_note is None:
+                continue
+
+            # merge_info - take from first commit that has it
+            if "merge_info" in git_note and "merge_info" not in combined:
+                combined["merge_info"] = git_note["merge_info"]
+
+            # conflict_context - take from first commit that has it
+            if "conflict_context" in git_note and "conflict_context" not in combined:
+                combined["conflict_context"] = git_note["conflict_context"]
+                all_fields.append("conflict_context")
+
+            # merge_context - take from first commit that has it
+            if "merge_context" in git_note and "merge_context" not in combined:
+                combined["merge_context"] = git_note["merge_context"]
+                all_fields.append("merge_context")
+
+            # solutions - combine all into array
+            # Handle both "solution" (singular in git note) and "solutions" (array)
+            if "solution" in git_note:
+                if "solutions" not in combined:
+                    combined["solutions"] = []
+                idx = len(combined["solutions"])
+                combined["solutions"].append(git_note["solution"])
+                all_fields.append(f"solutions[{idx}]")
+
+            if "solutions" in git_note:
+                if "solutions" not in combined:
+                    combined["solutions"] = []
+                for solution in git_note["solutions"]:
+                    idx = len(combined["solutions"])
+                    combined["solutions"].append(solution)
+                    all_fields.append(f"solutions[{idx}]")
+
+            # merge_description - take from first commit that has it
+            if "merge_description" in git_note and "merge_description" not in combined:
+                combined["merge_description"] = git_note["merge_description"]
+                all_fields.append("merge_description")
+
+            # pr_comments - take from first commit that has it
+            if "pr_comments" in git_note and "pr_comments" not in combined:
+                combined["pr_comments"] = git_note["pr_comments"]
+                all_fields.append("pr_comments")
+
+            # user_comment - take from first commit that has it
+            if "user_comment" in git_note and "user_comment" not in combined:
+                combined["user_comment"] = git_note["user_comment"]
+                all_fields.append("user_comment")
+
+        # Build note_index pointing to the new squashed commit
+        if all_fields:
+            combined["note_index"] = [{"sha": new_commit_sha, "fields": all_fields}]
+
+        return combined
+
+    def _build_squash_commit_message(
+        self,
+        merge_info: dict,
+        commits_with_notes: List[Tuple[git.Commit, Optional[dict]]],
+        combined_note: dict,
+    ) -> str:
+        """Build the commit message for the squashed merge commit.
+
+        Creates a message in the format:
+            Merge commit '<short sha>' into <target_branch>
+
+            Conflicts:
+                <conflicted_file1>
+                <conflicted_file2>
+
+            Modified:
+                <modified_file1>
+                <modified_file2>
+
+            Squashed commits:
+                <sha1> <message1>
+                <sha2> <message2>
+
+            Note: commit created by mergai
+
+        Args:
+            merge_info: The merge_info dict containing target_branch and merge_commit.
+            commits_with_notes: List of (commit, note) tuples for reference.
+            combined_note: The combined note containing solutions and conflict_context.
+
+        Returns:
+            The formatted commit message string.
+        """
+        target_branch = merge_info["target_branch"]
+        merge_commit = merge_info["merge_commit"]
+
+        # Header
+        message = f"Merge commit '{git_utils.short_sha(merge_commit)}' into {target_branch}\n\n"
+
+        # Get conflicted files from conflict_context
+        conflict_context = combined_note.get("conflict_context", {})
+        conflict_files = set(conflict_context.get("files", []))
+
+        # Collect modified files ONLY from solution commits (not from the merge commit)
+        # Solution commits are identified by having a "solution" in their note
+        # or by NOT having "conflict_context" (the merge commit has conflict_context)
+        solution_modified_files = set()
+        for commit, note in commits_with_notes:
+            # Skip if this commit has conflict_context (it's the merge commit)
+            if note and "conflict_context" in note:
+                continue
+            # Include files from commits that have a solution or no note at all
+            # (PR merge commits may not have mergai notes)
+            modified = git_utils.get_commit_modified_files(self.repo, commit)
+            solution_modified_files.update(modified)
+
+        # Modified files are those changed by solution commits but not in the conflict list
+        modified_files = solution_modified_files - conflict_files
+
+        # Conflicts section
+        if conflict_files:
+            message += "Conflicts:\n"
+            for file_path in sorted(conflict_files):
+                message += f"\t{file_path}\n"
+            message += "\n"
+
+        # Modified section (files changed by solutions that weren't in conflict)
+        if modified_files:
+            message += "Modified:\n"
+            for file_path in sorted(modified_files):
+                message += f"\t{file_path}\n"
+            message += "\n"
+
+        # Include original commit messages as reference
+        message += "Squashed commits:\n"
+        for commit, _ in commits_with_notes:
+            short_sha = git_utils.short_sha(commit.hexsha)
+            # Get first line of commit message
+            first_line = commit.message.split("\n")[0].strip()
+            message += f"\t{short_sha} {first_line}\n"
+        message += "\n"
+
+        # Add MergAI footer
+        message += MERGAI_COMMIT_FOOTER
+
+        return message
+
+    def squash_to_merge(self):
+        """Squash all commits from HEAD to merge commit into a single merge commit.
+
+        This method:
+        1. Validates merge_info exists and we have commits to squash
+        2. Collects all commits and their notes from HEAD to target_branch_sha
+        3. Builds a combined note merging all individual notes
+        4. Creates a new merge commit with two parents (target_branch_sha, merge_commit)
+        5. Attaches the combined note to the new commit
+
+        Raises:
+            click.ClickException: If prerequisites are not met or operation fails.
+        """
+        # Check for uncommitted changes
+        if self.repo.is_dirty(untracked_files=False):
+            raise click.ClickException(
+                "Working directory has uncommitted changes. "
+                "Please commit or stash them before squashing."
+            )
+
+        # Load and validate merge_info
+        note = self.load_note()
+        if note is None:
+            raise click.ClickException(
+                "No note found. Please initialize merge context by running:\n"
+                "mergai context init <commit>"
+            )
+
+        merge_info = note.get("merge_info")
+        if merge_info is None:
+            raise click.ClickException(
+                "No merge_info found in the note. Please initialize merge context by running:\n"
+                "mergai context init <commit>"
+            )
+
+        target_branch_sha = merge_info.get("target_branch_sha")
+        merge_commit_sha = merge_info.get("merge_commit")
+
+        if not target_branch_sha or not merge_commit_sha:
+            raise click.ClickException(
+                "merge_info is incomplete (missing target_branch_sha or merge_commit). "
+                "Please reinitialize with 'mergai context init <commit>'."
+            )
+
+        # Check if HEAD is already at target_branch_sha (nothing to squash)
+        head_sha = self.repo.head.commit.hexsha
+        target_sha_full = self.repo.commit(target_branch_sha).hexsha
+
+        if head_sha == target_sha_full:
+            raise click.ClickException(
+                "HEAD is already at target_branch_sha. No commits to squash."
+            )
+
+        # Collect commits to squash
+        click.echo(f"Collecting commits from HEAD to {git_utils.short_sha(target_branch_sha)}...")
+        commits_with_notes = self._collect_commits_for_squash(target_branch_sha)
+
+        if not commits_with_notes:
+            raise click.ClickException("No commits found to squash.")
+
+        click.echo(f"Found {len(commits_with_notes)} commit(s) to squash.")
+
+        # Soft reset to target_branch_sha to stage all changes
+        click.echo(f"Resetting to {git_utils.short_sha(target_branch_sha)}...")
+        self.repo.git.reset("--soft", target_branch_sha)
+
+        # Create the merge commit with two parents using git commit-tree
+        # First, write the current index as a tree
+        tree_sha = self.repo.git.write_tree()
+
+        # Build combined note (we'll use a placeholder SHA for now, update after commit)
+        combined_note = self._build_combined_note(commits_with_notes, "PLACEHOLDER")
+
+        # Build commit message
+        message = self._build_squash_commit_message(merge_info, commits_with_notes, combined_note)
+
+        # Create commit with two parents: target_branch_sha (first parent) and merge_commit_sha (second parent)
+        click.echo("Creating squashed merge commit...")
+        new_commit_sha = self.repo.git.commit_tree(
+            tree_sha,
+            "-p", target_sha_full,
+            "-p", merge_commit_sha,
+            "-m", message
+        )
+
+        # Update HEAD to point to the new commit
+        self.repo.git.reset("--hard", new_commit_sha)
+
+        # Rebuild combined note with correct SHA
+        combined_note = self._build_combined_note(commits_with_notes, new_commit_sha)
+
+        # Also include merge_info from our local note (in case git notes didn't have it)
+        if "merge_info" not in combined_note:
+            combined_note["merge_info"] = merge_info
+
+        # Save combined note to local state
+        self.save_note(combined_note)
+
+        # Attach note to the new commit
+        click.echo("Attaching combined note to squashed commit...")
+        self.add_note(new_commit_sha)
+
+        click.echo(f"Successfully squashed {len(commits_with_notes)} commit(s) into {git_utils.short_sha(new_commit_sha)}")
+
     def get_merge_conflict(
         self, ref: str
     ) -> Tuple[Optional[git.Commit], Optional[dict]]:
