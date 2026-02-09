@@ -39,8 +39,16 @@ def create(app: AppContext, pr_type: str):
 
     \b
     - main: Creates a PR from the main branch (created with 'mergai branch create main')
-      against the target_branch from merge_info. Uses merge_info and merge_context
-      for title and body.
+      against the target_branch from merge_info. Auto-detects the merge scenario:
+
+      \b
+      1. No conflict: Uses merge_info and merge_context for the PR body.
+         Requires 'mergai context create merge' to have been run.
+
+      \b
+      2. Conflict resolution: When merge_context is not available but
+         conflict_context and solutions are present (after conflicts were
+         resolved and squashed), uses those for the PR body instead.
 
     - solution: Creates a PR from the current branch (typically a solution branch)
       against the conflict branch. Uses the solution data from note for title and body.
@@ -132,8 +140,40 @@ def create(app: AppContext, pr_type: str):
             raise Exception("No merge_info found in note. Run 'mergai context init' first.")
 
         merge_context = note.get("merge_context")
-        if not merge_context:
-            raise Exception("No merge_context found in note. Run 'mergai context create merge' first.")
+        conflict_context = note.get("conflict_context")
+        solutions = note.get("solutions", [])
+
+        # Auto-detect which case we're in:
+        # Case 1: No conflict - merge_context is present
+        # Case 2: Conflict resolution - conflict_context + solutions are present
+        if merge_context:
+            # Case 1: No conflict - use merge_context (original behavior)
+            body = util.merge_info_to_markdown(merge_info)
+            body += "\n"
+            body += util.merge_context_to_markdown(merge_context)
+        elif conflict_context and solutions:
+            # Case 2: Conflict resolution - use conflict_context + all solutions
+            body = util.merge_info_to_markdown(merge_info)
+            body += "\n"
+            body += util.conflict_resolution_pr_body_to_markdown(conflict_context, solutions)
+        else:
+            # Neither case is satisfied - provide helpful error message
+            if conflict_context and not solutions:
+                raise Exception(
+                    "Found conflict_context but no solutions. "
+                    "Run 'mergai resolve' to generate a solution first."
+                )
+            elif solutions and not conflict_context:
+                raise Exception(
+                    "Found solutions but no conflict_context. "
+                    "Run 'mergai context create conflict' first."
+                )
+            else:
+                raise Exception(
+                    "No merge_context or conflict resolution data found. "
+                    "Run 'mergai context create merge' for non-conflict merges, "
+                    "or ensure conflict_context and solutions are present for conflict resolutions."
+                )
 
         # Get target branch (base) from merge_info
         target_branch = merge_info["target_branch"]
@@ -142,14 +182,9 @@ def create(app: AppContext, pr_type: str):
         # Get current branch (head)
         head = git_utils.get_current_branch(app.repo)
 
-        # Build PR title and body from merge_info and merge_context (use short SHA for display)
+        # Build PR title (use short SHA for display)
         merge_commit_short = git_utils.short_sha(merge_commit_sha)
         title = f"MergAI: Merge {merge_commit_short} into {target_branch}"
-
-        # Build body with merge info and context
-        body = util.merge_info_to_markdown(merge_info)
-        body += "\n"
-        body += util.merge_context_to_markdown(merge_context)
 
         gh_repo = app.get_gh_repo()
 

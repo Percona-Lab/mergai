@@ -329,6 +329,101 @@ def solution_pr_body_to_markdown(solution: dict) -> str:
     return render_from_template(SOLUTION_PR_BODY_TEMPLATE, solution)
 
 
+CONFLICT_RESOLUTION_PR_BODY_TEMPLATE = """\
+# Conflict Resolution
+
+## Conflict Context
+
+- **Base Commit:** `{{ conflict_context.base_commit.hexsha }}`
+- **Ours Commit:** `{{ conflict_context.ours_commit.hexsha }}`
+- **Theirs Commit:** `{{ conflict_context.theirs_commit.hexsha }}`
+
+### Conflicted Files
+
+| Path | Conflict Type |
+|------|---------------|
+{%- for path, conflict_type in conflict_context.conflict_types.items() %}
+| `{{ path }}` | {{ conflict_type }} |
+{%- endfor %}
+
+{%- for solution in solutions %}
+
+## Solution {{ loop.index }}{% if loop.length == 1 %}{% endif %}
+
+### Summary
+
+{{ solution.response.summary }}
+
+### Resolved Files
+
+{%- if solution.response.resolved | length == 0 %}
+No files were resolved.
+{%- else %}
+| File Path | Resolution |
+|-----------|------------|
+{%- for file_path, resolution in solution.response.resolved.items() %}
+| `{{ file_path }}` | {{ resolution }} |
+{%- endfor %}
+{%- endif %}
+
+### Unresolved Files
+
+{%- if solution.response.unresolved | length == 0 %}
+All conflicts have been resolved.
+{%- else %}
+| File Path | Issue |
+|-----------|-------|
+{%- for file_path, issue in solution.response.unresolved.items() %}
+| `{{ file_path }}` | {{ issue }} |
+{%- endfor %}
+{%- endif %}
+
+{%- if solution.response.review_notes %}
+
+### Review Notes
+
+{{ solution.response.review_notes }}
+{%- endif %}
+
+<details>
+<summary>Agent Stats</summary>
+
+{%- if solution.agent_info %}
+
+**Agent:** {{ solution.agent_info.agent_type }} (version {{ solution.agent_info.version }})
+{%- endif %}
+
+{%- if solution.stats and solution.stats.models | length > 0 %}
+
+| Model | Input | Output | Cached | Thoughts | Tool | Total |
+|-------|-------|--------|--------|----------|------|-------|
+{%- for model, stat in solution.stats.models.items() %}
+| {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
+{%- endfor %}
+{%- endif %}
+
+</details>
+{%- endfor %}
+"""
+
+
+def conflict_resolution_pr_body_to_markdown(conflict_context: dict, solutions: list) -> str:
+    """Convert conflict context and solutions to markdown for PR body.
+
+    This is used when creating a main PR after conflict resolution,
+    where merge_context doesn't exist but conflict_context and solutions do.
+
+    Args:
+        conflict_context: The conflict context dict with commit info and conflicted files.
+        solutions: List of solution dicts, each with response, stats, and agent_info.
+
+    Returns:
+        Markdown formatted string suitable for PR body.
+    """
+    template = Template(CONFLICT_RESOLUTION_PR_BODY_TEMPLATE)
+    return template.render(conflict_context=conflict_context, solutions=solutions)
+
+
 def conflict_solution_to_str(solution: dict, format: str, pretty: bool = False):
     if format == "json":
         return json.dumps(solution, default=str, indent=2 if pretty else None) + "\n"
