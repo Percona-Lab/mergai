@@ -1445,29 +1445,6 @@ class AppContext:
 
         click.echo(f"Successfully squashed {len(commits_with_notes)} commit(s) into {git_utils.short_sha(new_commit_sha)}")
 
-    def get_merge_conflict(
-        self, ref: str
-    ) -> Tuple[Optional[git.Commit], Optional[dict]]:
-        note = None
-        conflict_context = None
-        for commit in self.repo.iter_commits(ref):
-            note = self.read_note(commit.hexsha)
-
-            if not conflict_context and note and "conflict_context" in note:
-                conflict_context = note["conflict_context"]
-
-            if git_utils.is_merge_commit(commit) and conflict_context:
-                parent1_sha = commit.parents[0].hexsha
-                parent2_sha = commit.parents[1].hexsha
-
-                ours_sha = conflict_context["ours_commit"]["hexsha"]
-                theirs_sha = conflict_context["theirs_commit"]["hexsha"]
-
-                if ours_sha == parent1_sha and theirs_sha == parent2_sha:
-                    return (commit, conflict_context)
-
-        return (None, conflict_context)
-
     def rebuild_note_from_commits(self) -> dict:
         """Rebuild note.json from git commit notes.
 

@@ -41,17 +41,6 @@ def register_commands(cli):
 
     cli.add_command(commit)
 
-    from .commands.repo import (
-        get_merge_conflict,
-        cherry_pick_solution,
-        finalize,
-        add_note,
-    )
-    cli.add_command(get_merge_conflict)
-    cli.add_command(cherry_pick_solution)
-    cli.add_command(finalize)
-    cli.add_command(add_note)
-
     from .commands.notes import notes
     cli.add_command(notes)
 
