@@ -24,14 +24,6 @@ def register_commands(cli):
 
     cli.add_command(describe)
 
-    from .commands.utils import get_merge_conflicts
-
-    cli.add_command(get_merge_conflicts)
-
-    from .commands.replay import replay
-
-    cli.add_command(replay)
-
     from .commands.pr import pr
 
     cli.add_command(pr)

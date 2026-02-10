@@ -384,22 +384,6 @@ def commit_has_conflicts(repo: Repo, commit: Commit) -> bool:
     return merge_has_conflicts(repo, parent1, parent2)
 
 
-def get_merge_conflicts(
-    repo: Repo, revision: str, max_count: int = 0
-) -> Iterator[Commit]:
-    merge_commits = list(repo.iter_commits(revision, merges=True))
-    total = len(merge_commits)
-
-    count = 0
-    for commit in merge_commits:
-        has_conflict = commit_has_conflicts(repo, commit)
-        if has_conflict:
-            count += 1
-            if max_count > 0 and count > max_count:
-                break
-            yield commit
-
-
 def read_commit_note(repo: Repo, ref: str, commit: str) -> Optional[str]:
     try:
         note = repo.git.notes("--ref", ref, "show", repo.commit(commit).hexsha)
