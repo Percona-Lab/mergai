@@ -15,7 +15,7 @@ from .. import git_utils
 from ..util import BranchNameBuilder
 
 
-CONTEXT_FLAGS = [
+CREATE_CONFLICT_CONTEXT_FLAGS = [
     click.option(
         "--use-diffs/--no-diffs",
         "use_diffs",
@@ -46,7 +46,7 @@ CONTEXT_FLAGS = [
 
 def conflict_context_flags(func):
     """Decorator to add conflict context flags to a command."""
-    for option in reversed(CONTEXT_FLAGS):
+    for option in reversed(CREATE_CONFLICT_CONTEXT_FLAGS):
         func = option(func)
     return func
 
@@ -128,7 +128,7 @@ def init(
                 app.save_note(note)
 
                 merge_info = note.get("merge_info", {})
-                click.echo("Rebuilt note.json from commit notes:")
+                click.echo("Context created from commit notes:")
                 click.echo(f"  target_branch: {merge_info.get('target_branch', 'N/A')}")
                 click.echo(f"  target_branch_sha: {merge_info.get('target_branch_sha', 'N/A')}")
                 click.echo(f"  merge_commit: {merge_info.get('merge_commit', 'N/A')}")
@@ -166,7 +166,7 @@ def init(
                 return
             except click.ClickException as e:
                 raise click.ClickException(
-                    f"Cannot rebuild note from commits: {e.message}\n\n"
+                    f"Cannot rebuild context from commits: {e.message}\n\n"
                     "COMMIT is required when not on a mergai branch and no commit notes exist."
                 )
 
@@ -371,7 +371,7 @@ def drop(app: AppContext, part: Optional[str], drop_all_solutions: bool):
     Examples:
         mergai context drop              # drops everything
         mergai context drop conflict     # drops only conflict_context
-        mergai context drop solution     # drops only uncommitted solutions
+        mergai context drop solution     # drops only uncommitted solution
         mergai context drop solution --all  # drops all solutions
         mergai context drop pr_comments  # drops only PR comments
     """
