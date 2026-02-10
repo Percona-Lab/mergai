@@ -134,6 +134,43 @@ def get_current_branch(repo: Repo) -> str:
         return short_sha(repo.head.commit.hexsha)
 
 
+def branch_exists_on_remote(
+    repo: Repo, branch_name: str, remote: str = "origin"
+) -> bool:
+    """Check if a branch exists on a remote.
+
+    Args:
+        repo: GitPython Repo instance.
+        branch_name: Name of the branch to check.
+        remote: Name of the remote (default: "origin").
+
+    Returns:
+        True if the branch exists on the remote, False otherwise.
+    """
+    try:
+        refs = repo.git.ls_remote("--heads", remote, branch_name)
+        return bool(refs.strip())
+    except Exception:
+        return False
+
+
+def branch_exists_locally(repo: Repo, branch_name: str) -> bool:
+    """Check if a branch exists locally.
+
+    Args:
+        repo: GitPython Repo instance.
+        branch_name: Name of the branch to check.
+
+    Returns:
+        True if the branch exists locally, False otherwise.
+    """
+    try:
+        repo.git.rev_parse("--verify", f"refs/heads/{branch_name}")
+        return True
+    except Exception:
+        return False
+
+
 def conflict_type_supports_diff(conflict_type: ConflictType) -> bool:
     return conflict_type in {
         ConflictType.BOTH_MODIFIED,

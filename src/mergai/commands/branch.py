@@ -87,44 +87,6 @@ def get_branch_builder(
         )
 
 
-def branch_exists_on_remote(
-    app: AppContext, branch_name: str, remote: str = "origin"
-) -> bool:
-    """Check if a branch exists on a remote.
-
-    Args:
-        app: Application context with repo.
-        branch_name: Name of the branch to check.
-        remote: Name of the remote (default: "origin").
-
-    Returns:
-        True if the branch exists on the remote, False otherwise.
-    """
-    try:
-        # List remote refs and check if branch exists
-        refs = app.repo.git.ls_remote("--heads", remote, branch_name)
-        return bool(refs.strip())
-    except Exception:
-        return False
-
-
-def branch_exists_locally(app: AppContext, branch_name: str) -> bool:
-    """Check if a branch exists locally.
-
-    Args:
-        app: Application context with repo.
-        branch_name: Name of the branch to check.
-
-    Returns:
-        True if the branch exists locally, False otherwise.
-    """
-    try:
-        app.repo.git.rev_parse("--verify", f"refs/heads/{branch_name}")
-        return True
-    except Exception:
-        return False
-
-
 @click.group()
 def branch():
     """Commands for managing merge-related branches.
@@ -186,14 +148,14 @@ def create(app: AppContext, type: str, commit: Optional[str], target: Optional[s
     branch_name = builder.get_branch_name(type)
 
     # Check if branch exists on origin
-    if branch_exists_on_remote(app, branch_name):
+    if git_utils.branch_exists_on_remote(app.repo, branch_name):
         raise click.ClickException(
             f"Branch '{branch_name}' already exists on origin. "
             "Delete it first with 'mergai branch delete'."
         )
 
     # Check if branch exists locally
-    if branch_exists_locally(app, branch_name):
+    if git_utils.branch_exists_locally(app.repo, branch_name):
         raise click.ClickException(
             f"Branch '{branch_name}' already exists locally. "
             "Delete it first with 'mergai branch delete'."
@@ -283,7 +245,7 @@ def delete(
             )
 
         # Delete local branch
-        local_exists = branch_exists_locally(app, branch_name)
+        local_exists = git_utils.branch_exists_locally(app.repo, branch_name)
         if local_exists:
             try:
                 app.repo.git.branch("-D", branch_name)
@@ -299,7 +261,7 @@ def delete(
 
         # Delete remote branch if requested
         if remote:
-            remote_exists = branch_exists_on_remote(app, branch_name)
+            remote_exists = git_utils.branch_exists_on_remote(app.repo, branch_name)
             if remote_exists:
                 try:
                     app.repo.git.push("origin", "--delete", branch_name)
@@ -381,7 +343,7 @@ def push(
         branch_name = builder.get_branch_name(branch_type)
 
         # Check if branch exists locally
-        local_exists = branch_exists_locally(app, branch_name)
+        local_exists = git_utils.branch_exists_locally(app.repo, branch_name)
         if local_exists:
             try:
                 push_args = ["origin", branch_name]
