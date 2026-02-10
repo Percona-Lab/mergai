@@ -52,9 +52,7 @@ def resolve_ref_sha(repo: Repo, ref: str, try_remote: bool = True) -> str:
         return repo.commit(ref).hexsha
     except Exception as direct_error:
         if not try_remote:
-            raise ValueError(
-                f"Cannot resolve ref '{ref}': {direct_error}"
-            )
+            raise ValueError(f"Cannot resolve ref '{ref}': {direct_error}")
 
         # Try with origin/ prefix for remote-only branches
         try:
@@ -122,12 +120,10 @@ def mark_conflict_markers_unresolved(file_path: str) -> None:
             return match.group(0)
         return f"{marker}{rest} (UNRESOLVED)"
 
-    modified_content = re.sub(pattern, add_unresolved_marker, content, flags=re.MULTILINE)
+    modified_content = re.sub(
+        pattern, add_unresolved_marker, content, flags=re.MULTILINE
+    )
     path.write_text(modified_content)
-
-
-def get_path_hash(path: str) -> str:
-    return hashlib.sha256(path.encode("utf-8")).hexdigest()
 
 
 def get_current_branch(repo: Repo) -> str:
@@ -136,29 +132,6 @@ def get_current_branch(repo: Repo) -> str:
     except TypeError:
         # Detached HEAD state
         return short_sha(repo.head.commit.hexsha)
-
-
-def remove_branch_if_exists(repo: Repo, branch_name: str):
-    try:
-        repo.git.branch("-D", branch_name)
-    except Exception:
-        pass
-
-
-def github_file_compare_url(
-    owner: str, name: str, base_commit: str, head_commit: str, path: str
-) -> str:
-    """
-    Build a GitHub compare URL that scrolls to a single file's diff.
-    Uses anchor: #diff-<SHA256(path)>
-    """
-    # path must be repo-relative, no leading slash – same as from unmerged_blobs()
-    anchor = hashlib.sha256(path.encode("utf-8")).hexdigest()
-    # You can shorten SHAs if you like; full SHA is also fine
-    base = base_commit[:12]
-    head = head_commit[:12]
-
-    return f"https://github.com/{owner}/{name}/compare/{base}...{head}#diff-{anchor}"
 
 
 def conflict_type_supports_diff(conflict_type: ConflictType) -> bool:
@@ -361,29 +334,6 @@ def merge_has_conflicts(repo: Repo, parent1: Commit, parent2: Commit) -> bool:
         return True
 
 
-def is_valid_commit(repo: Repo, commit_sha: str) -> bool:
-    try:
-        repo.commit(commit_sha)
-        return True
-    except Exception:
-        return False
-
-
-def is_merge_commit(commit: Commit) -> bool:
-    return len(commit.parents) >= 2
-
-
-def commit_has_conflicts(repo: Repo, commit: Commit) -> bool:
-    # A merge commit must have at least two parents
-    if len(commit.parents) < 2:
-        return False
-
-    parent1 = commit.parents[0]
-    parent2 = commit.parents[1]
-
-    return merge_has_conflicts(repo, parent1, parent2)
-
-
 def read_commit_note(repo: Repo, ref: str, commit: str) -> Optional[str]:
     try:
         note = repo.git.notes("--ref", ref, "show", repo.commit(commit).hexsha)
@@ -424,22 +374,22 @@ def is_merge_conflict_style_diff3(repo: Repo) -> bool:
 @dataclass
 class ForkStatus:
     """Status information about a fork compared to its upstream base."""
-    
+
     fork_ref: str
     upstream_ref: str
-    
+
     # Commit count
     commits_behind: int
-    
+
     # Key commits
     last_merged_commit: Optional[Commit]
     first_unmerged_commit: Optional[Commit]
     last_unmerged_commit: Optional[Commit]
     merge_base_commit: Optional[Commit]
-    
+
     # List of unmerged commits (for optional listing)
     unmerged_commits: List[Commit]
-    
+
     # Divergence stats
     files_affected: int
     total_additions: int
@@ -449,25 +399,25 @@ class ForkStatus:
     def is_up_to_date(self) -> bool:
         """Check if the fork is up to date with upstream."""
         return self.commits_behind == 0
-    
+
     @property
     def days_behind(self) -> int:
         """Calculate the number of days since the last merged commit."""
         if not self.last_merged_commit:
             return 0
-        
+
         last_merged_date = datetime.fromtimestamp(
             self.last_merged_commit.authored_date, tz=timezone.utc
         )
         now = datetime.now(tz=timezone.utc)
         return (now - last_merged_date).days
-    
+
     @property
     def unmerged_date_range(self) -> Optional[Tuple[datetime, datetime]]:
         """Get the date range of unmerged commits (first, last)."""
         if not self.first_unmerged_commit or not self.last_unmerged_commit:
             return None
-        
+
         first_date = datetime.fromtimestamp(
             self.first_unmerged_commit.authored_date, tz=timezone.utc
         )
@@ -475,7 +425,7 @@ class ForkStatus:
             self.last_unmerged_commit.authored_date, tz=timezone.utc
         )
         return (first_date, last_date)
-    
+
     @property
     def unmerged_days_span(self) -> int:
         """Get the number of days spanned by unmerged commits."""
@@ -672,12 +622,12 @@ def is_branching_point(
 def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
     """
     Get comprehensive status about how a fork diverges from its upstream base.
-    
+
     Args:
         repo: GitPython Repo object
         upstream_ref: The upstream/base branch/ref to compare against
         fork_ref: The fork branch/ref (downstream, typically HEAD)
-        
+
     Returns:
         ForkStatus object with divergence information showing commits
         in upstream that need to be merged into the fork.
@@ -688,7 +638,7 @@ def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
         merge_base_commit = merge_base[0] if merge_base else None
     except Exception:
         merge_base_commit = None
-    
+
     # Get commits behind (in upstream but not in fork)
     # These are commits we need to merge from upstream
     # git rev-list fork_ref..upstream_ref = commits in upstream not in fork
@@ -698,23 +648,23 @@ def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
         unmerged_commits = [repo.commit(sha) for sha in behind_shas if sha]
     except Exception:
         unmerged_commits = []
-    
+
     # Find last merged commit (most recent commit in upstream that's also in fork)
     # This is essentially the merge base
     last_merged_commit = merge_base_commit
-    
+
     # First unmerged commit (oldest commit in upstream not in fork)
     # unmerged_commits are in reverse chronological order (newest first)
     first_unmerged_commit = unmerged_commits[-1] if unmerged_commits else None
-    
+
     # Last unmerged commit (most recent commit in upstream not in fork)
     last_unmerged_commit = unmerged_commits[0] if unmerged_commits else None
-    
+
     # Get divergence stats using git diff --stat
     files_affected = 0
     total_additions = 0
     total_deletions = 0
-    
+
     if unmerged_commits:
         numstat = None
         # Try three-dot diff first (uses merge base)
@@ -727,7 +677,7 @@ def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
                 numstat = repo.git.diff("--numstat", fork_ref, upstream_ref).strip()
             except Exception as e:
                 log.warning(f"Failed to get diff stats: {e}")
-        
+
         if numstat:
             # Use numstat for machine-readable output
             # Format: additions<tab>deletions<tab>filename
@@ -742,7 +692,7 @@ def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
                         total_additions += int(parts[0])
                     if parts[1] != "-":
                         total_deletions += int(parts[1])
-    
+
     return ForkStatus(
         fork_ref=fork_ref,
         upstream_ref=upstream_ref,
