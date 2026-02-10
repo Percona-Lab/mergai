@@ -28,7 +28,7 @@ def register_commands(cli):
 
     cli.add_command(pr)
 
-    from .commands.notes import show, status, log, prompt, comment, merge_prompt
+    from .commands.util import show, status, log, prompt, comment, merge_prompt
 
     cli.add_command(show)
     cli.add_command(status)
@@ -46,15 +46,14 @@ def register_commands(cli):
         cherry_pick_solution,
         finalize,
         add_note,
-        update,
-        push,
     )
     cli.add_command(get_merge_conflict)
     cli.add_command(cherry_pick_solution)
     cli.add_command(finalize)
     cli.add_command(add_note)
-    cli.add_command(update)
-    cli.add_command(push)
+
+    from .commands.notes import notes
+    cli.add_command(notes)
 
     from .commands.fork import fork
     cli.add_command(fork)
