@@ -3,7 +3,7 @@ import json
 
 
 class StateStore:
-    DEFAULT_DIR = ".mergai_state"
+    DEFAULT_DIR = ".cache/mergai"
     NOTE_FILE = "note.json"
     JSON_INDENT = 2
 
