@@ -2,11 +2,9 @@ from typing import Dict, Type
 
 from .base import Agent
 from .gemini_cli import GeminiCLIAgent
-from .opencode import OpenCodeAgent
 
 REGISTRY: Dict[str, Type[Agent]] = {
     "gemini-cli": GeminiCLIAgent,
-    "opencode": OpenCodeAgent,
 }
 
 
