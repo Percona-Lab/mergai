@@ -1,6 +1,6 @@
 """Configuration file support for MergAI.
 
-This module handles loading and parsing the .mergai.yaml configuration file.
+This module handles loading and parsing the .mergai/config.yaml configuration file.
 
 The config file supports a nested structure where each command/subcommand
 can have its own section. Example:
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 
-DEFAULT_CONFIG_PATH = ".mergai.yaml"
+DEFAULT_CONFIG_PATH = ".mergai/config.yaml"
 
 
 @dataclass
@@ -281,7 +281,7 @@ def load_config(config_path: Optional[str] = None) -> MergaiConfig:
     """Load configuration from a YAML file.
 
     If config_path is explicitly provided and the file doesn't exist, raises an error.
-    If config_path is None and the default .mergai.yaml doesn't exist, returns default config.
+    If config_path is None and the default .mergai/config.yaml doesn't exist, returns default config.
 
     Args:
         config_path: Path to the config file, or None to use the default path.

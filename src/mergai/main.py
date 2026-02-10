@@ -73,7 +73,7 @@ def register_commands(cli):
     "config_path",
     type=click.Path(),
     default=None,
-    help="Path to config file (default: .mergai.yaml)",
+    help="Path to config file (default: .mergai/config.yaml)",
 )
 @click.option(
     "--repo-path",

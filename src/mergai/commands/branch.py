@@ -138,7 +138,7 @@ def branch():
     - conflict: Branch with committed merge markers
     - solution: Branch for solution attempts (PRs from here)
 
-    Branch names are generated using the format from .mergai.yaml:
+    Branch names are generated using the format from .mergai/config.yaml:
     branch.name_format (default: "mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)")
 
     When on a mergai branch, COMMIT and --target can often be omitted

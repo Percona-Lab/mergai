@@ -37,7 +37,7 @@ def resolve_upstream_ref(
 
     if upstream_url is None:
         click.echo("Error: No UPSTREAM-REF provided and fork.upstream_url not configured.", err=True)
-        click.echo("Either provide UPSTREAM-REF argument or set fork.upstream_url in .mergai.yaml", err=True)
+        click.echo("Either provide UPSTREAM-REF argument or set fork.upstream_url in .mergai/config.yaml", err=True)
         raise SystemExit(1)
 
     remote_name = git_utils.find_remote_by_url(app.repo, upstream_url)
@@ -235,7 +235,7 @@ def init(app: AppContext, upstream_url: Optional[str]):
 
     if url is None:
         click.echo("Error: No upstream URL provided and fork.upstream_url not configured.", err=True)
-        click.echo("Either provide UPSTREAM-URL argument or set fork.upstream_url in .mergai.yaml", err=True)
+        click.echo("Either provide UPSTREAM-URL argument or set fork.upstream_url in .mergai/config.yaml", err=True)
         raise SystemExit(1)
 
     # Determine desired remote name from config, default to "upstream"
