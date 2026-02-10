@@ -203,7 +203,18 @@ def log(app: AppContext):
         notes = app.get_notes()
         output_str = ""
         for idx, (commit, note) in enumerate(notes):
-            output_str += util.commit_note_to_summary_str(commit, note, format="text")
+            if note is not None:
+                output_str += util.commit_note_to_summary_str(
+                    commit, note, format="text"
+                )
+            else:
+                output_str += f"commit: {commit.hexsha}\n"
+                output_str += f"Author: {commit.author.name} <{commit.author.email}>\n"
+                output_str += f"Date:   {commit.authored_datetime}\n"
+                output_str += "Content:\n"
+                output_str += "  (no note)\n"
+                output_str += f"Message:\n    {commit.message.strip().replace('\n', '\n    ')}\n"
+                output_str += "\n"
 
         util.print_or_page(output_str, format="text")
 

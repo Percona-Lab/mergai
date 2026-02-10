@@ -301,24 +301,48 @@ class AppContext:
         return None
 
     def get_notes(self):
-        def get_notes_from_commits():
-            notes = []
-            for commit in self.repo.iter_commits():
-                note_str = git_utils.read_commit_note(
-                    self.repo, "mergai", commit.hexsha
-                )
-                if note_str is None:
-                    # TODO: handle commits without notes ?
-                    return notes
+        """Return all commits with notes from HEAD until the merge commit (from merge_info).
 
-                note = json.loads(note_str)
-                notes.append((commit, note))
+        Each item is (commit, note) where note is the parsed note dict or None if the
+        commit has no mergai note. Stops when the merge commit (merge_info["merge_commit"])
+        is reached, inclusive.
+        """
+        merge_commit_sha = None
+        note = self.load_note()
+        if note and "merge_info" in note:
+            try:
+                merge_commit_sha = self.repo.commit(
+                    note["merge_info"]["merge_commit"]
+                ).hexsha
+            except Exception:
+                pass
 
-            notes.reverse()
-            return notes
+        notes = []
+        for commit in self.repo.iter_commits():
+            note_str = git_utils.read_commit_note(
+                self.repo, "mergai", commit.hexsha
+            )
+            if note_str is not None:
+                try:
+                    note = json.loads(note_str)
+                except json.JSONDecodeError:
+                    note = None
+            else:
+                note = None
 
-        notes = get_notes_from_commits()
-        notes.reverse()
+            if note and "merge_info" in note and merge_commit_sha is None:
+                try:
+                    merge_commit_sha = self.repo.commit(
+                        note["merge_info"]["merge_commit"]
+                    ).hexsha
+                except Exception:
+                    pass
+
+            notes.append((commit, note))
+
+            if merge_commit_sha and commit.hexsha == merge_commit_sha:
+                break
+
         return notes
 
     def load_or_create_note(self) -> dict:
