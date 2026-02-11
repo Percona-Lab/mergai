@@ -45,6 +45,8 @@ def _create_pr(
 def _build_solutions_pr_body(app: AppContext) -> str:
     body = util.merge_info_to_markdown(app.merge_info)
     body += "\n\n"
+    body += util.merge_context_to_markdown(app.merge_context)
+    body += "\n\n"
     body += util.conflict_context_to_markdown(app.conflict_context)
     body += "\n\n"
     body += util.solutions_to_markdown(app.solutions)
