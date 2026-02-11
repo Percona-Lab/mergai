@@ -747,7 +747,6 @@ class AppContext:
             "merge_commit": merge_commit_hexsha,
             "merged_commits": merged_commits,
             "important_files_modified": important_files_modified,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
         }
 
         note["merge_context"] = context
