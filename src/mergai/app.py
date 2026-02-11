@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import tempfile
 from pathlib import Path
 from .agents.base import Agent
+from .util import BranchNameBuilder
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +96,9 @@ def convert_note(
                         output_str += f"## Solution {idx + 1}\n\n"
                     output_str += util.conflict_solution_to_markdown(solution) + "\n"
             elif "solution" in note:
-                output_str += util.conflict_solution_to_markdown(note["solution"]) + "\n"
+                output_str += (
+                    util.conflict_solution_to_markdown(note["solution"]) + "\n"
+                )
         if show_merge_description and "merge_description" in note:
             output_str += (
                 util.merge_description_to_markdown(note["merge_description"]) + "\n"
@@ -105,7 +108,13 @@ def convert_note(
     return str(note)
 
 
-# TODO: refactor
+@dataclass
+class MergeInfo:
+    target_branch: str
+    target_branch_sha: str
+    merge_commit_sha: str
+
+
 class AppContext:
     def __init__(self, config: MergaiConfig = None):
         self.config: MergaiConfig = config if config is not None else MergaiConfig()
@@ -114,6 +123,103 @@ class AppContext:
         gh_token = gh_auth_token()
         self.gh_repo_str: Optional[str] = None
         self.gh = github.Github(gh_auth_token()) if gh_token else None
+        self._note: Optional[dict] = None
+
+    def _require_note(self) -> dict:
+        """Load note and raise ClickException if missing."""
+
+        if self._note is not None:
+            return self._note
+
+        self._note = self.load_note()
+
+        if not self._note:
+            raise click.ClickException(
+                "No note found. Run 'mergai context init' first."
+            )
+
+        return self._note
+
+    def _require_merge_info(self) -> dict:
+        """Return merge info from note or raise ClickException if missing."""
+
+        self._require_note()
+
+        if "merge_info" not in self._note:
+            raise click.ClickException(
+                "No merge info found in note. Run 'mergai context init' first."
+            )
+
+        return MergeInfo(
+            target_branch=self._note["merge_info"]["target_branch"],
+            target_branch_sha=self._note["merge_info"]["target_branch_sha"],
+            merge_commit_sha=self._note["merge_info"]["merge_commit"],
+        )
+
+    @property
+    def branches(self) -> BranchNameBuilder:
+        merge_info = self.merge_info
+        try:
+            return util.BranchNameBuilder.from_config(
+                self.config.branch,
+                merge_info.target_branch,
+                merge_info.merge_commit_sha,
+                merge_info.target_branch_sha,
+            )
+        except ValueError as e:
+            raise click.ClickException(f"Invalid branch name format in config: {e}")
+
+    @property
+    def merge_info(self) -> MergeInfo:
+        return self._require_merge_info()
+
+    @property
+    def conflict_context(self) -> dict:
+        self._require_note()
+        if "conflict_context" not in self._note:
+            raise click.ClickException(
+                "No conflict context found in note. Run 'mergai context create conflict' first."
+            )
+        return self._note["conflict_context"]
+
+    @property
+    def has_conflict_context(self) -> bool:
+        return "conflict_context" in self._note
+
+    @property
+    def has_merge_context(self) -> bool:
+        self._require_note()
+        return "merge_context" in self._note
+
+    @property
+    def merge_context(self) -> dict:
+        self._require_note()
+        if "merge_context" not in self._note:
+            raise click.ClickException(
+                "No merge context found in note. Run 'mergai context create merge' first."
+            )
+        return self._note["merge_context"]
+
+
+    def check_all_solutions_committed(self) -> bool:
+        solutions = self.solutions
+        committed = self._get_committed_solution_indices(self._note)
+        return all(i in committed for i in range(len(solutions)))
+
+    @property
+    def solutions(self) -> List[dict]:
+        self._require_note()
+        if "solutions" not in self._note:
+            raise click.ClickException(
+                "No solutions found in note. Run 'mergai resolve' first."
+            )
+        return self._note["solutions"]
+
+    @property
+    def has_solutions(self) -> bool:
+        return "solutions" in self._note
+
+    # TODO: refactor
 
     def get_repo(self) -> git.Repo:
         return self.repo
@@ -213,7 +319,9 @@ class AppContext:
             try:
                 final_commit = self.repo.commit(branch_commit).hexsha
             except Exception as e:
-                raise click.ClickException(f"Cannot resolve commit from branch name '{branch_commit}': {e}")
+                raise click.ClickException(
+                    f"Cannot resolve commit from branch name '{branch_commit}': {e}"
+                )
         else:
             raise click.ClickException(
                 "Cannot determine merge commit. Either:\n"
@@ -319,9 +427,7 @@ class AppContext:
 
         notes = []
         for commit in self.repo.iter_commits():
-            note_str = git_utils.read_commit_note(
-                self.repo, "mergai", commit.hexsha
-            )
+            note_str = git_utils.read_commit_note(self.repo, "mergai", commit.hexsha)
             if note_str is not None:
                 try:
                     note = json.loads(note_str)
@@ -435,8 +541,11 @@ class AppContext:
             # Also remove solutions entries from note_index
             if "note_index" in note:
                 note["note_index"] = [
-                    entry for entry in note["note_index"]
-                    if not any(f.startswith("solutions[") for f in entry.get("fields", []))
+                    entry
+                    for entry in note["note_index"]
+                    if not any(
+                        f.startswith("solutions[") for f in entry.get("fields", [])
+                    )
                 ]
         else:
             # Only drop uncommitted solutions
@@ -444,7 +553,8 @@ class AppContext:
             if committed_indices:
                 # Keep only committed solutions
                 note["solutions"] = [
-                    note["solutions"][i] for i in sorted(committed_indices)
+                    note["solutions"][i]
+                    for i in sorted(committed_indices)
                     if i < len(note["solutions"])
                 ]
             else:
@@ -470,6 +580,7 @@ class AppContext:
             return committed
 
         import re
+
         for entry in note["note_index"]:
             for field in entry.get("fields", []):
                 # Match "solutions[N]" pattern
@@ -591,9 +702,7 @@ class AppContext:
 
         # Require merge_info to be initialized
         if "merge_info" not in note:
-            raise Exception(
-                "merge_info not found. Run 'mergai context init' first."
-            )
+            raise Exception("merge_info not found. Run 'mergai context init' first.")
 
         # Check for existing merge_context
         if "merge_context" in note and not force:
@@ -609,7 +718,9 @@ class AppContext:
         merge_commit = self.repo.commit(merge_commit_sha)
         merge_commit_hexsha = merge_commit.hexsha
 
-        log.info(f"getting merged commits for merge context: target_branch={target_branch}, merge_commit={merge_commit_sha}")
+        log.info(
+            f"getting merged commits for merge context: target_branch={target_branch}, merge_commit={merge_commit_sha}"
+        )
         # Get the list of merged commits
         merged_commits = git_utils.get_merged_commits(
             self.repo,
@@ -630,9 +741,7 @@ class AppContext:
                 modified = git_utils.get_commit_modified_files(self.repo, commit)
                 all_modified_files.update(modified)
 
-            important_files_modified = sorted(
-                set(important_files) & all_modified_files
-            )
+            important_files_modified = sorted(set(important_files) & all_modified_files)
 
         context = {
             "merge_commit": merge_commit_hexsha,
@@ -872,7 +981,9 @@ class AppContext:
                 )
 
             if attempt == max_attempts - 1:
-                click.echo("Max attempts reached. Failed to obtain a valid description.")
+                click.echo(
+                    "Max attempts reached. Failed to obtain a valid description."
+                )
                 description = None
                 break
 
@@ -976,9 +1087,7 @@ class AppContext:
                 selective_note[field] = note[field]
 
         # Write selective note to temp file and attach as git note
-        with tempfile.NamedTemporaryFile(
-            mode="w", suffix=".json", delete=False
-        ) as f:
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(selective_note, f, indent=2)
             temp_path = f.name
 
@@ -1090,7 +1199,9 @@ class AppContext:
         self.repo.index.commit(message)
 
         # Add note with the specific solution index
-        self.add_selective_note(self.repo.head.commit.hexsha, [f"solutions[{uncommitted_idx}]"])
+        self.add_selective_note(
+            self.repo.head.commit.hexsha, [f"solutions[{uncommitted_idx}]"]
+        )
 
     def commit_conflict(self):
         hint_msg = "Please prepare the conflict context by running:\nmergai create-conflict-context"
@@ -1141,7 +1252,9 @@ class AppContext:
         Raises:
             Exception: If no note found or merge_info is missing.
         """
-        hint_msg = "Please initialize merge context by running:\nmergai context init <commit>"
+        hint_msg = (
+            "Please initialize merge context by running:\nmergai context init <commit>"
+        )
         note = self.load_note()
         if note is None:
             raise Exception(f"No note found.\n\n{hint_msg}")
@@ -1162,7 +1275,9 @@ class AppContext:
 
         self.add_selective_note(self.repo.head.commit.hexsha, ["merge_context"])
 
-    def _collect_commits_for_squash(self, target_sha: str) -> List[Tuple[git.Commit, Optional[dict]]]:
+    def _collect_commits_for_squash(
+        self, target_sha: str
+    ) -> List[Tuple[git.Commit, Optional[dict]]]:
         """Collect commits from HEAD to target_sha with their notes.
 
         Iterates from HEAD backwards until reaching target_sha (exclusive),
@@ -1198,7 +1313,9 @@ class AppContext:
         return commits_with_notes
 
     def _build_combined_note(
-        self, commits_with_notes: List[Tuple[git.Commit, Optional[dict]]], new_commit_sha: str
+        self,
+        commits_with_notes: List[Tuple[git.Commit, Optional[dict]]],
+        new_commit_sha: str,
     ) -> dict:
         """Build a combined note from multiple commit notes.
 
@@ -1419,7 +1536,9 @@ class AppContext:
             )
 
         # Collect commits to squash
-        click.echo(f"Collecting commits from HEAD to {git_utils.short_sha(target_branch_sha)}...")
+        click.echo(
+            f"Collecting commits from HEAD to {git_utils.short_sha(target_branch_sha)}..."
+        )
         commits_with_notes = self._collect_commits_for_squash(target_branch_sha)
 
         if not commits_with_notes:
@@ -1439,15 +1558,14 @@ class AppContext:
         combined_note = self._build_combined_note(commits_with_notes, "PLACEHOLDER")
 
         # Build commit message
-        message = self._build_squash_commit_message(merge_info, commits_with_notes, combined_note)
+        message = self._build_squash_commit_message(
+            merge_info, commits_with_notes, combined_note
+        )
 
         # Create commit with two parents: target_branch_sha (first parent) and merge_commit_sha (second parent)
         click.echo("Creating squashed merge commit...")
         new_commit_sha = self.repo.git.commit_tree(
-            tree_sha,
-            "-p", target_sha_full,
-            "-p", merge_commit_sha,
-            "-m", message
+            tree_sha, "-p", target_sha_full, "-p", merge_commit_sha, "-m", message
         )
 
         # Update HEAD to point to the new commit
@@ -1467,7 +1585,9 @@ class AppContext:
         click.echo("Attaching combined note to squashed commit...")
         self.add_note(new_commit_sha)
 
-        click.echo(f"Successfully squashed {len(commits_with_notes)} commit(s) into {git_utils.short_sha(new_commit_sha)}")
+        click.echo(
+            f"Successfully squashed {len(commits_with_notes)} commit(s) into {git_utils.short_sha(new_commit_sha)}"
+        )
 
     def rebuild_note_from_commits(self) -> dict:
         """Rebuild note.json from git commit notes.
@@ -1549,8 +1669,11 @@ class AppContext:
                 else:
                     # Check consistency
                     current_mi = git_note["merge_info"]
-                    if (current_mi.get("target_branch") != reference_merge_info.get("target_branch") or
-                        current_mi.get("merge_commit") != reference_merge_info.get("merge_commit")):
+                    if current_mi.get("target_branch") != reference_merge_info.get(
+                        "target_branch"
+                    ) or current_mi.get("merge_commit") != reference_merge_info.get(
+                        "merge_commit"
+                    ):
                         raise click.ClickException(
                             f"Inconsistent merge_info found across commits.\n"
                             f"Reference (from earlier commit): target_branch={reference_merge_info.get('target_branch')}, "
@@ -1598,10 +1721,12 @@ class AppContext:
 
             # Add to note_index if we collected any fields
             if fields_for_this_commit:
-                note["note_index"].append({
-                    "sha": commit_sha,
-                    "fields": fields_for_this_commit,
-                })
+                note["note_index"].append(
+                    {
+                        "sha": commit_sha,
+                        "fields": fields_for_this_commit,
+                    }
+                )
 
         # Clean up empty collections
         if not note["solutions"]:

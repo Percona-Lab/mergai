@@ -1,12 +1,139 @@
 import click
 from ..app import AppContext
-from github import Github
 from github import PullRequest as GithubPullRequest
-from github import IssueComment as GithubIssueComment
-from github import PullRequestComment as GithubPullRequestComment
+from github import GithubException
 from .. import git_utils
 from .. import util
-from typing import Optional, List, Iterable
+from typing import Optional, List
+
+
+def _create_pr(
+    app: AppContext, title: str, body: str, head: str, base: str, dry_run: bool = False
+):
+    gh_repo = app.get_gh_repo()
+    click.echo(
+        f"Creating PR:\n"
+        f"    repo: {gh_repo.full_name}\n"
+        f"    from: {head}\n"
+        f"      to: {base}\n"
+        f"   title: {title}"
+    )
+
+    if dry_run:
+        click.echo("--- body ---")
+        click.echo(body)
+        click.echo("--- end ---")
+        return None
+
+    try:
+        pr = gh_repo.create_pull(title=title, body=body, head=head, base=base)
+        click.echo(f"PR created: {pr.html_url}")
+        return pr
+    except GithubException as e:
+        if e.status == 422:
+            data = e.data if isinstance(e.data, dict) else {}
+            errors = data.get("errors") or []
+            fields = {err.get("field") for err in errors if isinstance(err, dict)}
+            if fields and fields <= {"base", "head"}:
+                raise click.ClickException(
+                    "GitHub rejected the PR: branch(es) not found on remote. Push your branches first."
+                ) from e
+        msg = e.data.get("message", str(e)) if isinstance(e.data, dict) else str(e)
+        raise click.ClickException(f"GitHub API error: {msg}") from e
+
+
+def _build_solutions_pr_body(app: AppContext) -> str:
+    body = util.merge_info_to_markdown(app.merge_info)
+    body += "\n\n"
+    body += util.conflict_context_to_markdown(app.conflict_context)
+    body += "\n\n"
+    body += util.solutions_to_markdown(app.solutions)
+    body += "\n\n"
+    return body
+
+
+def _build_merge_pr_body(app: AppContext) -> str:
+    body = util.merge_info_to_markdown(app.merge_info)
+    body += "\n\n"
+    body += util.merge_context_to_markdown(app.merge_context)
+    body += "\n\n"
+    return body
+
+
+def _create_solution_pr(app: AppContext, dry_run: bool) -> None:
+    """Create a PR from the current branch (with existing solution commits) to the conflict branch."""
+
+    merge_info = app.merge_info
+    branches = app.branches
+
+    if not app.check_all_solutions_committed():
+        raise click.ClickException(
+            "You have uncommitted solution(s). Run 'mergai commit solution' first."
+        )
+
+    solutions = app.solutions
+    if len(solutions) == 0:
+        raise click.ClickException("No solutions found. Run 'mergai resolve' first.")
+
+    merge_commit_short = git_utils.short_sha(merge_info.merge_commit_sha)
+    # TODO: title format from config
+    title = f"Resolve conflicts for merge {merge_commit_short} into {merge_info.target_branch}"
+
+    body = _build_solutions_pr_body(app)
+
+    _create_pr(
+        app,
+        title,
+        body,
+        branches.solution_branch,
+        branches.conflict_branch,
+        dry_run=dry_run,
+    )
+
+
+def _build_main_pr_body(app: AppContext) -> str:
+    """Build PR body for main PR from merge_context or conflict resolution data."""
+
+    if app.has_merge_context:
+        return _build_merge_pr_body(app)
+
+    if app.has_conflict_context and app.has_solutions:
+        return _build_solutions_pr_body(app)
+
+    if app.has_conflict_context and not app.has_solutions:
+        raise click.ClickException(
+            "Found conflict_context but no solutions. "
+            "Run 'mergai resolve' to generate a solution first."
+        )
+
+    if app.has_solutions and not app.has_conflict_context:
+        raise click.ClickException(
+            "Found solutions but no conflict_context. "
+            "Run 'mergai context create conflict' first."
+        )
+    raise click.ClickException(
+        "No merge_context or conflict resolution data found. "
+        "Run 'mergai context create merge' for non-conflict merges, "
+        "or ensure conflict_context and solutions are present for conflict resolutions."
+    )
+
+
+def _create_main_pr(app: AppContext, dry_run: bool) -> None:
+    """Create a PR from the main branch to target_branch (merge or conflict resolution)."""
+
+    merge_commit_short = git_utils.short_sha(app.merge_info.merge_commit_sha)
+    # TODO: title format from config
+    title = f"Merge {merge_commit_short} into {app.merge_info.target_branch}"
+    body = _build_main_pr_body(app)
+
+    _create_pr(
+        app,
+        title,
+        body,
+        app.branches.main_branch,
+        app.merge_info.target_branch,
+        dry_run=dry_run,
+    )
 
 
 @click.group()
@@ -31,8 +158,11 @@ def pr(app: AppContext, repo: Optional[str]):
 
 @pr.command()
 @click.pass_obj
-@click.argument("pr_type", type=click.Choice(["main", "solution"], case_sensitive=False))
-def create(app: AppContext, pr_type: str):
+@click.option("--dry-run", is_flag=True, default=False, help="Dry run the PR creation.")
+@click.argument(
+    "pr_type", type=click.Choice(["main", "solution"], case_sensitive=False)
+)
+def create(app: AppContext, pr_type: str, dry_run: bool):
     """Create a pull request.
 
     PR_TYPE specifies which type of PR to create:
@@ -61,147 +191,9 @@ def create(app: AppContext, pr_type: str):
         mergai pr create solution    # Create PR from solution branch to conflict branch
     """
     if pr_type.lower() == "solution":
-        try:
-            note = app.load_note()
-            if not note:
-                raise Exception("No note found. Run 'mergai context init' first.")
-
-            # Handle both legacy "solution" and new "solutions" array
-            # For PR, use the last solution (most recent)
-            solution = None
-            if "solutions" in note and note["solutions"]:
-                solution = note["solutions"][-1]
-            elif "solution" in note:
-                solution = note["solution"]
-
-            if not solution:
-                raise Exception(
-                    "No solution found in note. Run 'mergai resolve' first."
-                )
-
-            merge_info = note.get("merge_info")
-            if not merge_info:
-                raise Exception(
-                    "No merge_info found in note. Run 'mergai context init' first."
-                )
-
-            # Get merge context for building branch names
-            target_branch = merge_info["target_branch"]
-            target_branch_sha = merge_info["target_branch_sha"]
-            merge_commit_sha = merge_info["merge_commit"]
-
-            # Build branch names using the config
-            try:
-                builder = util.BranchNameBuilder.from_config(
-                    app.config.branch, target_branch, merge_commit_sha, target_branch_sha
-                )
-            except ValueError as e:
-                raise click.ClickException(
-                    f"Invalid branch name format in config: {e}"
-                )
-
-            # Base branch is the conflict branch
-            conflict_branch = builder.conflict_branch
-
-            # Head branch is the current branch (should be solution branch)
-            head = git_utils.get_current_branch(app.repo)
-
-            # Build PR title and body (use short SHA for display)
-            merge_commit_short = git_utils.short_sha(merge_commit_sha)
-            title = f"MergAI Solution: Resolve conflicts for merge {merge_commit_short}"
-            body = util.solution_pr_body_to_markdown(solution)
-
-            gh_repo = app.get_gh_repo()
-
-            click.echo(
-                f"Creating PR:\nrepo:  {gh_repo.full_name}\nfrom:  {head}\nto:    {conflict_branch}\ntitle: {title}"
-            )
-
-            pr = gh_repo.create_pull(
-                title=title,
-                body=body,
-                head=head,
-                base=conflict_branch,
-            )
-            print(f"PR created: {pr.html_url}")
-        except Exception as e:
-            click.echo(f"Error: {e}")
-            exit(1)
-        return
-
-    # pr_type == "main"
-    try:
-        note = app.load_note()
-        if not note:
-            raise Exception("No note found. Run 'mergai context init' first.")
-
-        merge_info = note.get("merge_info")
-        if not merge_info:
-            raise Exception("No merge_info found in note. Run 'mergai context init' first.")
-
-        merge_context = note.get("merge_context")
-        conflict_context = note.get("conflict_context")
-        solutions = note.get("solutions", [])
-
-        # Auto-detect which case we're in:
-        # Case 1: No conflict - merge_context is present
-        # Case 2: Conflict resolution - conflict_context + solutions are present
-        if merge_context:
-            # Case 1: No conflict - use merge_context (original behavior)
-            body = util.merge_info_to_markdown(merge_info)
-            body += "\n"
-            body += util.merge_context_to_markdown(merge_context)
-        elif conflict_context and solutions:
-            # Case 2: Conflict resolution - use conflict_context + all solutions
-            body = util.merge_info_to_markdown(merge_info)
-            body += "\n"
-            body += util.conflict_resolution_pr_body_to_markdown(conflict_context, solutions)
-        else:
-            # Neither case is satisfied - provide helpful error message
-            if conflict_context and not solutions:
-                raise Exception(
-                    "Found conflict_context but no solutions. "
-                    "Run 'mergai resolve' to generate a solution first."
-                )
-            elif solutions and not conflict_context:
-                raise Exception(
-                    "Found solutions but no conflict_context. "
-                    "Run 'mergai context create conflict' first."
-                )
-            else:
-                raise Exception(
-                    "No merge_context or conflict resolution data found. "
-                    "Run 'mergai context create merge' for non-conflict merges, "
-                    "or ensure conflict_context and solutions are present for conflict resolutions."
-                )
-
-        # Get target branch (base) from merge_info
-        target_branch = merge_info["target_branch"]
-        merge_commit_sha = merge_info["merge_commit"]
-
-        # Get current branch (head)
-        head = git_utils.get_current_branch(app.repo)
-
-        # Build PR title (use short SHA for display)
-        merge_commit_short = git_utils.short_sha(merge_commit_sha)
-        title = f"MergAI: Merge {merge_commit_short} into {target_branch}"
-
-        gh_repo = app.get_gh_repo()
-
-        click.echo(
-            f"Creating PR:\nrepo:  {gh_repo.full_name}\nfrom:  {head}\nto:    {target_branch}\ntitle: {title}"
-        )
-
-        pr = gh_repo.create_pull(
-            title=title,
-            body=body,
-            head=head,
-            base=target_branch,
-        )
-        print(f"PR created: {pr.html_url}")
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)
+        _create_solution_pr(app, dry_run)
+    else:
+        _create_main_pr(app, dry_run)
 
 
 def get_prs_for_current_branch(app: AppContext) -> List[GithubPullRequest.PullRequest]:
@@ -243,4 +235,3 @@ def show(app: AppContext):
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
-

@@ -82,23 +82,56 @@ def print_or_page(text: str, format: str = "text"):
     proc.wait()
 
 
-CONFLICT_CONTEXT_MARKDOWN_TEMPLATE = """# Conflict Context
+def render_from_template(template_str: str, context: dict) -> str:
+    template = Template(template_str)
+    return template.render(context=context)
 
-## SHA Details
 
-- base: {{ context.base_commit.hexsha }}
-- ours: {{ context.ours_commit.hexsha }}
-- theirs: {{ context.theirs_commit.hexsha }}
+MERGE_INFO_MARKDOWN_TEMPLATE = """\
+# Merge Info
 
-## Conflict Details
+- **Target Branch:** `{{ context.target_branch }}`
+{%- if context.target_branch_sha %}
+- **Target Branch SHA:** `{{ context.target_branch_sha }}`
+{%- endif %}
+- **Merge Commit:** `{{ context.merge_commit_sha }}`
+"""
 
-| path | conflict type |
+
+def merge_info_to_markdown(merge_info: dict) -> str:
+    return render_from_template(MERGE_INFO_MARKDOWN_TEMPLATE, merge_info)
+
+
+def merge_info_to_str(merge_info: dict, format: str, pretty: bool = False):
+    if format == "json":
+        return json.dumps(merge_info, default=str, indent=2 if pretty else None) + "\n"
+    elif format == "markdown":
+        return merge_info_to_markdown(merge_info) + "\n"
+
+    return str(merge_info)
+
+
+CONFLICT_CONTEXT_MARKDOWN_TEMPLATE = """\
+# Conflict Context
+
+- **Base Commit:** `{{ context.base_commit.hexsha }}`
+- **Ours Commit:** `{{ context.ours_commit.hexsha }}`
+- **Theirs Commit:** `{{ context.theirs_commit.hexsha }}`
+
+## Conflicted Files
+
+| Path | Conflict Type |
 |------|---------------|
 {%- for path, conflict_type in context.conflict_types.items() %}
 | `{{ path }}` | {{ conflict_type }} |
 {%- endfor %}
 
+
 {%- if context.get('their_commits') %}
+
+<details>
+<summary>Conflict details</summary>
+
 ## Their Commits
 {%- for path, commits in context.their_commits.items() %}
 - `{{ path }}`
@@ -114,20 +147,13 @@ Date:   {{ commit.authored_datetime }}
 
 {% endfor %}
 {%- endfor %}
-{%- endif %}
-
-{%- if context.get('diffs') %}
-## Diffs
-{%- for path, conflict_data in context.diffs.items() %}
-- `{{ path }}`
-
-```diff
-{{ conflict_data }}
-```
-
-{%- endfor %}
+</details>
 {%- endif %}
 """
+
+
+def conflict_context_to_markdown(conflict_context: dict) -> str:
+    return render_from_template(CONFLICT_CONTEXT_MARKDOWN_TEMPLATE, conflict_context)
 
 
 def conflict_context_to_str(context: dict, format, pretty: bool = False):
@@ -137,15 +163,6 @@ def conflict_context_to_str(context: dict, format, pretty: bool = False):
         return conflict_context_to_markdown(context) + "\n"
 
     return str(context)
-
-
-def render_from_template(template_str: str, context: dict) -> str:
-    template = Template(template_str)
-    return template.render(context=context)
-
-
-def conflict_context_to_markdown(context: dict) -> str:
-    return render_from_template(CONFLICT_CONTEXT_MARKDOWN_TEMPLATE, context)
 
 
 # TODO: the session section should be improved
@@ -258,7 +275,8 @@ def conflict_solution_to_markdown(solution: dict) -> str:
     return render_from_template(CONFLICT_SOLUTION_MARKDOWN_TEMPLATE, solution)
 
 
-SOLUTION_PR_BODY_TEMPLATE = """\
+SOLUTION_MARKDOWN_TEMPLATE = """\
+
 ## Solution Summary
 
 {{ context.response.summary }}
@@ -312,7 +330,7 @@ All conflicts have been resolved.
 """
 
 
-def solution_pr_body_to_markdown(solution: dict) -> str:
+def solution_to_markdown(solution: dict) -> str:
     """Convert solution data to markdown formatted for PR body.
 
     This format is optimized for GitHub PR descriptions with:
@@ -326,102 +344,30 @@ def solution_pr_body_to_markdown(solution: dict) -> str:
     Returns:
         Markdown formatted string suitable for PR body.
     """
-    return render_from_template(SOLUTION_PR_BODY_TEMPLATE, solution)
+    return render_from_template(SOLUTION_MARKDOWN_TEMPLATE, solution)
 
 
-CONFLICT_RESOLUTION_PR_BODY_TEMPLATE = """\
-# Conflict Resolution
-
-## Conflict Context
-
-- **Base Commit:** `{{ conflict_context.base_commit.hexsha }}`
-- **Ours Commit:** `{{ conflict_context.ours_commit.hexsha }}`
-- **Theirs Commit:** `{{ conflict_context.theirs_commit.hexsha }}`
-
-### Conflicted Files
-
-| Path | Conflict Type |
-|------|---------------|
-{%- for path, conflict_type in conflict_context.conflict_types.items() %}
-| `{{ path }}` | {{ conflict_type }} |
-{%- endfor %}
-
-{%- for solution in solutions %}
-
+SOLUTIONS_MARKDOWN_TEMPLATE = """\
+{%- for solution in context.solutions %}
 ## Solution {{ loop.index }}{% if loop.length == 1 %}{% endif %}
-
-### Summary
-
-{{ solution.response.summary }}
-
-### Resolved Files
-
-{%- if solution.response.resolved | length == 0 %}
-No files were resolved.
-{%- else %}
-| File Path | Resolution |
-|-----------|------------|
-{%- for file_path, resolution in solution.response.resolved.items() %}
-| `{{ file_path }}` | {{ resolution }} |
-{%- endfor %}
-{%- endif %}
-
-### Unresolved Files
-
-{%- if solution.response.unresolved | length == 0 %}
-All conflicts have been resolved.
-{%- else %}
-| File Path | Issue |
-|-----------|-------|
-{%- for file_path, issue in solution.response.unresolved.items() %}
-| `{{ file_path }}` | {{ issue }} |
-{%- endfor %}
-{%- endif %}
-
-{%- if solution.response.review_notes %}
-
-### Review Notes
-
-{{ solution.response.review_notes }}
-{%- endif %}
-
-<details>
-<summary>Agent Stats</summary>
-
-{%- if solution.agent_info %}
-
-**Agent:** {{ solution.agent_info.agent_type }} (version {{ solution.agent_info.version }})
-{%- endif %}
-
-{%- if solution.stats and solution.stats.models | length > 0 %}
-
-| Model | Input | Output | Cached | Thoughts | Tool | Total |
-|-------|-------|--------|--------|----------|------|-------|
-{%- for model, stat in solution.stats.models.items() %}
-| {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
-{%- endfor %}
-{%- endif %}
-
-</details>
+{{ context.solution_to_markdown(solution) }}
 {%- endfor %}
 """
 
 
-def conflict_resolution_pr_body_to_markdown(conflict_context: dict, solutions: list) -> str:
-    """Convert conflict context and solutions to markdown for PR body.
+def solutions_to_markdown(solutions: list) -> str:
+    md = "# Solution"
+    md += "\n"
 
-    This is used when creating a main PR after conflict resolution,
-    where merge_context doesn't exist but conflict_context and solutions do.
+    if len(solutions) == 1:
+        md += solution_to_markdown(solutions[0])
+    else:
+        md += render_from_template(
+            SOLUTIONS_MARKDOWN_TEMPLATE,
+            {"solutions": solutions, "solution_to_markdown": solution_to_markdown},
+        )
 
-    Args:
-        conflict_context: The conflict context dict with commit info and conflicted files.
-        solutions: List of solution dicts, each with response, stats, and agent_info.
-
-    Returns:
-        Markdown formatted string suitable for PR body.
-    """
-    template = Template(CONFLICT_RESOLUTION_PR_BODY_TEMPLATE)
-    return template.render(conflict_context=conflict_context, solutions=solutions)
+    return md
 
 
 def conflict_solution_to_str(solution: dict, format: str, pretty: bool = False):
@@ -479,30 +425,6 @@ def user_comment_to_str(user_comment: dict, format: str, pretty: bool = False):
         return user_comment_to_markdown(user_comment) + "\n"
 
     return str(user_comment)
-
-
-MERGE_INFO_MARKDOWN_TEMPLATE = """\
-# Merge Info
-
-- **Target Branch:** `{{ context.target_branch }}`
-{%- if context.target_branch_sha %}
-- **Target Branch SHA:** `{{ context.target_branch_sha }}`
-{%- endif %}
-- **Merge Commit:** `{{ context.merge_commit }}`
-"""
-
-
-def merge_info_to_markdown(merge_info: dict) -> str:
-    return render_from_template(MERGE_INFO_MARKDOWN_TEMPLATE, merge_info)
-
-
-def merge_info_to_str(merge_info: dict, format: str, pretty: bool = False):
-    if format == "json":
-        return json.dumps(merge_info, default=str, indent=2 if pretty else None) + "\n"
-    elif format == "markdown":
-        return merge_info_to_markdown(merge_info) + "\n"
-
-    return str(merge_info)
 
 
 MERGE_CONTEXT_MARKDOWN_TEMPLATE = """\
@@ -600,7 +522,9 @@ def merge_description_to_markdown(merge_description: dict) -> str:
     return render_from_template(MERGE_DESCRIPTION_MARKDOWN_TEMPLATE, merge_description)
 
 
-def merge_description_to_str(merge_description: dict, format: str, pretty: bool = False):
+def merge_description_to_str(
+    merge_description: dict, format: str, pretty: bool = False
+):
     if format == "json":
         return (
             json.dumps(merge_description, default=str, indent=2 if pretty else None)
@@ -628,7 +552,9 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
     )
     output_str += f"- Content:\n"
     if "merge_info" in note:
-        output_str += f"  - Merge Info (use mergai show --merge-info to see the merge info.)\n"
+        output_str += (
+            f"  - Merge Info (use mergai show --merge-info to see the merge info.)\n"
+        )
     if "merge_context" in note:
         output_str += f"  - Merge Context (use mergai show --merge-context to see the merge context.)\n"
     if "conflict_context" in note:
@@ -641,18 +567,14 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
     # Handle both legacy "solution" and new "solutions" array
     if "solutions" in note:
         count = len(note["solutions"])
-        output_str += (
-            f"  - Solutions ({count}) (use mergai show --solution to see the conflict solutions.)\n"
-        )
+        output_str += f"  - Solutions ({count}) (use mergai show --solution to see the conflict solutions.)\n"
     elif "solution" in note:
         output_str += (
             f"  - Solution (use mergai show --solution to see the conflict solution.)\n"
         )
 
     if "merge_description" in note:
-        output_str += (
-            f"  - Merge Description (use mergai show --merge-description to see the merge description.)\n"
-        )
+        output_str += f"  - Merge Description (use mergai show --merge-description to see the merge description.)\n"
 
     output_str += "\n"
 
@@ -722,13 +644,21 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
     if "merge_info" in note:
         output_str += f"  - Merge Info\n"
         merge_info = note["merge_info"]
-        output_str += f"    - Target Branch: {merge_info.get('target_branch', 'unknown')}\n"
-        output_str += f"    - Merge Commit: {merge_info.get('merge_commit', 'unknown')}\n"
+        output_str += (
+            f"    - Target Branch: {merge_info.get('target_branch', 'unknown')}\n"
+        )
+        output_str += (
+            f"    - Merge Commit: {merge_info.get('merge_commit', 'unknown')}\n"
+        )
     if "merge_context" in note:
         output_str += f"  - Merge Context\n"
         merge_context = note["merge_context"]
-        output_str += f"    - Merge Commit: {merge_context.get('merge_commit', 'unknown')}\n"
-        output_str += f"    - Merged Commits: {len(merge_context.get('merged_commits', []))}\n"
+        output_str += (
+            f"    - Merge Commit: {merge_context.get('merge_commit', 'unknown')}\n"
+        )
+        output_str += (
+            f"    - Merged Commits: {len(merge_context.get('merged_commits', []))}\n"
+        )
         important_files = merge_context.get("important_files_modified", [])
         if important_files:
             output_str += f"    - Important Files Modified: {len(important_files)}\n"
@@ -801,16 +731,15 @@ def commit_note_to_summary_str(
     else:
         return commit_note_to_summary_text(commit, note)
 
+
 def format_commit_info(commit, indent: str = "  ") -> str:
     """Format a commit for display."""
     if not commit:
         return f"{indent}(none)"
-    
-    authored_date = datetime.fromtimestamp(
-        commit.authored_date, tz=timezone.utc
-    )
+
+    authored_date = datetime.fromtimestamp(commit.authored_date, tz=timezone.utc)
     date_str = authored_date.strftime("%Y-%m-%d %H:%M:%S UTC")
-    
+
     lines = [
         f"{indent}SHA:    {git_utils.short_sha(commit.hexsha)}",
         f"{indent}Date:   {date_str}",
@@ -819,17 +748,17 @@ def format_commit_info(commit, indent: str = "  ") -> str:
     ]
     return "\n".join(lines)
 
+
 def format_commit_info_oneline(commit) -> str:
     """Format a commit in a single line."""
     if not commit:
         return "(none)"
-    
-    authored_date = datetime.fromtimestamp(
-        commit.authored_date, tz=timezone.utc
-    )
+
+    authored_date = datetime.fromtimestamp(commit.authored_date, tz=timezone.utc)
     date_str = authored_date.strftime("%Y-%m-%d")
-    
+
     return f"{git_utils.short_sha(commit.hexsha)} {date_str} {commit.summary}"
+
 
 def format_number(n: int) -> str:
     """Format a number with thousand separators."""
@@ -977,8 +906,7 @@ class BranchNameBuilder:
         # Check for required target_branch token
         if not cls.REQUIRED_TOKENS & tokens_in_format:
             raise ValueError(
-                f"Format string must contain %(target_branch). "
-                f"Got: {name_format}"
+                f"Format string must contain %(target_branch). " f"Got: {name_format}"
             )
 
         # Check for at least one merge commit token
