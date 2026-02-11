@@ -14,13 +14,6 @@ from .context import conflict_context_flags
     help="Overwrite existing saved conflict context, conflict prompt and solution.",
 )
 @click.option(
-    "--use-history/--no-history",
-    "use_history",
-    is_flag=True,
-    default=False,
-    help="Include commit history in the prompt.",
-)
-@click.option(
     "-y/--yolo",
     "yolo",
     is_flag=True,
@@ -30,11 +23,10 @@ from .context import conflict_context_flags
 def resolve(
     app: AppContext,
     force: bool,
-    use_history: bool,
     yolo: bool,
 ):
     try:
-        app.resolve(force, use_history, yolo, max_attempts=app.config.resolve.max_attempts)
+        app.resolve(force, yolo, max_attempts=app.config.resolve.max_attempts)
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)

@@ -830,12 +830,10 @@ class AppContext:
         return f"An error occurred while trying to process the output: {error}"
 
     def resolve(
-        self, force: bool, use_history: bool, yolo: bool, max_attempts: int = None
+        self, force: bool, yolo: bool, max_attempts: int = None
     ):
         if max_attempts is None:
             max_attempts = self.config.resolve.max_attempts
-        if use_history:
-            raise Exception("use_history is not supported yet.")
 
         note = self.load_note()
         if note is None:

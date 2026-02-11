@@ -151,7 +151,7 @@ def create(app: AppContext, type: str, commit: Optional[str], target: Optional[s
     if git_utils.branch_exists_on_remote(app.repo, branch_name):
         raise click.ClickException(
             f"Branch '{branch_name}' already exists on origin. "
-            "Delete it first with 'mergai branch delete'."
+            "Delete it first with 'mergai branch delete -r'."
         )
 
     # Check if branch exists locally
