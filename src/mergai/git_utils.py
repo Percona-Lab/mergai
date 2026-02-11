@@ -408,6 +408,133 @@ def is_merge_conflict_style_diff3(repo: Repo) -> bool:
         return False
 
 
+def get_merge_strategy(repo: Repo) -> str:
+    """Get the default merge strategy from git config.
+
+    Checks git config for pull.twohead (the default merge strategy for
+    two-head merges). If not configured, returns 'ort' which is the
+    default in modern git versions.
+
+    Args:
+        repo: GitPython Repo instance.
+
+    Returns:
+        The merge strategy name (e.g., 'ort', 'recursive').
+    """
+    try:
+        strategy = repo.git.config("pull.twohead")
+        return strategy
+    except Exception:
+        # Default strategy in modern git is 'ort'
+        return "ort"
+
+
+@dataclass
+class GitMergeOutput:
+    """Parsed git merge output.
+
+    Attributes:
+        auto_merged_files: List of files that were auto-merged by git.
+        conflicting_files: Dict mapping file paths to conflict type strings.
+        success: True if merge completed without conflicts, False otherwise.
+        strategy: The merge strategy used (extracted from output like
+                  "Merge made by the 'ort' strategy.").
+        raw_output: The original unparsed output.
+    """
+
+    auto_merged_files: List[str]
+    conflicting_files: dict[str, str]  # file -> conflict type (e.g., "content")
+    success: bool
+    strategy: Optional[str]
+    raw_output: str
+
+
+def parse_git_merge_output(output: str, repo: Optional[Repo] = None) -> GitMergeOutput:
+    """Parse the output of a git merge command.
+
+    Extracts information about:
+    - Auto-merged files (lines matching "Auto-merging <file>")
+    - Conflicting files (lines matching "CONFLICT (<type>): ...")
+    - Whether the merge succeeded or failed
+    - The merge strategy used (from "Merge made by the '<strategy>' strategy."
+      or from git config if using --no-commit)
+
+    Args:
+        output: The raw output from git merge command (stdout + stderr).
+        repo: Optional GitPython Repo instance. If provided and strategy
+              cannot be parsed from output, will attempt to get default
+              strategy from git config.
+
+    Returns:
+        GitMergeOutput dataclass with parsed information.
+
+    Example input (success with commit):
+        Auto-merging src/file1.cpp
+        Auto-merging src/file2.cpp
+        Merge made by the 'ort' strategy.
+        ...
+
+    Example input (success with --no-commit):
+        Auto-merging src/file1.cpp
+        Auto-merging src/file2.cpp
+        Automatic merge went well; stopped before committing as requested
+
+    Example input (conflict):
+        Auto-merging file1.txt
+        CONFLICT (content): Merge conflict in file1.txt
+        Auto-merging file2.txt
+        Automatic merge failed; fix conflicts and then commit the result.
+    """
+    auto_merged_files = []
+    conflicting_files = {}
+    strategy = None
+    success = True
+
+    for line in output.splitlines():
+        # Check for auto-merged files
+        match = re.match(r"^Auto-merging (.+)$", line)
+        if match:
+            auto_merged_files.append(match.group(1))
+            continue
+
+        # Check for strategy (indicates success with commit)
+        # Example: "Merge made by the 'ort' strategy."
+        match = re.match(r"^Merge made by the '([^']+)' strategy\.$", line)
+        if match:
+            strategy = match.group(1)
+            continue
+
+        # Check for conflicts
+        # Example: "CONFLICT (content): Merge conflict in file1.txt"
+        # Example: "CONFLICT (modify/delete): file.txt deleted in HEAD..."
+        match = re.match(
+            r"^CONFLICT \(([^)]+)\):\s*(?:Merge conflict in\s+)?(.+?)(?:\s+deleted.*)?$",
+            line,
+        )
+        if match:
+            conflict_type = match.group(1)
+            file_path = match.group(2).strip()
+            conflicting_files[file_path] = conflict_type
+            continue
+
+        # Check for failure
+        if line.startswith("Automatic merge failed"):
+            success = False
+
+    # If strategy not found in output but repo provided, get from git config
+    # This happens when using --no-commit flag
+    if strategy is None and repo is not None:
+        strategy = get_merge_strategy(repo)
+
+    return GitMergeOutput(
+        auto_merged_files=auto_merged_files,
+        conflicting_files=conflicting_files,
+        success=success,
+        strategy=strategy,
+        raw_output=output,
+    )
+
+
 @dataclass
 class ForkStatus:
     """Status information about a fork compared to its upstream base."""

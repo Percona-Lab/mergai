@@ -680,7 +680,12 @@ class AppContext:
 
         return context
 
-    def create_merge_context(self, force: bool = False) -> dict:
+    def create_merge_context(
+        self,
+        force: bool = False,
+        auto_merged_files: Optional[List[str]] = None,
+        merge_strategy: Optional[str] = None,
+    ) -> dict:
         """Create merge context from merge_info.
 
         Calculates the list of commits being merged by finding the
@@ -690,6 +695,8 @@ class AppContext:
 
         Args:
             force: If True, overwrite existing merge_context.
+            auto_merged_files: List of files that were auto-merged by git.
+            merge_strategy: The merge strategy used (e.g., 'ort', 'recursive').
 
         Returns:
             The created merge context dict.
@@ -748,6 +755,13 @@ class AppContext:
             "merged_commits": merged_commits,
             "important_files_modified": important_files_modified,
         }
+
+        # Add auto_merged info if provided
+        if auto_merged_files is not None or merge_strategy is not None:
+            context["auto_merged"] = {
+                "strategy": merge_strategy,
+                "files": auto_merged_files or [],
+            }
 
         note["merge_context"] = context
         self.save_note(note)

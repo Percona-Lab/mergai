@@ -430,20 +430,8 @@ def user_comment_to_str(user_comment: dict, format: str, pretty: bool = False):
 MERGE_CONTEXT_MARKDOWN_TEMPLATE = """\
 # Merge Context
 
-- **Merge Commit:** `{{ context.merge_commit }}`
-- **Timestamp:** {{ context.timestamp }}
-
-## Merged Commits
-
-{%- if context.merged_commits | length == 0 %}
-No commits in this merge.
-{%- else %}
-| # | Commit SHA |
-|---|------------|
-{%- for commit_sha in context.merged_commits %}
-| {{ loop.index }} | `{{ commit_sha }}` |
-{%- endfor %}
-{%- endif %}
+- **Number of merged commits:** {{ context.merged_commits | length }}
+- **Auto-merged files:** {{ context.auto_merged.files | length if context.auto_merged and context.auto_merged.files else 0 }}
 
 {%- if context.important_files_modified | length > 0 %}
 
@@ -453,6 +441,33 @@ No commits in this merge.
 - `{{ file_path }}`
 {%- endfor %}
 {%- endif %}
+
+{%- if context.auto_merged %}
+
+## Auto-Merged Files
+{% if context.auto_merged.files | length == 0 %}
+No files were auto-merged.
+{%- else %}
+{%- for file_path in context.auto_merged.files %}
+- `{{ file_path }}`
+{%- endfor %}
+{%- endif %}
+{% if context.auto_merged.strategy %}
+**Merged with strategy:** {{ context.auto_merged.strategy }}
+{%- endif %}
+
+{%- endif %}
+
+<details>
+<summary>Show details</summary>
+
+| # | Commit SHA |
+|---|------------|
+{%- for commit_sha in context.merged_commits %}
+| {{ loop.index }} | `{{ commit_sha }}` |
+{%- endfor %}
+
+</details>
 """
 
 

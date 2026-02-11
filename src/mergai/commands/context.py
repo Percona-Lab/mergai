@@ -305,7 +305,21 @@ def create_conflict(
     default=False,
     help="Overwrite existing merge context.",
 )
-def create_merge(app: AppContext, force: bool):
+@click.option(
+    "--stdin",
+    "from_stdin",
+    is_flag=True,
+    default=False,
+    help="Read git merge output from stdin to capture auto-merged files.",
+)
+@click.option(
+    "--strategy",
+    "strategy",
+    type=str,
+    default=None,
+    help="Override merge strategy (normally auto-detected from git output).",
+)
+def create_merge(app: AppContext, force: bool, from_stdin: bool, strategy: str):
     """Create context for a successful automatic merge.
 
     Captures the list of commits being merged and identifies which
@@ -315,14 +329,35 @@ def create_merge(app: AppContext, force: bool):
     This command requires merge_info to be initialized first
     (via 'mergai context init').
 
+    With --stdin, reads git merge output to capture auto-merged files:
+        git merge --no-commit --no-ff <sha> 2>&1 | mergai context create merge --stdin
+
     \b
     Examples:
         mergai context init abc1234 --target v8.0
         mergai context create merge
         mergai context create merge -f  # force overwrite
+        mergai context create merge --stdin  # read git merge output from stdin
+        mergai context create merge --stdin --strategy ort  # override strategy
     """
+    import sys
+
+    auto_merged_files = None
+    merge_strategy = strategy
+
+    if from_stdin:
+        stdin_content = sys.stdin.read()
+        parsed = git_utils.parse_git_merge_output(stdin_content, repo=app.repo)
+        auto_merged_files = parsed.auto_merged_files
+        if merge_strategy is None:
+            merge_strategy = parsed.strategy
+
     try:
-        context = app.create_merge_context(force)
+        context = app.create_merge_context(
+            force=force,
+            auto_merged_files=auto_merged_files,
+            merge_strategy=merge_strategy,
+        )
         click.echo("Created merge context:")
         click.echo(f"  merge_commit: {context['merge_commit']}")
         click.echo(f"  merged_commits: {len(context['merged_commits'])} commits")
@@ -332,6 +367,14 @@ def create_merge(app: AppContext, force: bool):
             )
         else:
             click.echo("  important_files_modified: (none)")
+        if "auto_merged" in context:
+            auto_merged = context["auto_merged"]
+            if auto_merged.get("strategy"):
+                click.echo(f"  auto_merged.strategy: {auto_merged['strategy']}")
+            if auto_merged.get("files"):
+                click.echo(f"  auto_merged.files: {len(auto_merged['files'])} files")
+            else:
+                click.echo("  auto_merged.files: (none)")
     except Exception as e:
         raise click.ClickException(str(e))
 
