@@ -1252,7 +1252,7 @@ class AppContext:
             message,
         )
 
-        self.add_selective_note(self.repo.head.commit.hexsha, ["conflict_context"])
+        self.add_selective_note(self.repo.head.commit.hexsha, ["conflict_context", "merge_context"])
 
     def commit_merge(self):
         """Commit the current staged changes as a merge commit.
