@@ -127,6 +127,7 @@ class GeminiCLIAgent(CliAgent):
     def run_prompt(self, prompt: str):
         args = self.build_args(prompt)
 
+        click.echo(f"Running command: '{' '.join(args)}'")
         proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
