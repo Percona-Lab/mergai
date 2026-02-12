@@ -812,11 +812,12 @@ class AppContext:
 
     def check_solution_files_dirty(self, solution: dict) -> Optional[str]:
         not_dirty_files = []
+        modified_files = [item.a_path for item in self.repo.index.diff(None)]
         for path in solution["response"]["resolved"].keys():
             click.echo(
-                f"Checking file '{path}': {'dirty' if self.repo.is_dirty(path) else 'not dirty'}"
+                f"Checking file '{path}': {'dirty' if path in modified_files else 'not dirty'}"
             )
-            if not self.repo.is_dirty(path):
+            if path not in modified_files:
                 not_dirty_files.append(path)
         if len(not_dirty_files):
             message = "The following files in the solution have no unstaged changes: "
