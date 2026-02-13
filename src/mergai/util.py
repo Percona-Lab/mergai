@@ -15,6 +15,15 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
 from datetime import datetime, timezone
+from .models import (
+    MergeInfo,
+    MergeContext,
+    ConflictContext,
+    ContextSerializationConfig,
+    MarkdownConfig,
+    MarkdownFormat,
+    EnhancedCommit,
+)
 
 if TYPE_CHECKING:
     from .config import BranchConfig
@@ -92,21 +101,85 @@ MERGE_INFO_MARKDOWN_TEMPLATE = """\
 
 - **Target Branch:** `{{ merge_info.target_branch }}`
 {%- if merge_info.target_branch_sha %}
-- **Target Branch SHA:** `{{ merge_info.target_branch_sha }}`
+- **Target Branch SHA:** {{ format_sha(merge_info.target_branch_sha) }}
 {%- endif %}
-- **Merge Commit:** `{{ merge_info.merge_commit_sha }}`
+- **Merge Commit:** {{ format_sha(merge_info.merge_commit_sha) }}
 """
 
 
-def merge_info_to_markdown(merge_info: dict) -> str:
-    return render_from_template(MERGE_INFO_MARKDOWN_TEMPLATE, merge_info=merge_info)
+def _create_format_sha_func(markdown_config: Optional[MarkdownConfig] = None):
+    """Create a format_sha function for Jinja2 templates.
+    
+    Args:
+        markdown_config: Optional MarkdownConfig for PR-style links.
+    
+    Returns:
+        A function that formats SHA as markdown (with or without links).
+    """
+    def format_sha(sha: str, use_short: bool = False) -> str:
+        """Format a SHA as markdown, optionally with link.
+        
+        Args:
+            sha: Commit SHA (full or short).
+            use_short: If True, display short SHA.
+        
+        Returns:
+            Markdown formatted SHA.
+        """
+        display_sha = sha[:11] if use_short else sha
+        
+        if markdown_config and markdown_config.format == MarkdownFormat.PR:
+            url = markdown_config.get_commit_url(sha)
+            if url:
+                return f"[`{display_sha}`]({url})"
+        
+        return f"`{display_sha}`"
+    
+    return format_sha
 
 
-def merge_info_to_str(merge_info: dict, format: str, pretty: bool = False):
+def merge_info_to_markdown(
+    merge_info: MergeInfo,
+    markdown_config: Optional[MarkdownConfig] = None
+) -> str:
+    """Convert a MergeInfo object to markdown format.
+
+    Args:
+        merge_info: MergeInfo object with merge operation details.
+        markdown_config: Optional MarkdownConfig for PR-style formatting with links.
+
+    Returns:
+        Markdown formatted string.
+    """
+    format_sha = _create_format_sha_func(markdown_config)
+    return render_from_template(
+        MERGE_INFO_MARKDOWN_TEMPLATE,
+        merge_info=merge_info,
+        format_sha=format_sha
+    )
+
+
+def merge_info_to_str(
+    merge_info: MergeInfo,
+    format: str,
+    pretty: bool = False,
+    markdown_config: Optional[MarkdownConfig] = None
+):
+    """Convert a MergeInfo object to the specified format.
+
+    Args:
+        merge_info: MergeInfo object with merge operation details.
+        format: Output format ('json' or 'markdown').
+        pretty: If True, format JSON with indentation.
+        markdown_config: Optional MarkdownConfig for PR-style markdown formatting.
+
+    Returns:
+        Formatted string representation.
+    """
     if format == "json":
-        return json.dumps(merge_info, default=str, indent=2 if pretty else None) + "\n"
+        return json.dumps(merge_info.to_dict(), default=str, indent=2 if pretty else None) + "\n"
     elif format == "markdown":
-        return merge_info_to_markdown(merge_info) + "\n"
+        return merge_info_to_markdown(merge_info, markdown_config) + "\n"
 
     return str(merge_info)
 
@@ -114,9 +187,9 @@ def merge_info_to_str(merge_info: dict, format: str, pretty: bool = False):
 CONFLICT_CONTEXT_MARKDOWN_TEMPLATE = """\
 # Conflict Context
 
-- **Base Commit:** `{{ conflict_context.base_commit.hexsha }}`
-- **Ours Commit:** `{{ conflict_context.ours_commit.hexsha }}`
-- **Theirs Commit:** `{{ conflict_context.theirs_commit.hexsha }}`
+- **Base Commit:** {{ format_sha(conflict_context.base_commit.hexsha) }}
+- **Ours Commit:** {{ format_sha(conflict_context.ours_commit.hexsha) }}
+- **Theirs Commit:** {{ format_sha(conflict_context.theirs_commit.hexsha) }}
 
 ## Conflicted Files
 
@@ -138,7 +211,7 @@ CONFLICT_CONTEXT_MARKDOWN_TEMPLATE = """\
 |------|--------|---------|
 {%- for path, commits in conflict_context.their_commits.items() %}
 {%- for commit in commits %}
-| `{{ path }}` | `{{ commit.hexsha }}` | {{ commit.message.split('\n')[0] }} |
+| `{{ path }}` | {{ format_sha(commit.hexsha) }} | {{ commit.message.split('\n')[0] }} |
 {%- endfor %}
 {%- endfor %}
 
@@ -147,17 +220,66 @@ CONFLICT_CONTEXT_MARKDOWN_TEMPLATE = """\
 """
 
 
-def conflict_context_to_markdown(conflict_context: dict) -> str:
-    return render_from_template(CONFLICT_CONTEXT_MARKDOWN_TEMPLATE, conflict_context=conflict_context)
+def conflict_context_to_markdown(
+    conflict_context: ConflictContext,
+    markdown_config: Optional[MarkdownConfig] = None
+) -> str:
+    """Convert ConflictContext to markdown.
+
+    Args:
+        conflict_context: ConflictContext object (must have repo bound).
+        markdown_config: Optional MarkdownConfig for PR-style formatting with links.
+
+    Returns:
+        Markdown formatted string.
+    """
+
+    if not isinstance(conflict_context, ConflictContext):
+        raise TypeError(
+            f"Expected ConflictContext, got {type(conflict_context).__name__}. "
+            "Use ConflictContext.from_dict() to create from dict."
+        )
+
+    template_data = conflict_context.to_dict(ContextSerializationConfig.template())
+    format_sha = _create_format_sha_func(markdown_config)
+    return render_from_template(
+        CONFLICT_CONTEXT_MARKDOWN_TEMPLATE,
+        conflict_context=template_data,
+        format_sha=format_sha
+    )
 
 
-def conflict_context_to_str(context: dict, format, pretty: bool = False):
+
+def conflict_context_to_str(
+    context: ConflictContext,
+    format: str,
+    pretty: bool = False,
+    markdown_config: Optional[MarkdownConfig] = None
+) -> str:
+    """Convert ConflictContext to string in specified format.
+
+    Args:
+        context: ConflictContext object.
+        format: Output format ('json' or 'markdown').
+        pretty: If True, format JSON with indentation.
+        markdown_config: Optional MarkdownConfig for PR-style markdown formatting.
+
+    Returns:
+        Formatted string representation.
+    """
+
+    if not isinstance(context, ConflictContext):
+        raise TypeError(
+            f"Expected ConflictContext, got {type(context).__name__}. "
+            "Use ConflictContext.from_dict() to create from dict."
+        )
+
     if format == "json":
-        return json.dumps(context, default=str, indent=2 if pretty else None) + "\n"
+        return json.dumps(context.to_dict(), default=str, indent=2 if pretty else None) + "\n"
     elif format == "markdown":
-        return conflict_context_to_markdown(context) + "\n"
+        return conflict_context_to_markdown(context, markdown_config) + "\n"
 
-    return str(context)
+    return str(context.to_dict())
 
 
 # TODO: the session section should be improved
@@ -457,29 +579,76 @@ No files were auto-merged.
 <details>
 <summary>Show details</summary>
 
-| # | Commit SHA |
-|---|------------|
-{%- for commit_sha in merge_context.merged_commits %}
-| {{ loop.index }} | `{{ commit_sha }}` |
+| Commit | Summary |
+|------------|---------|
+{%- for commit in merge_context.merged_commits %}
+| {{ format_sha(commit.hexsha) }} | {{ commit.summary }} |
 {%- endfor %}
 
 </details>
 """
 
 
-def merge_context_to_markdown(merge_context: dict) -> str:
-    return render_from_template(MERGE_CONTEXT_MARKDOWN_TEMPLATE, merge_context=merge_context)
+def merge_context_to_markdown(
+    merge_context: MergeContext,
+    markdown_config: Optional[MarkdownConfig] = None
+) -> str:
+    """Convert MergeContext to markdown.
+
+    Args:
+        merge_context: MergeContext object.
+        markdown_config: Optional MarkdownConfig for PR-style formatting with links.
+
+    Returns:
+        Markdown formatted string.
+    """
+
+    if not isinstance(merge_context, MergeContext):
+        raise TypeError(
+            f"Expected MergeContext, got {type(merge_context).__name__}. "
+            "Use MergeContext.from_dict() to create from dict."
+        )
+
+    format_sha = _create_format_sha_func(markdown_config)
+    return render_from_template(
+        MERGE_CONTEXT_MARKDOWN_TEMPLATE,
+        merge_context=merge_context,
+        format_sha=format_sha
+    )
 
 
-def merge_context_to_str(merge_context: dict, format: str, pretty: bool = False):
+def merge_context_to_str(
+    merge_context: MergeContext,
+    format: str,
+    pretty: bool = False,
+    markdown_config: Optional[MarkdownConfig] = None
+) -> str:
+    """Convert MergeContext to string in specified format.
+
+    Args:
+        merge_context: MergeContext object.
+        format: Output format ('json' or 'markdown').
+        pretty: If True, format JSON with indentation.
+        markdown_config: Optional MarkdownConfig for PR-style markdown formatting.
+
+    Returns:
+        Formatted string representation.
+    """
+
+    if not isinstance(merge_context, MergeContext):
+        raise TypeError(
+            f"Expected MergeContext, got {type(merge_context).__name__}. "
+            "Use MergeContext.from_dict() to create from dict."
+        )
+
     if format == "json":
         return (
-            json.dumps(merge_context, default=str, indent=2 if pretty else None) + "\n"
+            json.dumps(merge_context.to_dict(), default=str, indent=2 if pretty else None) + "\n"
         )
     elif format == "markdown":
-        return merge_context_to_markdown(merge_context) + "\n"
+        return merge_context_to_markdown(merge_context, markdown_config) + "\n"
 
-    return str(merge_context)
+    return str(merge_context.to_dict())
 
 
 MERGE_DESCRIPTION_MARKDOWN_TEMPLATE = """\
@@ -676,15 +845,16 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
     if "conflict_context" in note:
         output_str += f"  - Conflict Context\n"
         conflict_context = note["conflict_context"]
-        output_str += (
-            f"    - Base Commit: {conflict_context['base_commit']['hexsha']}\n"
-        )
-        output_str += (
-            f"    - Ours Commit: {conflict_context['ours_commit']['hexsha']}\n"
-        )
-        output_str += (
-            f"    - Theirs Commit: {conflict_context['theirs_commit']['hexsha']}\n"
-        )
+        # Handle both storage format (SHA strings) and legacy format (dicts/objects)
+        base_commit = conflict_context['base_commit']
+        ours_commit = conflict_context['ours_commit']
+        theirs_commit = conflict_context['theirs_commit']
+        base_sha = base_commit if isinstance(base_commit, str) else base_commit.get('hexsha', base_commit)
+        ours_sha = ours_commit if isinstance(ours_commit, str) else ours_commit.get('hexsha', ours_commit)
+        theirs_sha = theirs_commit if isinstance(theirs_commit, str) else theirs_commit.get('hexsha', theirs_commit)
+        output_str += f"    - Base Commit: {base_sha}\n"
+        output_str += f"    - Ours Commit: {ours_sha}\n"
+        output_str += f"    - Theirs Commit: {theirs_sha}\n"
     if "pr_comments" in note:
         output_str += f"  - PR Comments (total: {len(note['pr_comments'])})\n"
         stats = get_comments_stats(note["pr_comments"])

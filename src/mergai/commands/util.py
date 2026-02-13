@@ -2,6 +2,7 @@ import click
 import json
 from .. import util
 from ..app import AppContext, convert_note
+from ..models import ConflictContext, MergeContext
 
 
 @click.command()
@@ -125,11 +126,13 @@ def show(
                 app.repo.commit(commit), note, format=format, pretty=pretty
             )
 
+        # TODO: add support for MergeContext
         if show_context:
-            context = note.get("conflict_context")
-            if not context:
+            context_dict = note.get("conflict_context")
+            if not context_dict:
                 raise Exception("No context found in the note.")
 
+            context = ConflictContext.from_dict(context_dict, app.repo)
             output_str += util.conflict_context_to_str(context, format, pretty=pretty)
 
         if show_pr_comments:
@@ -189,7 +192,7 @@ def status(app: AppContext, format: str, pretty: bool):
             exit(0)
         note = app.state.load_note()
         util.print_or_page(
-            convert_note(note, format=format, pretty=pretty), format=format
+            convert_note(note, format=format, repo=app.repo, pretty=pretty), format=format
         )
     except Exception as e:
         click.echo(f"Error: {e}")

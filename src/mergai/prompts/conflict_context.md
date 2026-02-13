@@ -16,8 +16,8 @@
 
 ### Note format
 
-- `ours_commit`, `theirs_commit`, `base_commit` - commits details,
-- `files` - list of files with merge conflict,
+- `ours_commit`, `theirs_commit`, `base_commit` - commit details (see format below)
+- `files` - list of files with merge conflict
 - `conflict_types` - dict[key: path, value: conflict type], possible values: 
   - "both modified"
   - "both added"
@@ -27,7 +27,7 @@
   - "added by them"
   - "unknown"
 - `diffs` - dict[key: path, value: hunk]:
-  - hunks indicating the conflicting code,
+  - hunks indicating the conflicting code
   - the diffs can be compressed, huge blocks will have `(... X more deleted/added lines...)`
   - the conflicted filed contains the conflict markers indicating the sections of code that are in conflict
 - `their_commits` - dict[key: path, value: list of commits]:
@@ -44,30 +44,46 @@
 
 - `commit` format:
 
+The commit fields contain expanded commit information with configurable fields.
+Default fields include: hexsha, authored_date, summary, and author.
+
 ```json
 "commit": {
-    "hexsha": "commit SHA",
+    "hexsha": "full commit SHA (40 chars)",
     "author": {
-        "name": "name",
-        "email": "name@email.com",
+        "name": "author name",
+        "email": "author@email.com"
     },
-    "authored_date": "timestamp of the commit",
-    "summary": "commit summary",
-    "message": "commit message",
-    "parents": ["parent SHA"]
+    "authored_date": 1234567890,
+    "summary": "first line of commit message"
 }
 ```
+
+Optional fields (can be enabled via config):
+- `short_sha`: shortened SHA (11 chars)
+- `message`: full commit message
+- `parents`: list of parent commit SHAs
 
 - `conflict_context` structure:
 
 ```json
 "conflict_context": {
-    "ours_commit": {},
-    "theirs_commit": {},
-    "base_commit": {},
-    "files": [],
-    "conflict_types": {},
-    "diffs": {},
-    "their_commits": {}
+    "ours_commit": { /* commit object */ },
+    "theirs_commit": { /* commit object */ },
+    "base_commit": { /* commit object */ },
+    "files": ["path/to/file1.py", "path/to/file2.py"],
+    "conflict_types": {
+        "path/to/file1.py": "both modified",
+        "path/to/file2.py": "deleted by them"
+    },
+    "diffs": {
+        "path/to/file1.py": "diff content..."
+    },
+    "their_commits": {
+        "path/to/file1.py": [
+            { /* commit object */ },
+            { /* commit object */ }
+        ]
+    }
 }
 ```

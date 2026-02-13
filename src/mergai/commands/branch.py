@@ -53,7 +53,7 @@ def get_branch_builder(
 ) -> BranchNameBuilder:
     """Create a BranchNameBuilder from CLI arguments.
 
-    Uses app.get_merge_context() to resolve commit and target, which checks:
+    Uses app.get_merge_info() to resolve commit and target, which checks:
     1. merge_info in note.json
     2. Current mergai branch name
     3. CLI-provided values override auto-detected ones
@@ -70,14 +70,14 @@ def get_branch_builder(
         click.ClickException: If commit reference is invalid, cannot be determined,
             or branch name format is invalid.
     """
-    ctx = app.get_merge_context(commit=commit, target=target)
+    info = app.get_merge_info(commit=commit, target=target)
 
     try:
         return BranchNameBuilder.from_config(
             app.config.branch,
-            target_branch=ctx.target_branch,
-            merge_commit_sha=ctx.merge_commit_sha,
-            target_branch_sha=ctx.target_branch_sha,
+            target_branch=info.target_branch,
+            merge_commit_sha=info.merge_commit_sha,
+            target_branch_sha=info.target_branch_sha,
         )
     except ValueError as e:
         raise click.ClickException(

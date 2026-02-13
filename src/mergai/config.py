@@ -23,6 +23,7 @@ import yaml
 
 if TYPE_CHECKING:
     from .merge_pick_strategies import MergePickStrategy
+    from .models import CommitSerializationConfig, ContextSerializationConfig
 
 log = logging.getLogger(__name__)
 
@@ -138,6 +139,71 @@ class BranchConfig:
 
 
 @dataclass
+class ContextConfig:
+    """Configuration for context serialization.
+
+    Controls how commits are serialized when generating prompts for AI agents.
+    The fields specified here determine what information about commits is
+    included in the prompt.
+
+    Attributes:
+        prompt_commit_fields: List of commit fields to include in prompts.
+            Valid values: hexsha, short_sha, author, authored_date, summary,
+            message, parents.
+
+    Example YAML config:
+        context:
+          prompt_commit_fields:
+            - hexsha
+            - authored_date
+            - summary
+            - author
+    """
+
+    prompt_commit_fields: List[str] = field(
+        default_factory=lambda: ["hexsha"]
+    )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ContextConfig":
+        """Create a ContextConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            ContextConfig instance with values from data.
+        """
+        return cls(
+            prompt_commit_fields=data.get(
+                "prompt_commit_fields",
+                cls.prompt_commit_fields.__func__(),  # Get default from factory
+            ),
+        )
+
+    def to_commit_serialization_config(self) -> "CommitSerializationConfig":
+        """Convert to CommitSerializationConfig.
+
+        Returns:
+            CommitSerializationConfig with fields enabled based on prompt_commit_fields.
+        """
+        from .models import CommitSerializationConfig
+
+        return CommitSerializationConfig.from_list(self.prompt_commit_fields)
+
+    def to_prompt_serialization_config(self) -> "ContextSerializationConfig":
+        """Create ContextSerializationConfig for prompt mode.
+
+        Returns:
+            ContextSerializationConfig configured for prompt mode with
+            commit fields from this config.
+        """
+        from .models import ContextSerializationConfig
+
+        return ContextSerializationConfig.prompt(self.to_commit_serialization_config())
+
+
+@dataclass
 class MergePicksConfig:
     """Configuration for merge-pick strategies.
 
@@ -218,12 +284,14 @@ class MergaiConfig:
         fork: Configuration for the fork subcommand (includes merge_picks).
         resolve: Configuration for the resolve command.
         branch: Configuration for branch naming.
+        context: Configuration for context serialization (prompts).
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
 
     fork: ForkConfig = field(default_factory=ForkConfig)
     resolve: ResolveConfig = field(default_factory=ResolveConfig)
     branch: BranchConfig = field(default_factory=BranchConfig)
+    context: ContextConfig = field(default_factory=ContextConfig)
     _raw: Dict[str, Any] = field(default_factory=dict)
 
     def get_section(self, name: str) -> Dict[str, Any]:
@@ -269,10 +337,17 @@ class MergaiConfig:
             BranchConfig.from_dict(branch_data) if branch_data else BranchConfig()
         )
 
+        # Parse context section if present
+        context_data = data.get("context", {})
+        context_config = (
+            ContextConfig.from_dict(context_data) if context_data else ContextConfig()
+        )
+
         return cls(
             fork=fork_config,
             resolve=resolve_config,
             branch=branch_config,
+            context=context_config,
             _raw=data,
         )
 

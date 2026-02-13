@@ -1,0 +1,810 @@
+"""Context models for MergAI with configurable serialization.
+
+This module provides dataclasses for managing merge and conflict contexts
+with support for three serialization modes:
+
+1. STORAGE: Minimal format for note.json (only SHAs)
+2. TEMPLATE: Format for Jinja2 templates (with git.Commit objects)
+3. PROMPT: Configurable format for AI prompts (dict with selected fields)
+
+Example usage:
+    # Load from note.json
+    ctx = ConflictContext.from_dict(note["conflict_context"])
+    
+    # Bind repo for git operations
+    ctx.bind_repo(repo)
+    
+    # Serialize for storage (default)
+    note["conflict_context"] = ctx.to_dict()
+    
+    # Serialize for templates
+    template_data = ctx.to_dict(ContextSerializationConfig.template())
+    
+    # Serialize for prompts with custom fields
+    prompt_config = ContextSerializationConfig.prompt(
+        CommitSerializationConfig(include_message=True)
+    )
+    prompt_data = ctx.to_dict(prompt_config)
+"""
+
+from dataclasses import dataclass, field
+from typing import Optional, List, Dict, Any, TYPE_CHECKING, Union
+from enum import Enum
+import re
+
+if TYPE_CHECKING:
+    from git import Repo, Commit
+
+
+class MarkdownFormat(Enum):
+    """Markdown output format styles.
+    
+    SIMPLE: Plain markdown with just commit hashes (no links).
+    PR: GitHub PR-friendly markdown with clickable commit links.
+    """
+    SIMPLE = "simple"
+    PR = "pr"
+
+
+def _parse_github_url_from_remote(remote_url: str) -> Optional[str]:
+    """Parse a GitHub repository URL from a git remote URL.
+    
+    Supports both SSH and HTTPS formats:
+    - git@github.com:owner/repo.git
+    - https://github.com/owner/repo.git
+    - https://github.com/owner/repo
+    
+    Args:
+        remote_url: Git remote URL (SSH or HTTPS format).
+    
+    Returns:
+        GitHub repository URL (https://github.com/owner/repo) or None if not GitHub.
+    """
+    # SSH format: git@github.com:owner/repo.git
+    ssh_match = re.match(r"git@github\.com:(.+?)(?:\.git)?$", remote_url)
+    if ssh_match:
+        return f"https://github.com/{ssh_match.group(1)}"
+    
+    # HTTPS format: https://github.com/owner/repo.git or https://github.com/owner/repo
+    https_match = re.match(r"https://github\.com/(.+?)(?:\.git)?$", remote_url)
+    if https_match:
+        return f"https://github.com/{https_match.group(1)}"
+    
+    return None
+
+
+@dataclass
+class MarkdownConfig:
+    """Configuration for markdown output formatting.
+    
+    Attributes:
+        format: Markdown format style (SIMPLE or PR).
+        repo_url: Base GitHub repository URL for generating commit links.
+                  If None and format is PR, commit links won't be generated.
+    
+    Example usage:
+        # Simple markdown (no links)
+        config = MarkdownConfig.simple()
+        
+        # PR markdown with auto-detected repo URL
+        config = MarkdownConfig.for_pr(repo)
+        
+        # PR markdown with explicit URL
+        config = MarkdownConfig.for_pr_with_url("https://github.com/owner/repo")
+    """
+    format: MarkdownFormat = MarkdownFormat.SIMPLE
+    repo_url: Optional[str] = None
+    
+    @classmethod
+    def simple(cls) -> "MarkdownConfig":
+        """Create config for simple markdown (no links)."""
+        return cls(format=MarkdownFormat.SIMPLE)
+    
+    @classmethod
+    def for_pr(cls, repo: "Repo", remote_name: str = "origin") -> "MarkdownConfig":
+        """Create config for PR markdown with auto-detected repo URL.
+        
+        Args:
+            repo: GitPython Repo instance.
+            remote_name: Name of the remote to use for URL detection (default: "origin").
+        
+        Returns:
+            MarkdownConfig with PR format and detected repo URL.
+        """
+        repo_url = None
+        try:
+            remote = repo.remote(remote_name)
+            for url in remote.urls:
+                repo_url = _parse_github_url_from_remote(url)
+                if repo_url:
+                    break
+        except (ValueError, AttributeError):
+            pass
+        return cls(format=MarkdownFormat.PR, repo_url=repo_url)
+    
+    @classmethod
+    def for_pr_with_url(cls, repo_url: str) -> "MarkdownConfig":
+        """Create config for PR markdown with explicit repo URL.
+        
+        Args:
+            repo_url: GitHub repository URL (e.g., "https://github.com/owner/repo").
+        
+        Returns:
+            MarkdownConfig with PR format and specified repo URL.
+        """
+        # Ensure URL doesn't have trailing slash
+        return cls(format=MarkdownFormat.PR, repo_url=repo_url.rstrip("/"))
+    
+    def get_commit_url(self, sha: str) -> Optional[str]:
+        """Get the URL for a commit.
+        
+        Args:
+            sha: Commit SHA (full or short).
+        
+        Returns:
+            Full commit URL or None if repo_url is not set.
+        """
+        if self.repo_url:
+            return f"{self.repo_url}/commit/{sha}"
+        return None
+
+
+class EnhancedCommit:
+    """Wrapper around git.Commit that adds additional properties.
+    
+    This class wraps a git.Commit object and adds:
+    - commit_url: URL to the commit on GitHub (if markdown_config is provided)
+    - All original git.Commit attributes via delegation
+    
+    Attributes:
+        commit: The underlying git.Commit object.
+        markdown_config: Optional MarkdownConfig for URL generation.
+    
+    Example usage:
+        commit = repo.commit("abc123")
+        config = MarkdownConfig.for_pr(repo)
+        enhanced = EnhancedCommit(commit, config)
+        print(enhanced.commit_url)  # https://github.com/owner/repo/commit/abc123...
+        print(enhanced.hexsha)  # abc123... (delegated to underlying commit)
+    """
+    
+    def __init__(self, commit: "Commit", markdown_config: Optional[MarkdownConfig] = None):
+        """Initialize EnhancedCommit.
+        
+        Args:
+            commit: GitPython Commit object to wrap.
+            markdown_config: Optional MarkdownConfig for URL generation.
+        """
+        self._commit = commit
+        self._markdown_config = markdown_config
+    
+    def __getattr__(self, name: str) -> Any:
+        """Delegate attribute access to the underlying commit."""
+        return getattr(self._commit, name)
+    
+    @property
+    def commit_url(self) -> Optional[str]:
+        """Get the URL to this commit on GitHub.
+        
+        Returns:
+            Commit URL or None if markdown_config doesn't have repo_url.
+        """
+        if self._markdown_config:
+            return self._markdown_config.get_commit_url(self._commit.hexsha)
+        return None
+    
+    @property
+    def short_sha(self) -> str:
+        """Get the short SHA (first 11 characters).
+        
+        Returns:
+            Short SHA string.
+        """
+        return self._commit.hexsha[:11]
+    
+    def format_sha(self, use_short: bool = False) -> str:
+        """Format the SHA as markdown, optionally with link.
+        
+        Args:
+            use_short: If True, use short SHA in display.
+        
+        Returns:
+            Markdown formatted SHA (with link if PR format and repo_url available).
+        """
+        display_sha = self.short_sha if use_short else self._commit.hexsha
+        
+        if self._markdown_config and self._markdown_config.format == MarkdownFormat.PR:
+            url = self.commit_url
+            if url:
+                return f"[`{display_sha}`]({url})"
+        
+        return f"`{display_sha}`"
+
+
+@dataclass
+class MergeInfo:
+    """Context information for a merge operation.
+
+    This class holds the basic information about a merge operation,
+    including the target branch and the commit being merged. Stores only
+    SHAs for persistence, but can hydrate to full git.Commit objects when
+    a repo is bound.
+
+    Attributes:
+        target_branch: The branch being merged into (e.g., "v8.0", "master").
+        target_branch_sha: Full SHA of the target branch HEAD (40 chars).
+        merge_commit_sha: Full SHA of the commit being merged (40 chars).
+    """
+
+    target_branch: str
+    target_branch_sha: str
+    merge_commit_sha: str
+
+    # Cached repo reference (not serialized)
+    _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, data: dict, repo: "Repo" = None) -> "MergeInfo":
+        """Create MergeInfo from note.json data.
+
+        Args:
+            data: Dictionary from note.json with merge_info data.
+            repo: Optional GitPython Repo for resolving commits.
+
+        Returns:
+            MergeInfo instance.
+        """
+        return cls(
+            target_branch=data["target_branch"],
+            target_branch_sha=data["target_branch_sha"],
+            merge_commit_sha=data["merge_commit"],
+            _repo=repo,
+        )
+
+    def bind_repo(self, repo: "Repo") -> "MergeInfo":
+        """Bind a repo for commit resolution. Returns self for chaining.
+
+        Args:
+            repo: GitPython Repo instance.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._repo = repo
+        return self
+
+    # Git object accessors (lazy)
+    @property
+    def target_branch_commit(self) -> "Commit":
+        """Get the target branch HEAD commit object. Requires repo to be bound."""
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+        return self._repo.commit(self.target_branch_sha)
+
+    @property
+    def merge_commit(self) -> "Commit":
+        """Get the merge commit object. Requires repo to be bound."""
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+        return self._repo.commit(self.merge_commit_sha)
+
+    def to_dict(self) -> dict:
+        """Serialize to dict for storage in note.json.
+
+        Returns:
+            Dictionary with only essential fields for storage.
+        """
+        return {
+            "target_branch": self.target_branch,
+            "target_branch_sha": self.target_branch_sha,
+            "merge_commit": self.merge_commit_sha,
+        }
+
+
+class SerializationMode(Enum):
+    """Serialization modes for context objects."""
+
+    STORAGE = "storage"  # For note.json - only SHAs
+    TEMPLATE = "template"  # For Jinja2 - includes git.Commit objects
+    PROMPT = "prompt"  # For AI prompts - configurable dict fields
+
+
+@dataclass
+class CommitSerializationConfig:
+    """Configuration for how commits are serialized in prompt mode.
+
+    Default configuration includes: hexsha, authored_date, summary, author.
+
+    Attributes:
+        include_hexsha: Include full 40-char SHA.
+        include_short_sha: Include shortened 11-char SHA.
+        include_author: Include author dict with name and email.
+        include_authored_date: Include Unix timestamp of authoring.
+        include_summary: Include first line of commit message.
+        include_message: Include full commit message.
+        include_parents: Include list of parent commit SHAs.
+    """
+
+    include_hexsha: bool = True
+    include_short_sha: bool = False
+    include_author: bool = True
+    include_authored_date: bool = True
+    include_summary: bool = True
+    include_message: bool = False
+    include_parents: bool = False
+
+    @classmethod
+    def default(cls) -> "CommitSerializationConfig":
+        """Default config: hexsha, authored_date, summary, author."""
+        return cls()
+
+    @classmethod
+    def full(cls) -> "CommitSerializationConfig":
+        """Include all fields."""
+        return cls(
+            include_hexsha=True,
+            include_short_sha=True,
+            include_author=True,
+            include_authored_date=True,
+            include_summary=True,
+            include_message=True,
+            include_parents=True,
+        )
+
+    @classmethod
+    def minimal(cls) -> "CommitSerializationConfig":
+        """Minimal: just hexsha and summary."""
+        return cls(
+            include_hexsha=True,
+            include_short_sha=False,
+            include_author=False,
+            include_authored_date=False,
+            include_summary=True,
+            include_message=False,
+            include_parents=False,
+        )
+
+    @classmethod
+    def from_list(cls, fields: List[str]) -> "CommitSerializationConfig":
+        """Create config from a list of field names.
+
+        Args:
+            fields: List of field names to include. Valid values:
+                    hexsha, short_sha, author, authored_date, summary,
+                    message, parents.
+
+        Returns:
+            CommitSerializationConfig with specified fields enabled.
+        """
+        return cls(
+            include_hexsha="hexsha" in fields,
+            include_short_sha="short_sha" in fields,
+            include_author="author" in fields,
+            include_authored_date="authored_date" in fields,
+            include_summary="summary" in fields,
+            include_message="message" in fields,
+            include_parents="parents" in fields,
+        )
+
+    def to_list(self) -> List[str]:
+        """Convert config to list of enabled field names."""
+        fields = []
+        if self.include_hexsha:
+            fields.append("hexsha")
+        if self.include_short_sha:
+            fields.append("short_sha")
+        if self.include_author:
+            fields.append("author")
+        if self.include_authored_date:
+            fields.append("authored_date")
+        if self.include_summary:
+            fields.append("summary")
+        if self.include_message:
+            fields.append("message")
+        if self.include_parents:
+            fields.append("parents")
+        return fields
+
+
+@dataclass
+class ContextSerializationConfig:
+    """Configuration for context serialization.
+
+    Attributes:
+        mode: Serialization mode (STORAGE, TEMPLATE, or PROMPT).
+        commit_config: Configuration for commit serialization (only used in PROMPT mode).
+    """
+
+    mode: SerializationMode = SerializationMode.STORAGE
+    commit_config: CommitSerializationConfig = field(
+        default_factory=CommitSerializationConfig.default
+    )
+
+    @classmethod
+    def storage(cls) -> "ContextSerializationConfig":
+        """Create config for storage mode (note.json)."""
+        return cls(mode=SerializationMode.STORAGE)
+
+    @classmethod
+    def template(cls) -> "ContextSerializationConfig":
+        """Create config for template mode (Jinja2 with git.Commit objects)."""
+        return cls(mode=SerializationMode.TEMPLATE)
+
+    @classmethod
+    def prompt(
+        cls, commit_config: CommitSerializationConfig = None
+    ) -> "ContextSerializationConfig":
+        """Create config for prompt mode (AI prompts with configurable fields).
+
+        Args:
+            commit_config: Configuration for commit fields. Defaults to
+                          CommitSerializationConfig.default().
+
+        Returns:
+            ContextSerializationConfig for prompt mode.
+        """
+        return cls(
+            mode=SerializationMode.PROMPT,
+            commit_config=commit_config or CommitSerializationConfig.default(),
+        )
+
+
+def _short_sha(sha: str) -> str:
+    """Return shortened SHA (11 chars)."""
+    return sha[:11]
+
+
+def _commit_to_dict(commit: "Commit", config: CommitSerializationConfig) -> Union[dict, str]:
+    """Serialize a git Commit based on config.
+
+    Args:
+        commit: GitPython Commit object.
+        config: Configuration specifying which fields to include.
+
+    Returns:
+        Dictionary with requested commit fields, or just the SHA string
+        if only hexsha is configured.
+    """
+    # If only hexsha is configured, return just the SHA string
+    if (config.include_hexsha and
+        not config.include_short_sha and
+        not config.include_author and
+        not config.include_authored_date and
+        not config.include_summary and
+        not config.include_message and
+        not config.include_parents):
+        return commit.hexsha
+
+    result = {}
+    if config.include_hexsha:
+        result["hexsha"] = commit.hexsha
+    if config.include_short_sha:
+        result["short_sha"] = _short_sha(commit.hexsha)
+    if config.include_author:
+        result["author"] = {"name": commit.author.name, "email": commit.author.email}
+    if config.include_authored_date:
+        result["authored_date"] = commit.authored_date
+    if config.include_summary:
+        result["summary"] = commit.summary
+    if config.include_message:
+        result["message"] = commit.message
+    if config.include_parents:
+        result["parents"] = [p.hexsha for p in commit.parents]
+    return result
+
+
+@dataclass
+class ConflictContext:
+    """Context for merge conflicts with configurable serialization.
+
+    Stores conflict information with only SHAs for persistence, but can
+    hydrate to full git.Commit objects when needed for templates or prompts.
+
+    Attributes:
+        ours_commit_sha: Full SHA of our (HEAD) commit.
+        theirs_commit_sha: Full SHA of their (MERGE_HEAD) commit.
+        base_commit_sha: Full SHA of the merge base commit.
+        files: List of conflicting file paths.
+        conflict_types: Dict mapping file paths to conflict type strings.
+        diffs: Optional dict mapping file paths to diff strings.
+        their_commits_shas: Optional dict mapping file paths to lists of commit SHAs.
+    """
+
+    ours_commit_sha: str
+    theirs_commit_sha: str
+    base_commit_sha: str
+    files: List[str]
+    conflict_types: Dict[str, str]
+    diffs: Optional[Dict[str, str]] = None
+    their_commits_shas: Optional[Dict[str, List[str]]] = None
+
+    # Cached repo reference (not serialized)
+    _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, data: dict, repo: "Repo" = None) -> "ConflictContext":
+        """Create ConflictContext from note.json data.
+
+        Args:
+            data: Dictionary from note.json with conflict_context data.
+            repo: Optional GitPython Repo for resolving commits.
+
+        Returns:
+            ConflictContext instance.
+        """
+        return cls(
+            ours_commit_sha=data["ours_commit"],
+            theirs_commit_sha=data["theirs_commit"],
+            base_commit_sha=data["base_commit"],
+            files=data["files"],
+            conflict_types=data["conflict_types"],
+            diffs=data.get("diffs"),
+            their_commits_shas=data.get("their_commits"),
+            _repo=repo,
+        )
+
+    def bind_repo(self, repo: "Repo") -> "ConflictContext":
+        """Bind a repo for commit resolution. Returns self for chaining.
+
+        Args:
+            repo: GitPython Repo instance.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._repo = repo
+        return self
+
+    # Git object accessors (lazy)
+    @property
+    def ours_commit(self) -> "Commit":
+        """Get the ours (HEAD) commit object. Requires repo to be bound."""
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+        return self._repo.commit(self.ours_commit_sha)
+
+    @property
+    def theirs_commit(self) -> "Commit":
+        """Get the theirs (MERGE_HEAD) commit object. Requires repo to be bound."""
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+        return self._repo.commit(self.theirs_commit_sha)
+
+    @property
+    def base_commit(self) -> "Commit":
+        """Get the merge base commit object. Requires repo to be bound."""
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+        return self._repo.commit(self.base_commit_sha)
+
+    def get_their_commits(self, file_path: str) -> List["Commit"]:
+        """Get list of their commits for a specific file.
+
+        Args:
+            file_path: Path to the conflicting file.
+
+        Returns:
+            List of Commit objects. Empty list if no commits or file not found.
+
+        Raises:
+            RuntimeError: If repo is not bound.
+        """
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+        if not self.their_commits_shas or file_path not in self.their_commits_shas:
+            return []
+        return [self._repo.commit(sha) for sha in self.their_commits_shas[file_path]]
+
+    def to_dict(self, config: ContextSerializationConfig = None) -> dict:
+        """Serialize based on configuration.
+
+        Args:
+            config: Serialization config. Defaults to storage mode.
+
+        Returns:
+            dict suitable for the specified mode:
+            - STORAGE: Only SHAs for note.json
+            - TEMPLATE: With git.Commit objects for Jinja2
+            - PROMPT: With configurable commit dict fields
+        """
+        if config is None:
+            config = ContextSerializationConfig.storage()
+
+        if config.mode == SerializationMode.STORAGE:
+            return self._to_storage_dict()
+        elif config.mode == SerializationMode.TEMPLATE:
+            return self._to_template_dict()
+        elif config.mode == SerializationMode.PROMPT:
+            return self._to_prompt_dict(config.commit_config)
+        else:
+            raise ValueError(f"Unknown serialization mode: {config.mode}")
+
+    def _to_storage_dict(self) -> dict:
+        """Minimal dict for note.json storage."""
+        result = {
+            "ours_commit": self.ours_commit_sha,
+            "theirs_commit": self.theirs_commit_sha,
+            "base_commit": self.base_commit_sha,
+            "files": self.files,
+            "conflict_types": self.conflict_types,
+        }
+        if self.diffs:
+            result["diffs"] = self.diffs
+        if self.their_commits_shas:
+            result["their_commits"] = self.their_commits_shas
+        return result
+
+    def _to_template_dict(self) -> dict:
+        """Dict with git.Commit objects for Jinja2 templates."""
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+
+        result = {
+            "ours_commit": self.ours_commit,
+            "theirs_commit": self.theirs_commit,
+            "base_commit": self.base_commit,
+            "files": self.files,
+            "conflict_types": self.conflict_types,
+        }
+        if self.diffs:
+            result["diffs"] = self.diffs
+        if self.their_commits_shas:
+            result["their_commits"] = {
+                path: self.get_their_commits(path)
+                for path in self.their_commits_shas
+            }
+        return result
+
+    def _to_prompt_dict(self, commit_config: CommitSerializationConfig) -> dict:
+        """Dict with expanded commit info for AI prompts."""
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+
+        result = {
+            "ours_commit": _commit_to_dict(self.ours_commit, commit_config),
+            "theirs_commit": _commit_to_dict(self.theirs_commit, commit_config),
+            "base_commit": _commit_to_dict(self.base_commit, commit_config),
+            "files": self.files,
+            "conflict_types": self.conflict_types,
+        }
+        if self.diffs:
+            result["diffs"] = self.diffs
+        if self.their_commits_shas:
+            result["their_commits"] = {
+                path: [
+                    _commit_to_dict(c, commit_config)
+                    for c in self.get_their_commits(path)
+                ]
+                for path in self.their_commits_shas
+            }
+        return result
+
+
+@dataclass
+class MergeContext:
+    """Context for merge operations with configurable serialization.
+
+    Stores merge information with only SHAs for persistence, but can
+    hydrate to full git.Commit objects when needed.
+
+    Attributes:
+        merge_commit_sha: Full SHA of the commit being merged.
+        merged_commits_shas: List of SHAs for all commits being merged.
+        important_files_modified: List of important files modified in the merge.
+        auto_merged: Optional dict with auto-merge info (strategy, files).
+    """
+
+    merge_commit_sha: str
+    merged_commits_shas: List[str]
+    important_files_modified: List[str]
+    auto_merged: Optional[Dict[str, Any]] = None
+
+    # Cached repo reference (not serialized)
+    _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, data: dict, repo: "Repo" = None) -> "MergeContext":
+        """Create MergeContext from note.json data.
+
+        Args:
+            data: Dictionary from note.json with merge_context data.
+            repo: Optional GitPython Repo for resolving commits.
+
+        Returns:
+            MergeContext instance.
+        """
+        return cls(
+            merge_commit_sha=data["merge_commit"],
+            merged_commits_shas=data["merged_commits"],
+            important_files_modified=data.get("important_files_modified", []),
+            auto_merged=data.get("auto_merged"),
+            _repo=repo,
+        )
+
+    def bind_repo(self, repo: "Repo") -> "MergeContext":
+        """Bind a repo for commit resolution. Returns self for chaining.
+
+        Args:
+            repo: GitPython Repo instance.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._repo = repo
+        return self
+
+    @property
+    def merge_commit(self) -> "Commit":
+        """Get the merge commit object. Requires repo to be bound."""
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+        return self._repo.commit(self.merge_commit_sha)
+
+    @property
+    def merged_commits(self) -> List["Commit"]:
+        """Get list of all merged commit objects. Requires repo to be bound."""
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+        return [self._repo.commit(sha) for sha in self.merged_commits_shas]
+
+    def to_dict(self, config: ContextSerializationConfig = None) -> dict:
+        """Serialize based on configuration.
+
+        Args:
+            config: Serialization config. Defaults to storage mode.
+
+        Returns:
+            dict suitable for the specified mode.
+        """
+        if config is None:
+            config = ContextSerializationConfig.storage()
+
+        if config.mode == SerializationMode.STORAGE:
+            return self._to_storage_dict()
+        elif config.mode == SerializationMode.TEMPLATE:
+            return self._to_template_dict()
+        elif config.mode == SerializationMode.PROMPT:
+            return self._to_prompt_dict(config.commit_config)
+        else:
+            raise ValueError(f"Unknown serialization mode: {config.mode}")
+
+    def _to_storage_dict(self) -> dict:
+        """Minimal dict for note.json storage."""
+        result = {
+            "merge_commit": self.merge_commit_sha,
+            "merged_commits": self.merged_commits_shas,
+            "important_files_modified": self.important_files_modified,
+        }
+        if self.auto_merged:
+            result["auto_merged"] = self.auto_merged
+        return result
+
+    def _to_template_dict(self) -> dict:
+        """Dict with git.Commit objects for Jinja2 templates."""
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+
+        result = {
+            "merge_commit": self.merge_commit,
+            "merged_commits": self.merged_commits,
+            "important_files_modified": self.important_files_modified,
+        }
+        if self.auto_merged:
+            result["auto_merged"] = self.auto_merged
+        return result
+
+    def _to_prompt_dict(self, commit_config: CommitSerializationConfig) -> dict:
+        """Dict with expanded commit info for AI prompts."""
+        if self._repo is None:
+            raise RuntimeError("Repo not bound. Call bind_repo() first.")
+
+        result = {
+            "merge_commit": _commit_to_dict(self.merge_commit, commit_config),
+            "merged_commits": [
+                _commit_to_dict(c, commit_config) for c in self.merged_commits
+            ],
+            "important_files_modified": self.important_files_modified,
+        }
+        if self.auto_merged:
+            result["auto_merged"] = self.auto_merged
+        return result

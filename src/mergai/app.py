@@ -9,12 +9,11 @@ from . import prompts
 from .agents.factory import create_agent
 from .state_store import StateStore
 from .config import MergaiConfig
+from .models import ConflictContext, MergeContext, MergeInfo
 import github
 from github import Repository as GithubRepository
 import json
 from typing import Optional, Tuple, List
-from datetime import datetime, timezone
-from dataclasses import dataclass
 import tempfile
 from pathlib import Path
 from .agents.base import Agent
@@ -24,21 +23,6 @@ log = logging.getLogger(__name__)
 
 # TODO: Make this configurable via settings/config file
 MERGAI_COMMIT_FOOTER = "Note: commit created by mergai"
-
-
-@dataclass
-class MergeContext:
-    """Context information for a merge operation.
-
-    Attributes:
-        target_branch: The branch being merged into (e.g., "v8.0", "master").
-        target_branch_sha: Full SHA of the target branch HEAD (40 chars).
-        merge_commit_sha: Full SHA of the commit being merged (40 chars).
-    """
-
-    target_branch: str
-    target_branch_sha: str
-    merge_commit_sha: str
 
 
 def gh_auth_token() -> str:
@@ -62,6 +46,7 @@ def gh_auth_token() -> str:
 def convert_note(
     note: dict,
     format: str,
+    repo: git.Repo = None,
     pretty: bool = False,
     show_context: bool = True,
     show_solution: bool = True,
@@ -72,18 +57,38 @@ def convert_note(
     show_merge_context: bool = True,
     show_merge_description: bool = True,
 ) -> str:
+    """Convert a note to the specified format.
+
+    Args:
+        note: The note dict from note.json.
+        format: Output format ('json' or 'markdown').
+        repo: Optional GitPython Repo for hydrating contexts in markdown format.
+        pretty: If True, format JSON with indentation.
+        show_context: Include conflict_context in output.
+        show_solution: Include solutions in output.
+        show_pr_comments: Include PR comments in output.
+        show_user_comment: Include user comment in output.
+        show_summary: Include summary in output.
+        show_merge_info: Include merge_info in output.
+        show_merge_context: Include merge_context in output.
+        show_merge_description: Include merge_description in output.
+
+    Returns:
+        Formatted string representation of the note.
+    """
     if format == "json":
         return json.dumps(note, indent=2 if pretty else None) + "\n"
     elif format == "markdown":
         output_str = ""
         if show_merge_info and "merge_info" in note:
-            output_str += util.merge_info_to_markdown(note["merge_info"]) + "\n"
+            merge_info = MergeInfo.from_dict(note["merge_info"], repo)
+            output_str += util.merge_info_to_markdown(merge_info) + "\n"
         if show_merge_context and "merge_context" in note:
-            output_str += util.merge_context_to_markdown(note["merge_context"]) + "\n"
+            merge_ctx = MergeContext.from_dict(note["merge_context"], repo)
+            output_str += util.merge_context_to_markdown(merge_ctx) + "\n"
         if show_context and "conflict_context" in note:
-            output_str += (
-                util.conflict_context_to_markdown(note["conflict_context"]) + "\n"
-            )
+            conflict_ctx = ConflictContext.from_dict(note["conflict_context"], repo)
+            output_str += util.conflict_context_to_markdown(conflict_ctx) + "\n"
         if show_pr_comments and "pr_comments" in note:
             output_str += util.pr_comments_to_markdown(note["pr_comments"]) + "\n"
         if show_user_comment and "user_comment" in note:
@@ -106,13 +111,6 @@ def convert_note(
 
         return output_str + "\n"
     return str(note)
-
-
-@dataclass
-class MergeInfo:
-    target_branch: str
-    target_branch_sha: str
-    merge_commit_sha: str
 
 
 class AppContext:
@@ -140,7 +138,7 @@ class AppContext:
 
         return self._note
 
-    def _require_merge_info(self) -> dict:
+    def _require_merge_info(self) -> MergeInfo:
         """Return merge info from note or raise ClickException if missing."""
 
         self._require_note()
@@ -150,11 +148,7 @@ class AppContext:
                 "No merge info found in note. Run 'mergai context init' first."
             )
 
-        return MergeInfo(
-            target_branch=self._note["merge_info"]["target_branch"],
-            target_branch_sha=self._note["merge_info"]["target_branch_sha"],
-            merge_commit_sha=self._note["merge_info"]["merge_commit"],
-        )
+        return MergeInfo.from_dict(self._note["merge_info"], self.repo)
 
     @property
     def branches(self) -> BranchNameBuilder:
@@ -174,16 +168,24 @@ class AppContext:
         return self._require_merge_info()
 
     @property
-    def conflict_context(self) -> dict:
-        self._require_note()
-        if "conflict_context" not in self._note:
+    def conflict_context(self) -> ConflictContext:
+        """Get the conflict context from note, bound to the repo.
+
+        Returns:
+            ConflictContext object with repo bound for commit resolution.
+
+        Raises:
+            click.ClickException: If no conflict context found in note.
+        """
+        if not self.has_conflict_context:
             raise click.ClickException(
                 "No conflict context found in note. Run 'mergai context create conflict' first."
             )
-        return self._note["conflict_context"]
+        return ConflictContext.from_dict(self._note["conflict_context"], self.repo)
 
     @property
     def has_conflict_context(self) -> bool:
+        self._require_note()
         return "conflict_context" in self._note
 
     @property
@@ -192,14 +194,20 @@ class AppContext:
         return "merge_context" in self._note
 
     @property
-    def merge_context(self) -> dict:
-        self._require_note()
-        if "merge_context" not in self._note:
+    def merge_context(self) -> MergeContext:
+        """Get the merge context from note, bound to the repo.
+
+        Returns:
+            MergeContext object with repo bound for commit resolution.
+
+        Raises:
+            click.ClickException: If no merge context found in note.
+        """
+        if not self.has_merge_context:
             raise click.ClickException(
                 "No merge context found in note. Run 'mergai context create merge' first."
             )
-        return self._note["merge_context"]
-
+        return MergeContext.from_dict(self._note["merge_context"], self.repo)
 
     def check_all_solutions_committed(self) -> bool:
         solutions = self.solutions
@@ -233,12 +241,12 @@ class AppContext:
             raise Exception("GitHub repository not set. Please provide --repo option.")
         return self.gh.get_repo(self.gh_repo_str)
 
-    def get_merge_context(
+    def get_merge_info(
         self,
         commit: Optional[str] = None,
         target: Optional[str] = None,
-    ) -> MergeContext:
-        """Get merge context from note.json or current branch.
+    ) -> MergeInfo:
+        """Get merge info from note.json or current branch.
 
         Resolves target_branch, target_branch_sha, and merge_commit_sha using the following
         priority:
@@ -254,10 +262,10 @@ class AppContext:
             target: Optional target branch to override auto-detection.
 
         Returns:
-            MergeContext with target_branch, target_branch_sha, and merge_commit_sha.
+            MergeInfo with target_branch, target_branch_sha, and merge_commit_sha.
 
         Raises:
-            click.ClickException: If context cannot be determined or conflicts.
+            click.ClickException: If info cannot be determined or conflicts.
         """
         # Get values from note.json if merge_info exists
         note = self.load_note()
@@ -359,10 +367,11 @@ class AppContext:
             except ValueError as e:
                 raise click.ClickException(str(e))
 
-        return MergeContext(
+        return MergeInfo(
             target_branch=final_target,
             target_branch_sha=final_target_sha,
             merge_commit_sha=final_commit,
+            _repo=self.repo,
         )
 
     def _get_target_branch_name(self) -> str:
@@ -480,12 +489,45 @@ class AppContext:
         if "user_comment" in current_note:
             prompt += prompts.load_user_comment_prompt() + "\n\n"
 
+        # Prepare note data for prompt serialization
+        # Hydrate conflict_context with configurable commit fields
+        note_for_prompt = self._prepare_note_for_prompt(current_note)
+
         prompt += "## Note Data\n\n"
         prompt += "```json\n"
-        prompt += json.dumps(current_note, indent=2)
+        prompt += json.dumps(note_for_prompt, indent=2)
         prompt += "\n```\n"
 
         return prompt
+
+    def _prepare_note_for_prompt(self, note: dict) -> dict:
+        """Prepare a note dict for prompt serialization.
+
+        Hydrates context fields (conflict_context, merge_context) using the
+        configurable prompt serialization settings from config.
+
+        Args:
+            note: The note dict from note.json (storage format).
+
+        Returns:
+            A copy of the note with context fields hydrated for prompt use.
+        """
+        from .models import ConflictContext, MergeContext, MergeInfo
+
+        result = note.copy()
+        prompt_config = self.config.context.to_prompt_serialization_config()
+
+        # Hydrate conflict_context if present
+        if "conflict_context" in result:
+            ctx = ConflictContext.from_dict(result["conflict_context"], self.repo)
+            result["conflict_context"] = ctx.to_dict(prompt_config)
+
+        # Hydrate merge_context if present
+        if "merge_context" in result:
+            ctx = MergeContext.from_dict(result["merge_context"], self.repo)
+            result["merge_context"] = ctx.to_dict(prompt_config)
+
+        return result
 
     def build_describe_prompt(self, current_note: dict) -> str:
         system_prompt_describe = prompts.load_system_prompt_describe()
@@ -495,9 +537,12 @@ class AppContext:
         if project_invariants:
             prompt += project_invariants + "\n\n"
 
+        # Prepare note data for prompt serialization
+        note_for_prompt = self._prepare_note_for_prompt(current_note)
+
         prompt += "## Note Data\n\n"
         prompt += "```json\n"
-        prompt += json.dumps(current_note, indent=2)
+        prompt += json.dumps(note_for_prompt, indent=2)
         prompt += "\n```\n"
 
         return prompt
@@ -830,9 +875,7 @@ class AppContext:
     def error_to_prompt(self, error: str) -> str:
         return f"An error occurred while trying to process the output: {error}"
 
-    def resolve(
-        self, force: bool, yolo: bool, max_attempts: int = None
-    ):
+    def resolve(self, force: bool, yolo: bool, max_attempts: int = None):
         if max_attempts is None:
             max_attempts = self.config.resolve.max_attempts
 
@@ -1143,7 +1186,6 @@ class AppContext:
                 raise Exception("All solutions have already been committed.")
 
         solution = note["solutions"][uncommitted_idx]
-        conflict_context = note.get("conflict_context")
 
         if not self.repo.is_dirty():
             raise Exception("No changes to commit in the repository.")
@@ -1165,8 +1207,8 @@ class AppContext:
 
         # Build commit message following Git's merge commit style
         target_branch = self._get_target_branch_name()
-        if conflict_context:
-            theirs_sha = conflict_context["theirs_commit"]["short_sha"]
+        if self.has_conflict_context:
+            theirs_sha = git_utils.short_sha(self.conflict_context.theirs_commit_sha)
             message = f"Resolve conflicts for merge commit '{theirs_sha}' into {target_branch}\n\n"
         else:
             message = "Resolve conflicts for merge\n\n"
@@ -1221,12 +1263,13 @@ class AppContext:
         if note is None:
             raise Exception(f"No note found.\n\n{hint_msg}")
 
-        context = note.get("conflict_context")
-        if context is None:
+        context_dict = note.get("conflict_context")
+        if context_dict is None:
             raise Exception(f"No conflict context found in the note.\n\n{hint_msg}")
 
-        theirs_sha = context["theirs_commit"]["short_sha"]
-        files = context["files"]
+        conflict_ctx = ConflictContext.from_dict(context_dict, self.repo)
+        theirs_sha = git_utils.short_sha(conflict_ctx.theirs_commit_sha)
+        files = conflict_ctx.files
         target_branch = self._get_target_branch_name()
 
         # Build commit message following Git's merge commit style
@@ -1252,7 +1295,9 @@ class AppContext:
             message,
         )
 
-        self.add_selective_note(self.repo.head.commit.hexsha, ["conflict_context", "merge_context"])
+        self.add_selective_note(
+            self.repo.head.commit.hexsha, ["conflict_context", "merge_context"]
+        )
 
     def commit_merge(self):
         """Commit the current staged changes as a merge commit.

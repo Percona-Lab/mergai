@@ -64,21 +64,17 @@ def resolve_ref_sha(repo: Repo, ref: str, try_remote: bool = True) -> str:
 
 
 def author_to_dict(author):
+    """Convert a git Author to a dict.
+
+    Args:
+        author: GitPython Actor object.
+
+    Returns:
+        Dict with name and email.
+    """
     return {
         "name": author.name,
         "email": author.email,
-    }
-
-
-def commit_to_dict(commit):
-    return {
-        "hexsha": commit.hexsha,
-        "short_sha": short_sha(commit.hexsha),
-        "author": author_to_dict(commit.author),
-        "authored_date": commit.authored_date,
-        "summary": commit.summary,
-        "message": commit.message,
-        "parents": [p.hexsha for p in commit.parents],
     }
 
 
@@ -278,15 +274,24 @@ def get_diffs(
 def get_their_commits(
     repo: Repo, base: Commit, theirs: Commit, blobs_map: BlobsMapType
 ) -> dict:
+    """Get commits that modified files in their branch since the base.
+
+    Args:
+        repo: GitPython Repo instance.
+        base: The merge base commit.
+        theirs: Their (MERGE_HEAD) commit.
+        blobs_map: Map of file paths to blob stages from unmerged_blobs().
+
+    Returns:
+        Dict mapping file paths to lists of commit SHAs (hexsha strings).
+    """
     their_commits = {}
     for file_path, _ in blobs_map.items():
         file_commits = list(
             repo.iter_commits(f"{base.hexsha}..{theirs.hexsha}", paths=[file_path])
         )
         if file_commits:
-            their_commits[file_path] = [
-                commit_to_dict(commit) for commit in file_commits
-            ]
+            their_commits[file_path] = [commit.hexsha for commit in file_commits]
 
     return their_commits
 
@@ -324,6 +329,26 @@ def get_conflict_context(
     use_compressed_diffs: bool = False,
     use_their_commits: bool = False,
 ) -> dict:
+    """Get conflict context from the current merge state.
+
+    Returns a dict with only SHA strings for commits (not full commit objects).
+    This dict is suitable for storage in note.json.
+
+    Args:
+        repo: GitPython Repo instance.
+        use_diffs: Include diff hunks for conflicting files.
+        lines_of_context: Number of context lines in diffs.
+        use_compressed_diffs: Compress large diff blocks.
+        use_their_commits: Include list of commits that modified each file.
+
+    Returns:
+        Dict with conflict context data, or None if no merge in progress.
+        Commits are stored as SHA strings only:
+        - ours_commit: str (hexsha)
+        - theirs_commit: str (hexsha)
+        - base_commit: str (hexsha)
+        - their_commits: dict[str, list[str]] (file -> list of hexsha)
+    """
     if not is_merge_in_progress(repo):
         return None
 
@@ -333,19 +358,16 @@ def get_conflict_context(
     theirs_commit = repo.commit("MERGE_HEAD")
     base_commit = repo.merge_base(ours_commit, theirs_commit)[0]
 
-    context = {}
-    context.update(
-        {
-            "ours_commit": commit_to_dict(ours_commit),
-            "theirs_commit": commit_to_dict(theirs_commit),
-            "base_commit": commit_to_dict(base_commit),
-            "files": list(blobs_map.keys()),
-            "conflict_types": {
-                file_path: get_conflict_type(stages)
-                for file_path, stages in blobs_map.items()
-            },
-        }
-    )
+    context = {
+        "ours_commit": ours_commit.hexsha,
+        "theirs_commit": theirs_commit.hexsha,
+        "base_commit": base_commit.hexsha,
+        "files": list(blobs_map.keys()),
+        "conflict_types": {
+            file_path: get_conflict_type(stages)
+            for file_path, stages in blobs_map.items()
+        },
+    }
 
     if use_diffs:
         context["diffs"] = get_diffs(
