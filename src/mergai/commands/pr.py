@@ -96,11 +96,11 @@ def _create_solution_pr(app: AppContext, dry_run: bool) -> None:
 def _build_main_pr_body(app: AppContext) -> str:
     """Build PR body for main PR from merge_context or conflict resolution data."""
 
-    if app.has_merge_context:
-        return _build_merge_pr_body(app)
-
     if app.has_conflict_context and app.has_solutions:
         return _build_solutions_pr_body(app)
+
+    if app.has_merge_context:
+        return _build_merge_pr_body(app)
 
     if app.has_conflict_context and not app.has_solutions:
         raise click.ClickException(
