@@ -24,6 +24,9 @@ DELETE_BRANCH_TYPES = BRANCH_TYPES + ["all"]
 # Valid branch types for push command (includes 'all')
 PUSH_BRANCH_TYPES = BRANCH_TYPES + ["all"]
 
+# Valid branch types for switch command (includes 'target')
+SWITCH_BRANCH_TYPES = BRANCH_TYPES + ["target"]
+
 # Valid token names for the info command
 TOKEN_NAMES = ["target_branch", "target_branch_sha", "merge_commit_sha", "type"]
 
@@ -467,3 +470,82 @@ def check(app: AppContext, branch_name: Optional[str], quiet: bool):
         if not quiet:
             click.echo(f"'{branch_name}' is not a mergai branch")
         raise SystemExit(1)
+
+
+@branch.command()
+@click.pass_obj
+@click.argument("type", type=click.Choice(SWITCH_BRANCH_TYPES, case_sensitive=False))
+@click.option(
+    "--target",
+    "-t",
+    "target_branch",
+    type=str,
+    default=None,
+    help="Target branch name (default: extracted from current branch or merge_info)",
+)
+def switch(app: AppContext, type: str, target_branch: Optional[str]):
+    """Switch to a merge-related branch.
+
+    Switches to the specified branch type. The branch must exist locally.
+
+    TYPE is one of: main, conflict, solution, target
+
+    When TYPE is 'target', switches to the original target branch from merge_info
+    (e.g., the branch you're merging into like 'master' or 'v8.0').
+
+    For main/conflict/solution types, the target and commit are auto-detected
+    from the current mergai branch or merge_info in note.json.
+
+    \b
+    Examples:
+        mergai branch switch main          # switch to main working branch
+        mergai branch switch conflict      # switch to conflict branch
+        mergai branch switch solution      # switch to solution branch
+        mergai branch switch target        # switch to target branch (e.g., master)
+    """
+    if type == "target":
+        # Get target branch from CLI option, merge_info, or current branch
+        if target_branch is not None:
+            branch_name = target_branch
+        else:
+            # Try to get from merge_info in note.json
+            note = app.load_note()
+            if note and "merge_info" in note:
+                branch_name = note["merge_info"].get("target_branch")
+            else:
+                # Try to parse from current mergai branch name
+                parsed = get_current_branch_parsed(app)
+                if parsed:
+                    branch_name = parsed.target_branch
+                else:
+                    branch_name = None
+
+        if branch_name is None:
+            raise click.ClickException(
+                "Cannot determine target branch. "
+                "Run 'mergai context init' or specify --target."
+            )
+    else:
+        # Build branch name for main/conflict/solution types
+        builder = get_branch_builder(app, None, target_branch)
+        branch_name = builder.get_branch_name(type)
+
+    # Check if already on this branch
+    current_branch = git_utils.get_current_branch(app.repo)
+    if current_branch == branch_name:
+        click.echo(f"Already on branch: {branch_name}")
+        return
+
+    # Check if branch exists locally
+    if not git_utils.branch_exists_locally(app.repo, branch_name):
+        raise click.ClickException(
+            f"Branch '{branch_name}' does not exist locally. "
+            f"Create it first with 'mergai branch create {type}' or 'git checkout {branch_name}'."
+        )
+
+    # Switch to the branch
+    try:
+        app.repo.git.checkout(branch_name)
+        click.echo(f"Switched to branch: {branch_name}")
+    except Exception as e:
+        raise click.ClickException(f"Failed to switch to branch: {e}")
