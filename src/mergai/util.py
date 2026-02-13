@@ -82,24 +82,24 @@ def print_or_page(text: str, format: str = "text"):
     proc.wait()
 
 
-def render_from_template(template_str: str, context: dict) -> str:
+def render_from_template(template_str: str, **kwargs) -> str:
     template = Template(template_str)
-    return template.render(context=context)
+    return template.render(**kwargs)
 
 
 MERGE_INFO_MARKDOWN_TEMPLATE = """\
 # Merge Info
 
-- **Target Branch:** `{{ context.target_branch }}`
-{%- if context.target_branch_sha %}
-- **Target Branch SHA:** `{{ context.target_branch_sha }}`
+- **Target Branch:** `{{ merge_info.target_branch }}`
+{%- if merge_info.target_branch_sha %}
+- **Target Branch SHA:** `{{ merge_info.target_branch_sha }}`
 {%- endif %}
-- **Merge Commit:** `{{ context.merge_commit_sha }}`
+- **Merge Commit:** `{{ merge_info.merge_commit_sha }}`
 """
 
 
 def merge_info_to_markdown(merge_info: dict) -> str:
-    return render_from_template(MERGE_INFO_MARKDOWN_TEMPLATE, merge_info)
+    return render_from_template(MERGE_INFO_MARKDOWN_TEMPLATE, merge_info=merge_info)
 
 
 def merge_info_to_str(merge_info: dict, format: str, pretty: bool = False):
@@ -114,26 +114,26 @@ def merge_info_to_str(merge_info: dict, format: str, pretty: bool = False):
 CONFLICT_CONTEXT_MARKDOWN_TEMPLATE = """\
 # Conflict Context
 
-- **Base Commit:** `{{ context.base_commit.hexsha }}`
-- **Ours Commit:** `{{ context.ours_commit.hexsha }}`
-- **Theirs Commit:** `{{ context.theirs_commit.hexsha }}`
+- **Base Commit:** `{{ conflict_context.base_commit.hexsha }}`
+- **Ours Commit:** `{{ conflict_context.ours_commit.hexsha }}`
+- **Theirs Commit:** `{{ conflict_context.theirs_commit.hexsha }}`
 
 ## Conflicted Files
 
 | Path | Conflict Type |
 |------|---------------|
-{%- for path, conflict_type in context.conflict_types.items() %}
+{%- for path, conflict_type in conflict_context.conflict_types.items() %}
 | `{{ path }}` | {{ conflict_type }} |
 {%- endfor %}
 
 
-{%- if context.get('their_commits') %}
+{%- if conflict_context.get('their_commits') %}
 
 <details>
 <summary>Conflict details</summary>
 
 ## Their Commits
-{%- for path, commits in context.their_commits.items() %}
+{%- for path, commits in conflict_context.their_commits.items() %}
 - `{{ path }}`
 {%- for commit in commits %}
 
@@ -153,7 +153,7 @@ Date:   {{ commit.authored_datetime }}
 
 
 def conflict_context_to_markdown(conflict_context: dict) -> str:
-    return render_from_template(CONFLICT_CONTEXT_MARKDOWN_TEMPLATE, conflict_context)
+    return render_from_template(CONFLICT_CONTEXT_MARKDOWN_TEMPLATE, conflict_context=conflict_context)
 
 
 def conflict_context_to_str(context: dict, format, pretty: bool = False):
@@ -169,76 +169,76 @@ def conflict_context_to_str(context: dict, format, pretty: bool = False):
 CONFLICT_SOLUTION_MARKDOWN_TEMPLATE = """# Conflict Solution
 ## Solution Summary
 
-{{ context.response.summary }}
+{{ solution.response.summary }}
 
 ## Resolved files
 
-{%- if context.response.resolved | length == 0 %}
+{%- if solution.response.resolved | length == 0 %}
 No files were resolved.
 {%- else %}
 | File Path | Resolution |
 |-----------|------------|
-{%- for file_path, resolution in context.response.resolved.items() %}
+{%- for file_path, resolution in solution.response.resolved.items() %}
 | `{{ file_path }}` | {{ resolution }} |
 {%- endfor %}
 {%- endif %}
 
 ## Unresolved files
 
-{%- if context.response.unresolved | length == 0 %}
+{%- if solution.response.unresolved | length == 0 %}
 All conflicts have been resolved.
 {%- else %}
 | File Path | Issue |
 |-----------|------------|
-{%- for file_path, issue in context.response.unresolved.items() %}
+{%- for file_path, issue in solution.response.unresolved.items() %}
 | `{{ file_path }}` | {{ issue }} |
 {%- endfor %}
 {%- endif %}
 
 ## Review Notes
 
-{{ context.response.review_notes if context.response.review_notes else "No review notes provided." }}
+{{ solution.response.review_notes if solution.response.review_notes else "No review notes provided." }}
 
-{%- if context.stats %}
+{%- if solution.stats %}
 ## Stats
 
-{%- if context.stats.models | length > 0 %}
+{%- if solution.stats.models | length > 0 %}
 ### Models
 
 | Model | Input tokens | Output tokens | Cached tokens | Thoughts tokens | Tool tokens | Total tokens |
 |-------|--------------|------------------|---------------|-----------------|-------------|--------------|
-{%- for model, stat in context.stats.models.items() %}
+{%- for model, stat in solution.stats.models.items() %}
 | {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} | ${{ "%.6f"|format(0.0) }} |
 {%- endfor %}
 {%- endif %}
 
 {%- endif %}
 
-{%- if context.agent_info %}
+{%- if solution.agent_info %}
 ## Agent Info
 
-Executed with '{{ context.agent_info.agent_type }}' agent, version '{{ context.agent_info.version }}'.
+Executed with '{{ solution.agent_info.agent_type }}' agent, version '{{ solution.agent_info.version }}'.
 
 {%- endif %}
 
-{%- if context.session %}
+{%- if solution.session %}
 ## Session
 
-- ID: `{{ context.session.sessionId }}`
-{%- if context.session.projectHash %}
-- Project Hash: `{{ context.session.projectHash }}`
+- ID: `{{ solution.session.sessionId }}`
+{%- if solution.session.projectHash %}
+- Project Hash: `{{ solution.session.projectHash }}`
 {%- endif %}
-{%- if context.session.startTime %}
-- Started: {{ context.session.startTime }}
+{%- if solution.session.startTime %}
+- Started: {{ solution.session.startTime }}
 {%- endif %}
-{%- if context.session.lastUpdated %}
-- Last Updated: {{ context.session.lastUpdated }}
+{%- if solution.session.lastUpdated %}
+- Last Updated: {{ solution.session.lastUpdated }}
 {%- endif %}
 
-{%- if context.session.messages and context.session.messages | length > 0 %}
+{%- if solution.session.messages and solution.session.messages | length > 0 %}
 ### Messages
 
-{%- for message in context.session.messages %}
+{%- for message in solution.session.messages %}
 - {{ message.timestamp or "unknown time" }} - {{ message.type|capitalize if message.type else "Message" }}{% if message.model %} ({{ message.model }}){% endif %}{% if message.id %} [`{{ message.id }}`]{% endif %}
 
 ```text
@@ -272,56 +272,56 @@ No session messages available.
 # - add support for total
 # - add cost estimation
 def conflict_solution_to_markdown(solution: dict) -> str:
-    return render_from_template(CONFLICT_SOLUTION_MARKDOWN_TEMPLATE, solution)
+    return render_from_template(CONFLICT_SOLUTION_MARKDOWN_TEMPLATE, solution=solution)
 
 
 SOLUTION_MARKDOWN_TEMPLATE = """\
 
 ## Solution Summary
 
-{{ context.response.summary }}
+{{ solution.response.summary }}
 
 ## Resolved Files
 
-{%- if context.response.resolved | length == 0 %}
+{%- if solution.response.resolved | length == 0 %}
 No files were resolved.
 {%- else %}
 | File Path | Resolution |
 |-----------|------------|
-{%- for file_path, resolution in context.response.resolved.items() %}
+{%- for file_path, resolution in solution.response.resolved.items() %}
 | `{{ file_path }}` | {{ resolution }} |
 {%- endfor %}
 {%- endif %}
 
 ## Unresolved Files
 
-{%- if context.response.unresolved | length == 0 %}
+{%- if solution.response.unresolved | length == 0 %}
 All conflicts have been resolved.
 {%- else %}
 | File Path | Issue |
 |-----------|-------|
-{%- for file_path, issue in context.response.unresolved.items() %}
+{%- for file_path, issue in solution.response.unresolved.items() %}
 | `{{ file_path }}` | {{ issue }} |
 {%- endfor %}
 {%- endif %}
 
 ## Review Notes
 
-{{ context.response.review_notes if context.response.review_notes else "No review notes provided." }}
+{{ solution.response.review_notes if solution.response.review_notes else "No review notes provided." }}
 
 <details>
 <summary>Agent Stats</summary>
 
-{%- if context.agent_info %}
+{%- if solution.agent_info %}
 
-**Agent:** {{ context.agent_info.agent_type }} (version {{ context.agent_info.version }})
+**Agent:** {{ solution.agent_info.agent_type }} (version {{ solution.agent_info.version }})
 {%- endif %}
 
-{%- if context.stats and context.stats.models | length > 0 %}
+{%- if solution.stats and solution.stats.models | length > 0 %}
 
 | Model | Input | Output | Cached | Thoughts | Tool | Total |
 |-------|-------|--------|--------|----------|------|-------|
-{%- for model, stat in context.stats.models.items() %}
+{%- for model, stat in solution.stats.models.items() %}
 | {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
 {%- endfor %}
 {%- endif %}
@@ -344,13 +344,13 @@ def solution_to_markdown(solution: dict) -> str:
     Returns:
         Markdown formatted string suitable for PR body.
     """
-    return render_from_template(SOLUTION_MARKDOWN_TEMPLATE, solution)
+    return render_from_template(SOLUTION_MARKDOWN_TEMPLATE, solution=solution)
 
 
 SOLUTIONS_MARKDOWN_TEMPLATE = """\
-{%- for solution in context.solutions %}
+{%- for solution in solutions %}
 ## Solution {{ loop.index }}{% if loop.length == 1 %}{% endif %}
-{{ context.solution_to_markdown(solution) }}
+{{ solution_to_markdown(solution) }}
 {%- endfor %}
 """
 
@@ -364,7 +364,8 @@ def solutions_to_markdown(solutions: list) -> str:
     else:
         md += render_from_template(
             SOLUTIONS_MARKDOWN_TEMPLATE,
-            {"solutions": solutions, "solution_to_markdown": solution_to_markdown},
+            solutions=solutions,
+            solution_to_markdown=solution_to_markdown,
         )
 
     return md
@@ -379,7 +380,7 @@ def conflict_solution_to_str(solution: dict, format: str, pretty: bool = False):
 
 
 PR_COMMENTS_TEMPLATE = """# Pull Request Comments
-{%- for comment_id, comment in context.items() %}
+{%- for comment_id, comment in comments.items() %}
 {%- if comment.path %}
 - `{{ comment.created_at }}`: review comment from `{{ comment.user }}` at `{{ comment.path }}:{{ comment.line_str }}`:
 {%- else %}
@@ -393,7 +394,7 @@ PR_COMMENTS_TEMPLATE = """# Pull Request Comments
 
 
 def pr_comments_to_markdown(comments: dict) -> str:
-    return render_from_template(PR_COMMENTS_TEMPLATE, comments)
+    return render_from_template(PR_COMMENTS_TEMPLATE, comments=comments)
 
 
 def pr_comments_to_str(comments: dict, format: str, pretty: bool = False):
@@ -406,14 +407,14 @@ def pr_comments_to_str(comments: dict, format: str, pretty: bool = False):
 
 USER_COMMENT_TEMPLATE = """\
 # User Comment
-{{ context.date }}: comment from `{{ context.user }} <{{ context.email }}>`:
+{{ user_comment.date }}: comment from `{{ user_comment.user }} <{{ user_comment.email }}>`:
 
-{{ context.body }}
+{{ user_comment.body }}
 """
 
 
 def user_comment_to_markdown(user_comment: dict) -> str:
-    return render_from_template(USER_COMMENT_TEMPLATE, user_comment)
+    return render_from_template(USER_COMMENT_TEMPLATE, user_comment=user_comment)
 
 
 def user_comment_to_str(user_comment: dict, format: str, pretty: bool = False):
@@ -430,30 +431,30 @@ def user_comment_to_str(user_comment: dict, format: str, pretty: bool = False):
 MERGE_CONTEXT_MARKDOWN_TEMPLATE = """\
 # Merge Context
 
-- **Number of merged commits:** {{ context.merged_commits | length }}
-- **Auto-merged files:** {{ context.auto_merged.files | length if context.auto_merged and context.auto_merged.files else 0 }}
+- **Number of merged commits:** {{ merge_context.merged_commits | length }}
+- **Auto-merged files:** {{ merge_context.auto_merged.files | length if merge_context.auto_merged and merge_context.auto_merged.files else 0 }}
 
-{%- if context.important_files_modified | length > 0 %}
+{%- if merge_context.important_files_modified | length > 0 %}
 
 ## Important Files Modified
 
-{%- for file_path in context.important_files_modified %}
+{%- for file_path in merge_context.important_files_modified %}
 - `{{ file_path }}`
 {%- endfor %}
 {%- endif %}
 
-{%- if context.auto_merged %}
+{%- if merge_context.auto_merged %}
 
 ## Auto-Merged Files
-{% if context.auto_merged.files | length == 0 %}
+{% if merge_context.auto_merged.files | length == 0 %}
 No files were auto-merged.
 {%- else %}
-{%- for file_path in context.auto_merged.files %}
+{%- for file_path in merge_context.auto_merged.files %}
 - `{{ file_path }}`
 {%- endfor %}
 {%- endif %}
-{% if context.auto_merged.strategy %}
-**Merged with strategy:** {{ context.auto_merged.strategy }}
+{% if merge_context.auto_merged.strategy %}
+**Merged with strategy:** {{ merge_context.auto_merged.strategy }}
 {%- endif %}
 
 {%- endif %}
@@ -463,7 +464,7 @@ No files were auto-merged.
 
 | # | Commit SHA |
 |---|------------|
-{%- for commit_sha in context.merged_commits %}
+{%- for commit_sha in merge_context.merged_commits %}
 | {{ loop.index }} | `{{ commit_sha }}` |
 {%- endfor %}
 
@@ -472,7 +473,7 @@ No files were auto-merged.
 
 
 def merge_context_to_markdown(merge_context: dict) -> str:
-    return render_from_template(MERGE_CONTEXT_MARKDOWN_TEMPLATE, merge_context)
+    return render_from_template(MERGE_CONTEXT_MARKDOWN_TEMPLATE, merge_context=merge_context)
 
 
 def merge_context_to_str(merge_context: dict, format: str, pretty: bool = False):
@@ -491,50 +492,50 @@ MERGE_DESCRIPTION_MARKDOWN_TEMPLATE = """\
 
 ## Summary
 
-{{ context.response.summary }}
+{{ merge_description.response.summary }}
 
 ## Auto-Merged Files
 
-{%- if context.response.auto_merged | length == 0 %}
+{%- if merge_description.response.auto_merged | length == 0 %}
 No files were auto-merged.
 {%- else %}
 | File Path | Description |
 |-----------|-------------|
-{%- for file_path, description in context.response.auto_merged.items() %}
+{%- for file_path, description in merge_description.response.auto_merged.items() %}
 | `{{ file_path }}` | {{ description }} |
 {%- endfor %}
 {%- endif %}
 
 ## Review Notes
 
-{{ context.response.review_notes if context.response.review_notes else "No review notes provided." }}
+{{ merge_description.response.review_notes if merge_description.response.review_notes else "No review notes provided." }}
 
-{%- if context.stats %}
+{%- if merge_description.stats %}
 
 ## Stats
 
-{%- if context.stats.models | length > 0 %}
+{%- if merge_description.stats.models | length > 0 %}
 ### Models
 
 | Model | Input tokens | Output tokens | Cached tokens | Thoughts tokens | Tool tokens | Total tokens |
 |-------|--------------|------------------|---------------|-----------------|-------------|--------------|
-{%- for model, stat in context.stats.models.items() %}
+{%- for model, stat in merge_description.stats.models.items() %}
 | {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
 {%- endfor %}
 {%- endif %}
 {%- endif %}
 
-{%- if context.agent_info %}
+{%- if merge_description.agent_info %}
 
 ## Agent Info
 
-Executed with '{{ context.agent_info.agent_type }}' agent, version '{{ context.agent_info.version }}'.
+Executed with '{{ merge_description.agent_info.agent_type }}' agent, version '{{ merge_description.agent_info.version }}'.
 {%- endif %}
 """
 
 
 def merge_description_to_markdown(merge_description: dict) -> str:
-    return render_from_template(MERGE_DESCRIPTION_MARKDOWN_TEMPLATE, merge_description)
+    return render_from_template(MERGE_DESCRIPTION_MARKDOWN_TEMPLATE, merge_description=merge_description)
 
 
 def merge_description_to_str(
