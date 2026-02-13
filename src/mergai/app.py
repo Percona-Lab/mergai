@@ -1713,6 +1713,13 @@ class AppContext:
                 note["solutions"].append(git_note["solution"])
                 fields_for_this_commit.append(f"solutions[{idx}]")
 
+            # Handle solutions (array in git note -> add all to solutions array)
+            if "solutions" in git_note:
+                for solution in git_note["solutions"]:
+                    idx = len(note["solutions"])
+                    note["solutions"].append(solution)
+                    fields_for_this_commit.append(f"solutions[{idx}]")
+
             # Handle merge_description
             if "merge_description" in git_note:
                 if "merge_description" not in note:
