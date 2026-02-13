@@ -133,20 +133,15 @@ CONFLICT_CONTEXT_MARKDOWN_TEMPLATE = """\
 <summary>Conflict details</summary>
 
 ## Their Commits
+
+| Path | Commit | Message |
+|------|--------|---------|
 {%- for path, commits in conflict_context.their_commits.items() %}
-- `{{ path }}`
 {%- for commit in commits %}
-
-```text
-commit {{ commit.hexsha }}
-Author: {{ commit.author.name }} <{{ commit.author.email }}>
-Date:   {{ commit.authored_datetime }}
-
-{{ commit.message | indent(4, first=True) }}
-```
-
-{% endfor %}
+| `{{ path }}` | `{{ commit.hexsha }}` | {{ commit.message.split('\n')[0] }} |
 {%- endfor %}
+{%- endfor %}
+
 </details>
 {%- endif %}
 """
