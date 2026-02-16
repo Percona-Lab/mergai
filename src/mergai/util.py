@@ -947,6 +947,18 @@ def commit_note_to_summary_str(
         return commit_note_to_summary_text(commit, note)
 
 
+def commit_to_summary_str(commit: git.Commit) -> str:
+    output_str = f"commit: {commit.hexsha}\n"
+    output_str += f"Author: {commit.author.name} <{commit.author.email}>\n"
+    output_str += f"Date:   {commit.authored_datetime}\n"
+    output_str += "Content:\n"
+    output_str += "  (no note)\n"
+    output_str += (
+        f"Message:\n    {commit.message.strip().replace('\n', '\n    ')}\n"
+    )
+    output_str += "\n"
+    return output_str
+
 def format_commit_info(commit, indent: str = "  ") -> str:
     """Format a commit for display."""
     if not commit:

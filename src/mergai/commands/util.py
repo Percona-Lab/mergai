@@ -210,17 +210,6 @@ def status(app: AppContext, format: str, pretty: bool):
 @click.pass_obj
 @click.argument("ref", type=str, required=False, default="HEAD")
 def log(app: AppContext, ref: str):
-    def format_commit(commit: Commit) -> str:
-        output_str = ""
-        output_str += f"commit: {commit.hexsha}\n"
-        output_str += f"Author: {commit.author.name} <{commit.author.email}>\n"
-        output_str += f"Date:   {commit.authored_datetime}\n"
-        output_str += "Content:\n"
-        output_str += "  (no note)\n"
-        output_str += (
-            f"Message:\n    {commit.message.strip().replace('\n', '\n    ')}\n"
-        )
-        return output_str
 
     output_str = ""
     merge_commit = None
@@ -234,7 +223,7 @@ def log(app: AppContext, ref: str):
                 commit, note.to_dict(), format="text"
             )
         else:
-            output_str += format_commit(commit)
+            output_str += util.commit_to_summary_str(commit)
 
         # Show log until the merge commit is reached
         if git_utils.is_merge_commit_parent(commit, merge_commit):
