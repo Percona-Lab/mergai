@@ -133,7 +133,7 @@ def init(
                 click.echo(f"  target_branch_sha: {merge_info.target_branch_sha}")
                 click.echo(f"  merge_commit: {merge_info.merge_commit_sha}")
                 if note.has_solutions:
-                    committed = len(app._get_committed_solution_indices(note))
+                    committed = len(note._get_committed_solution_indices())
                     total = len(note.solutions)
                     click.echo(f"  solutions: {total} ({committed} committed)")
                 if note.has_conflict_context:
@@ -156,7 +156,7 @@ def init(
                 click.echo(f"  target_branch_sha: {merge_info.target_branch_sha}")
                 click.echo(f"  merge_commit: {merge_info.merge_commit_sha}")
                 if note.has_solutions:
-                    committed = len(app._get_committed_solution_indices(note))
+                    committed = len(note._get_committed_solution_indices())
                     total = len(note.solutions)
                     click.echo(f"  solutions: {total} ({committed} committed)")
                 if note.has_conflict_context:
@@ -425,29 +425,39 @@ def drop(app: AppContext, part: Optional[str], drop_all_solutions: bool):
         if part is None:
             app.drop_all()
             click.echo("Dropped all context.")
-        elif part == "conflict":
-            app.drop_conflict_context()
+            return
+        
+        if part == "merge_info":
+            app.drop_all()
+            click.echo("Dropped merge info.")
+            return
+        
+        if not app.has_note:
+            click.echo("No note found.")
+            return
+        
+        if part == "conflict":
+            app.note.drop_conflict_context()
             click.echo("Dropped conflict context.")
         elif part == "solution":
-            app.drop_solution(all=drop_all_solutions)
+            app.note.drop_solution(all=drop_all_solutions)
             if drop_all_solutions:
                 click.echo("Dropped all solutions.")
             else:
                 click.echo("Dropped uncommitted solutions.")
         elif part == "pr_comments":
-            app.drop_pr_comments()
+            app.note.drop_pr_comments()
             click.echo("Dropped PR comments.")
         elif part == "user_comment":
-            app.drop_user_comment()
+            app.note.drop_user_comment()
             click.echo("Dropped user comment.")
-        elif part == "merge_info":
-            app.drop_merge_info()
-            click.echo("Dropped merge info.")
         elif part == "merge_context":
-            app.drop_merge_context()
+            app.note.drop_merge_context()
             click.echo("Dropped merge context.")
         else:
             raise Exception(f"Invalid part: {part}")
+        
+        app.save_note(app.note)
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)

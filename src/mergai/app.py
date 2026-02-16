@@ -105,7 +105,7 @@ class AppContext:
         """Check if all solutions have been committed."""
         if not self.note.has_solutions:
             return True
-        committed = self._get_committed_solution_indices(self.note)
+        committed = self.note._get_committed_solution_indices()
         return all(i in committed for i in range(len(self.note.solutions)))
 
     @property
@@ -258,134 +258,6 @@ class AppContext:
         """Drop the entire note."""
         self.state.remove_note()
         self._note = None
-
-    def drop_solution(self, all: bool = False):
-        """Drop solution(s) from the note.
-
-        Args:
-            all: If True, drop all solutions. If False (default), only drop
-                 uncommitted solutions (those not in note_index).
-        """
-        if not self.has_note:
-            return
-
-        if not self.note.has_solutions:
-            return
-
-        if all:
-            # Drop all solutions
-            self.note.clear_solutions()
-            # Also remove solutions entries from note_index
-            if self.note.has_note_index:
-                self.note.note_index = [
-                    entry
-                    for entry in self.note.note_index
-                    if not any(
-                        f.startswith("solutions[") for f in entry.get("fields", [])
-                    )
-                ]
-                if not self.note.note_index:
-                    self.note.clear_note_index()
-        else:
-            # Only drop uncommitted solutions
-            committed_indices = self._get_committed_solution_indices(self.note)
-            if committed_indices:
-                # Keep only committed solutions
-                self.note.solutions = [
-                    self.note.solutions[i]
-                    for i in sorted(committed_indices)
-                    if i < len(self.note.solutions)
-                ]
-            else:
-                # No committed solutions, drop all
-                self.note.clear_solutions()
-
-        self.save_note(self.note)
-
-    def drop_conflict_context(self):
-        """Drop conflict_context from the note."""
-        if not self.has_note:
-            return
-        self.note.drop_conflict_context()
-        self.save_note(self.note)
-
-    def drop_merge_context(self):
-        """Drop merge_context from the note."""
-        if not self.has_note:
-            return
-        self.note.drop_merge_context()
-        self.save_note(self.note)
-
-    def drop_pr_comments(self):
-        """Drop pr_comments from the note."""
-        if not self.has_note:
-            return
-        self.note.drop_pr_comments()
-        self.save_note(self.note)
-
-    def drop_user_comment(self):
-        """Drop user_comment from the note."""
-        if not self.has_note:
-            return
-        self.note.drop_user_comment()
-        self.save_note(self.note)
-
-    def drop_merge_info(self):
-        """Drop the entire note (merge_info is required, so dropping it drops all)."""
-        self.drop_all()
-
-    def drop_merge_description(self):
-        """Drop merge_description from the note."""
-        if not self.has_note:
-            return
-        self.note.drop_merge_description()
-        self.save_note(self.note)
-
-    def _get_committed_solution_indices(self, note: MergaiNote) -> set:
-        """Get indices of solutions that have been committed.
-
-        Args:
-            note: The MergaiNote instance.
-
-        Returns:
-            Set of solution indices that are in the note_index.
-        """
-        committed = set()
-        if not note.has_note_index:
-            return committed
-
-        import re
-
-        for entry in note.note_index:
-            for field in entry.get("fields", []):
-                # Match "solutions[N]" pattern
-                match = re.match(r"solutions\[(\d+)\]", field)
-                if match:
-                    committed.add(int(match.group(1)))
-                # Also handle legacy "solution" field
-                if field == "solution":
-                    committed.add(0)
-
-        return committed
-
-    def _get_uncommitted_solution_index(self, note: MergaiNote) -> Optional[int]:
-        """Get the index of the last uncommitted solution.
-
-        Args:
-            note: The MergaiNote instance.
-
-        Returns:
-            Index of the last uncommitted solution, or None if all are committed.
-        """
-        if not note.has_solutions:
-            return None
-
-        committed = self._get_committed_solution_indices(note)
-        # Find the last index that is not committed
-        for i in range(len(note.solutions) - 1, -1, -1):
-            if i not in committed:
-                return i
-        return None
 
     def create_conflict_context(
         self,
@@ -583,8 +455,8 @@ class AppContext:
             Exception: If no note found or agent fails.
         """
         # Check if there's an uncommitted solution
-        uncommitted_idx = self._get_uncommitted_solution_index(self.note)
-        if uncommitted_idx is not None and not force:
+        uncommitted = self.note.get_uncommitted_solution()
+        if uncommitted is not None and not force:
             raise Exception(
                 "An uncommitted solution already exists in the note. Use -f/--force to overwrite."
             )
@@ -646,8 +518,9 @@ class AppContext:
             raise Exception("Failed to obtain a valid solution from the agent.")
 
         # Add solution to solutions array
-        if uncommitted_idx is not None and force:
+        if uncommitted is not None and force:
             # Replace the uncommitted solution
+            uncommitted_idx, _ = uncommitted
             self.note.set_solution_at(uncommitted_idx, solution)
         else:
             # Append new solution
@@ -859,14 +732,14 @@ class AppContext:
     def commit_solution(self):
         """Commit the current solution to the repository."""
         # Find the uncommitted solution
-        uncommitted_idx = self._get_uncommitted_solution_index(self.note)
-        if uncommitted_idx is None:
+        uncommitted = self.note.get_uncommitted_solution()
+        if uncommitted is None:
             if not self.note.has_solutions:
                 raise Exception("No solution found in the note.")
             else:
                 raise Exception("All solutions have already been committed.")
 
-        solution = self.note.solutions[uncommitted_idx]
+        uncommitted_idx, solution = uncommitted
 
         if not self.repo.is_dirty():
             raise Exception("No changes to commit in the repository.")

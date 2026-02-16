@@ -28,7 +28,7 @@ Example usage:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, TYPE_CHECKING, Union
+from typing import Optional, List, Dict, Any, TYPE_CHECKING, Union, Tuple
 from enum import Enum
 import re
 
@@ -1112,6 +1112,89 @@ class MergaiNote:
         """
         self.merge_description = None
         return self
+
+    def drop_solution(self, all: bool = False) -> "MergaiNote":
+        """Drop solution(s) from the note.
+
+        Args:
+            all: If True, drop all solutions. If False (default), only drop
+                 uncommitted solutions (those not in note_index).
+
+        Returns:
+            Self for method chaining.
+        """
+        if not self.has_solutions:
+            return self
+
+        if all:
+            # Drop all solutions
+            self.clear_solutions()
+            # Also remove solutions entries from note_index
+            if self.has_note_index:
+                self.note_index = [
+                    entry
+                    for entry in self.note_index
+                    if not any(
+                        f.startswith("solutions[") for f in entry.get("fields", [])
+                    )
+                ]
+                if not self.note_index:
+                    self.clear_note_index()
+        else:
+            # Only drop uncommitted solutions
+            committed_indices = self._get_committed_solution_indices()
+            if committed_indices:
+                # Keep only committed solutions
+                self.solutions = [
+                    self.solutions[i]
+                    for i in sorted(committed_indices)
+                    if i < len(self.solutions)
+                ]
+            else:
+                # No committed solutions, drop all
+                self.clear_solutions()
+
+        return self
+
+    def _get_committed_solution_indices(self) -> set:
+        """Get indices of solutions that have been committed.
+
+        Returns:
+            Set of solution indices that are in the note_index.
+        """
+        import re
+
+        committed = set()
+        if not self.has_note_index:
+            return committed
+
+        for entry in self.note_index:
+            for field in entry.get("fields", []):
+                # Match "solutions[N]" pattern
+                match = re.match(r"solutions\[(\d+)\]", field)
+                if match:
+                    committed.add(int(match.group(1)))
+                # Also handle legacy "solution" field
+                if field == "solution":
+                    committed.add(0)
+
+        return committed
+
+    def get_uncommitted_solution(self) -> Optional[Tuple[int, dict]]:
+        """Get the last uncommitted solution with its index.
+
+        Returns:
+            Tuple of (index, solution_dict) or None if no uncommitted solution exists.
+        """
+        if not self.has_solutions:
+            return None
+
+        committed = self._get_committed_solution_indices()
+        # Find the last index that is not committed
+        for i in range(len(self.solutions) - 1, -1, -1):
+            if i not in committed:
+                return (i, self.solutions[i])
+        return None
 
     # --- Serialization ---
 
