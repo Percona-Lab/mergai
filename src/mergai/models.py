@@ -812,30 +812,328 @@ class MergeContext:
 
 @dataclass
 class MergaiNote:
+    """A MergAI note containing merge information and optional context data.
+
+    This is the main data structure for storing merge-related information.
+    The merge_info field is required; all other fields are optional.
+
+    Attributes:
+        merge_info: Required merge information (target branch, commit SHAs).
+        conflict_context: Optional context for merge conflicts.
+        merge_context: Optional context for successful merges.
+        solutions: Optional list of AI-generated solutions.
+        pr_comments: Optional list of PR comments.
+        user_comment: Optional user-provided comment.
+        merge_description: Optional AI-generated merge description.
+        note_index: Optional index tracking which commits have which fields.
+    """
+
     merge_info: MergeInfo
     conflict_context: Optional[ConflictContext] = None
     merge_context: Optional[MergeContext] = None
     solutions: Optional[List[dict]] = None
     pr_comments: Optional[List[dict]] = None
-    user_comment: Optional[str] = None
-    merge_description: Optional[str] = None
+    user_comment: Optional[dict] = None  # Dict with user, email, date, body
+    merge_description: Optional[dict] = None
     note_index: Optional[List[dict]] = None
 
-    _data: dict = field(default_factory=dict, repr=False, compare=False)
+    # Cached repo reference (not serialized)
+    _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
+
+    # --- Factory Methods ---
 
     @classmethod
     def from_dict(cls, data: dict, repo: "Repo" = None) -> "MergaiNote":
-        return cls(
-            _data=data,
+        """Create MergaiNote from a note.json dict.
+
+        Args:
+            data: Dictionary from note.json.
+            repo: Optional GitPython Repo for resolving commits.
+
+        Returns:
+            MergaiNote instance with repo bound if provided.
+        """
+        note = cls(
             merge_info=MergeInfo.from_dict(data["merge_info"], repo),
-            conflict_context=ConflictContext.from_dict(data["conflict_context"]) if "conflict_context" in data else None,
-            merge_context=MergeContext.from_dict(data["merge_context"]) if "merge_context" in data else None,
-            solutions=data.get("solutions") if "solutions" in data else None,
-            pr_comments=data.get("pr_comments") if "pr_comments" in data else None,
-            user_comment=data.get("user_comment") if "user_comment" in data else None,
-            merge_description=data.get("merge_description") if "merge_description" in data else None,
-            note_index=data.get("note_index") if "note_index" in data else None,
+            conflict_context=ConflictContext.from_dict(data["conflict_context"], repo) if "conflict_context" in data else None,
+            merge_context=MergeContext.from_dict(data["merge_context"], repo) if "merge_context" in data else None,
+            solutions=data.get("solutions"),
+            pr_comments=data.get("pr_comments"),
+            user_comment=data.get("user_comment"),
+            merge_description=data.get("merge_description"),
+            note_index=data.get("note_index"),
+            _repo=repo,
         )
+        return note
+
+    @classmethod
+    def create(cls, merge_info: MergeInfo, repo: "Repo" = None) -> "MergaiNote":
+        """Create a new MergaiNote with the given merge_info.
+
+        Args:
+            merge_info: Required merge information.
+            repo: Optional GitPython Repo for resolving commits.
+
+        Returns:
+            New MergaiNote instance.
+        """
+        return cls(merge_info=merge_info, _repo=repo)
+
+    # --- has_* Properties ---
+
+    @property
+    def has_conflict_context(self) -> bool:
+        """Check if conflict_context is present."""
+        return self.conflict_context is not None
+
+    @property
+    def has_merge_context(self) -> bool:
+        """Check if merge_context is present."""
+        return self.merge_context is not None
+
+    @property
+    def has_solutions(self) -> bool:
+        """Check if solutions are present."""
+        return self.solutions is not None and len(self.solutions) > 0
+
+    @property
+    def has_pr_comments(self) -> bool:
+        """Check if pr_comments are present."""
+        return self.pr_comments is not None and len(self.pr_comments) > 0
+
+    @property
+    def has_user_comment(self) -> bool:
+        """Check if user_comment is present."""
+        return self.user_comment is not None
+
+    @property
+    def has_merge_description(self) -> bool:
+        """Check if merge_description is present."""
+        return self.merge_description is not None
+
+    @property
+    def has_note_index(self) -> bool:
+        """Check if note_index is present."""
+        return self.note_index is not None and len(self.note_index) > 0
+
+    # --- Repo Binding ---
+
+    def bind_repo(self, repo: "Repo") -> "MergaiNote":
+        """Bind a repo for commit resolution on all sub-contexts.
+
+        Args:
+            repo: GitPython Repo instance.
+
+        Returns:
+            Self for method chaining.
+        """
+        self._repo = repo
+        self.merge_info.bind_repo(repo)
+        if self.conflict_context:
+            self.conflict_context.bind_repo(repo)
+        if self.merge_context:
+            self.merge_context.bind_repo(repo)
+        return self
+
+    # --- Mutation Methods ---
+
+    def set_conflict_context(self, context: ConflictContext) -> "MergaiNote":
+        """Set conflict_context.
+
+        Args:
+            context: ConflictContext to set.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.conflict_context = context
+        if self._repo:
+            context.bind_repo(self._repo)
+        return self
+
+    def set_merge_context(self, context: MergeContext) -> "MergaiNote":
+        """Set merge_context.
+
+        Args:
+            context: MergeContext to set.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.merge_context = context
+        if self._repo:
+            context.bind_repo(self._repo)
+        return self
+
+    def add_solution(self, solution: dict) -> int:
+        """Add a solution and return its index.
+
+        Args:
+            solution: Solution dict to add.
+
+        Returns:
+            Index of the added solution.
+        """
+        if self.solutions is None:
+            self.solutions = []
+        self.solutions.append(solution)
+        return len(self.solutions) - 1
+
+    def set_solution_at(self, index: int, solution: dict) -> "MergaiNote":
+        """Set a solution at a specific index.
+
+        Args:
+            index: Index to set the solution at.
+            solution: Solution dict to set.
+
+        Returns:
+            Self for method chaining.
+
+        Raises:
+            IndexError: If index is out of range.
+        """
+        if self.solutions is None:
+            raise IndexError("No solutions array exists")
+        self.solutions[index] = solution
+        return self
+
+    def clear_solutions(self) -> "MergaiNote":
+        """Clear all solutions.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.solutions = None
+        return self
+
+    def set_pr_comments(self, comments: List[dict]) -> "MergaiNote":
+        """Set pr_comments.
+
+        Args:
+            comments: List of PR comment dicts.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.pr_comments = comments
+        return self
+
+    def set_user_comment(self, comment: dict) -> "MergaiNote":
+        """Set user_comment.
+
+        Args:
+            comment: User comment dict with user, email, date, body.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.user_comment = comment
+        return self
+
+    def set_merge_description(self, description: dict) -> "MergaiNote":
+        """Set merge_description.
+
+        Args:
+            description: Merge description dict.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.merge_description = description
+        return self
+
+    def add_note_index_entry(self, sha: str, fields: List[str]) -> "MergaiNote":
+        """Add an entry to note_index.
+
+        Args:
+            sha: Commit SHA for the index entry.
+            fields: List of field names included in this commit's note.
+
+        Returns:
+            Self for method chaining.
+        """
+        if self.note_index is None:
+            self.note_index = []
+        self.note_index.append({"sha": sha, "fields": fields})
+        return self
+
+    def clear_note_index(self) -> "MergaiNote":
+        """Clear the note_index.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.note_index = None
+        return self
+
+    # --- Drop Methods ---
+
+    def drop_conflict_context(self) -> "MergaiNote":
+        """Remove conflict_context.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.conflict_context = None
+        return self
+
+    def drop_merge_context(self) -> "MergaiNote":
+        """Remove merge_context.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.merge_context = None
+        return self
+
+    def drop_pr_comments(self) -> "MergaiNote":
+        """Remove pr_comments.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.pr_comments = None
+        return self
+
+    def drop_user_comment(self) -> "MergaiNote":
+        """Remove user_comment.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.user_comment = None
+        return self
+
+    def drop_merge_description(self) -> "MergaiNote":
+        """Remove merge_description.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.merge_description = None
+        return self
+
+    # --- Serialization ---
 
     def to_dict(self) -> dict:
-        return self._data
+        """Serialize to dict for storage in note.json.
+
+        Returns:
+            Dictionary suitable for JSON serialization.
+        """
+        result = {"merge_info": self.merge_info.to_dict()}
+        if self.conflict_context:
+            result["conflict_context"] = self.conflict_context.to_dict()
+        if self.merge_context:
+            result["merge_context"] = self.merge_context.to_dict()
+        if self.solutions:
+            result["solutions"] = self.solutions
+        if self.pr_comments:
+            result["pr_comments"] = self.pr_comments
+        if self.user_comment:
+            result["user_comment"] = self.user_comment
+        if self.merge_description:
+            result["merge_description"] = self.merge_description
+        if self.note_index:
+            result["note_index"] = self.note_index
+        return result

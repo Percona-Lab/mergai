@@ -127,18 +127,18 @@ def init(
                 note = app.rebuild_note_from_commits()
                 app.save_note(note)
 
-                merge_info = note.get("merge_info", {})
+                merge_info = note.merge_info
                 click.echo("Context created from commit notes:")
-                click.echo(f"  target_branch: {merge_info.get('target_branch', 'N/A')}")
-                click.echo(f"  target_branch_sha: {merge_info.get('target_branch_sha', 'N/A')}")
-                click.echo(f"  merge_commit: {merge_info.get('merge_commit', 'N/A')}")
-                if "solutions" in note:
+                click.echo(f"  target_branch: {merge_info.target_branch}")
+                click.echo(f"  target_branch_sha: {merge_info.target_branch_sha}")
+                click.echo(f"  merge_commit: {merge_info.merge_commit_sha}")
+                if note.has_solutions:
                     committed = len(app._get_committed_solution_indices(note))
-                    total = len(note["solutions"])
+                    total = len(note.solutions)
                     click.echo(f"  solutions: {total} ({committed} committed)")
-                if "conflict_context" in note:
+                if note.has_conflict_context:
                     click.echo("  conflict_context: present")
-                if "merge_context" in note:
+                if note.has_merge_context:
                     click.echo("  merge_context: present")
                 return
             except click.ClickException:
@@ -150,18 +150,18 @@ def init(
                 note = app.rebuild_note_from_commits()
                 app.save_note(note)
 
-                merge_info = note.get("merge_info", {})
+                merge_info = note.merge_info
                 click.echo("Rebuilt note.json from commit notes:")
-                click.echo(f"  target_branch: {merge_info.get('target_branch', 'N/A')}")
-                click.echo(f"  target_branch_sha: {merge_info.get('target_branch_sha', 'N/A')}")
-                click.echo(f"  merge_commit: {merge_info.get('merge_commit', 'N/A')}")
-                if "solutions" in note:
+                click.echo(f"  target_branch: {merge_info.target_branch}")
+                click.echo(f"  target_branch_sha: {merge_info.target_branch_sha}")
+                click.echo(f"  merge_commit: {merge_info.merge_commit_sha}")
+                if note.has_solutions:
                     committed = len(app._get_committed_solution_indices(note))
-                    total = len(note["solutions"])
+                    total = len(note.solutions)
                     click.echo(f"  solutions: {total} ({committed} committed)")
-                if "conflict_context" in note:
+                if note.has_conflict_context:
                     click.echo("  conflict_context: present")
-                if "merge_context" in note:
+                if note.has_merge_context:
                     click.echo("  merge_context: present")
                 return
             except click.ClickException as e:
@@ -206,20 +206,23 @@ def init(
     except ValueError as e:
         raise click.ClickException(str(e))
 
-    note = app.load_or_create_note()
-
-    if "merge_info" in note and not force:
+    # Check if note already exists with merge_info
+    if app.has_note and not force:
         raise click.ClickException(
             "merge_info already exists in the note. Use -f/--force to overwrite."
         )
 
-    merge_info = {
-        "target_branch": target_branch,
-        "target_branch_sha": target_branch_sha,
-        "merge_commit": merge_commit_sha,
-    }
+    # Import MergeInfo and MergaiNote
+    from ..models import MergeInfo, MergaiNote
 
-    note["merge_info"] = merge_info
+    merge_info = MergeInfo(
+        target_branch=target_branch,
+        target_branch_sha=target_branch_sha,
+        merge_commit_sha=merge_commit_sha,
+    )
+    merge_info.bind_repo(app.repo)
+
+    note = MergaiNote.create(merge_info, app.repo)
     app.save_note(note)
 
     click.echo("Initialized merge context:")

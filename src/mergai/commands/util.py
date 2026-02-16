@@ -1,10 +1,10 @@
 import click
 import json
-from git import Commit
+import git
 from .. import git_utils
 from .. import util
-from ..app import AppContext, convert_note
-from ..models import ConflictContext
+from ..app import AppContext
+from ..models import ConflictContext, MergeInfo, MergeContext
 
 
 @click.command()
@@ -182,6 +182,66 @@ def show(
         exit(1)
 
 
+def convert_note(
+    note: dict,
+    format: str,
+    repo: git.Repo = None,
+    pretty: bool = False,
+    show_context: bool = True,
+    show_solution: bool = True,
+    show_pr_comments: bool = True,
+    show_user_comment: bool = True,
+    show_summary: bool = True,
+    show_merge_info: bool = True,
+    show_merge_context: bool = True,
+    show_merge_description: bool = True,
+) -> str:
+    """Convert a note to the specified format.
+
+    Args:
+        note: The note dict from note.json.
+        format: Output format ('json' or 'markdown').
+        repo: Optional GitPython Repo for hydrating contexts in markdown format.
+        pretty: If True, format JSON with indentation.
+        show_context: Include conflict_context in output.
+        show_solution: Include solutions in output.
+        show_pr_comments: Include PR comments in output.
+        show_user_comment: Include user comment in output.
+        show_summary: Include summary in output.
+        show_merge_info: Include merge_info in output.
+        show_merge_context: Include merge_context in output.
+        show_merge_description: Include merge_description in output.
+
+    Returns:
+        Formatted string representation of the note.
+    """
+    if format == "json":
+        return json.dumps(note, indent=2 if pretty else None) + "\n"
+    elif format == "markdown":
+        output_str = ""
+        if show_merge_info and "merge_info" in note:
+            merge_info = MergeInfo.from_dict(note["merge_info"], repo)
+            output_str += util.merge_info_to_markdown(merge_info) + "\n"
+        if show_merge_context and "merge_context" in note:
+            merge_ctx = MergeContext.from_dict(note["merge_context"], repo)
+            output_str += util.merge_context_to_markdown(merge_ctx) + "\n"
+        if show_context and "conflict_context" in note:
+            conflict_ctx = ConflictContext.from_dict(note["conflict_context"], repo)
+            output_str += util.conflict_context_to_markdown(conflict_ctx) + "\n"
+        if show_pr_comments and "pr_comments" in note:
+            output_str += util.pr_comments_to_markdown(note["pr_comments"]) + "\n"
+        if show_user_comment and "user_comment" in note:
+            output_str += util.user_comment_to_markdown(note["user_comment"]) + "\n"
+        if show_solution:
+            output_str += util.solutions_to_markdown(note.get("solutions", [])) + "\n"
+        if show_merge_description and "merge_description" in note:
+            output_str += (
+                util.merge_description_to_markdown(note["merge_description"]) + "\n"
+            )
+
+        return output_str + "\n"
+    return str(note)
+
 @click.command()
 @click.pass_obj
 @click.option("--pretty", is_flag=True, help="Pretty-print the JSON output.")
@@ -192,18 +252,14 @@ def show(
     help="Output format.",
 )
 def status(app: AppContext, format: str, pretty: bool):
-    try:
-        if not app.state.note_exists():
-            click.echo("No note found in the state store.")
-            exit(0)
-        note = app.state.load_note()
-        util.print_or_page(
-            convert_note(note, format=format, repo=app.repo, pretty=pretty),
-            format=format,
-        )
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)
+    if not app.has_note:
+        click.echo("No note found in the state store.")
+        exit(0)
+    note_dict = app.note.to_dict()
+    util.print_or_page(
+        convert_note(note_dict, format=format, repo=app.repo, pretty=pretty),
+        format=format,
+    )
 
 
 @click.command()
@@ -236,16 +292,15 @@ def log(app: AppContext, ref: str):
 @click.pass_obj
 def prompt(app: AppContext):
     try:
-        note = app.load_note()
-        if note is None:
+        if not app.has_note:
             click.echo("No note found. Please prepare the context first.")
             click.echo("Use `mergai create-conflict-context` to add conflict context.")
             click.echo(
                 "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
             )
             exit(1)
-        prompt = app.build_resolve_prompt(note)
-        util.print_or_page(prompt, format="markdown")
+        prompt_text = app.build_resolve_prompt()
+        util.print_or_page(prompt_text, format="markdown")
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
@@ -255,16 +310,15 @@ def prompt(app: AppContext):
 @click.pass_obj
 def merge_prompt(app: AppContext):
     try:
-        note = app.load_note()
-        if note is None:
+        if not app.has_note:
             click.echo("No note found. Please prepare the context first.")
             click.echo("Use `mergai create-conflict-context` to add conflict context.")
             click.echo(
                 "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
             )
             exit(1)
-        prompt = app.build_describe_prompt(note)
-        util.print_or_page(prompt, format="markdown")
+        prompt_text = app.build_describe_prompt()
+        util.print_or_page(prompt_text, format="markdown")
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
@@ -326,14 +380,12 @@ def get_comment_from_cli(body: str, file: str) -> str:
 )
 @click.argument("body", required=False)
 def comment(app: AppContext, file: str, force: bool, body: str):
-    note = app.load_or_create_note()
     # TODO: support multiple comments
-    user_comment = note.get("user_comment", "")
     cur_comment = ""
-    if user_comment:
-        cur_comment = get_cur_comment(user_comment)
+    if app.note.has_user_comment:
+        cur_comment = get_cur_comment(app.note.user_comment)
 
-    if (body or file) and user_comment and not force:
+    if (body or file) and app.note.has_user_comment and not force:
         raise click.ClickException(
             "Comment already exists. Use -f/--force to overwrite."
         )
@@ -350,13 +402,13 @@ def comment(app: AppContext, file: str, force: bool, body: str):
         click.echo("Empty comment, cancelling.")
         exit(0)
 
-    comment = {
+    comment_dict = {
         "user": app.repo.git.config("user.name"),
         "email": app.repo.git.config("user.email"),
         "date": now_utc_iso(),
         "body": stripped,
     }
 
-    note["user_comment"] = comment
+    app.note.set_user_comment(comment_dict)
 
-    app.state.save_note(note)
+    app.save_note(app.note)

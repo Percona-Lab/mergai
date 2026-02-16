@@ -72,14 +72,11 @@ def merge(app: AppContext, no_context: bool, force: bool):
         esac
     """
     # Load note to get merge_info
-    note = app.load_note()
-
-    if note is None or "merge_info" not in note:
+    if not app.has_note:
         click.echo("Error: merge_info not found. Run 'mergai context init' first.")
         raise SystemExit(EXIT_ERROR)
 
-    merge_info = note["merge_info"]
-    merge_commit_sha = merge_info.get("merge_commit")
+    merge_commit_sha = app.note.merge_info.merge_commit_sha
 
     if not merge_commit_sha:
         click.echo("Error: merge_commit not found in merge_info.")

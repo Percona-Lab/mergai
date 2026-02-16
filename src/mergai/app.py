@@ -8,7 +8,13 @@ from . import prompts
 from .agents.factory import create_agent
 from .state_store import StateStore
 from .config import MergaiConfig
-from .models import ConflictContext, MergeContext, MergeInfo, MergaiNote
+from .models import (
+    ConflictContext,
+    MergeContext,
+    MergeInfo,
+    MergaiNote,
+    ContextSerializationConfig,
+)
 import github
 from github import Repository as GithubRepository
 import json
@@ -24,76 +30,6 @@ log = logging.getLogger(__name__)
 MERGAI_COMMIT_FOOTER = "Note: commit created by mergai"
 
 
-def convert_note(
-    note: dict,
-    format: str,
-    repo: git.Repo = None,
-    pretty: bool = False,
-    show_context: bool = True,
-    show_solution: bool = True,
-    show_pr_comments: bool = True,
-    show_user_comment: bool = True,
-    show_summary: bool = True,
-    show_merge_info: bool = True,
-    show_merge_context: bool = True,
-    show_merge_description: bool = True,
-) -> str:
-    """Convert a note to the specified format.
-
-    Args:
-        note: The note dict from note.json.
-        format: Output format ('json' or 'markdown').
-        repo: Optional GitPython Repo for hydrating contexts in markdown format.
-        pretty: If True, format JSON with indentation.
-        show_context: Include conflict_context in output.
-        show_solution: Include solutions in output.
-        show_pr_comments: Include PR comments in output.
-        show_user_comment: Include user comment in output.
-        show_summary: Include summary in output.
-        show_merge_info: Include merge_info in output.
-        show_merge_context: Include merge_context in output.
-        show_merge_description: Include merge_description in output.
-
-    Returns:
-        Formatted string representation of the note.
-    """
-    if format == "json":
-        return json.dumps(note, indent=2 if pretty else None) + "\n"
-    elif format == "markdown":
-        output_str = ""
-        if show_merge_info and "merge_info" in note:
-            merge_info = MergeInfo.from_dict(note["merge_info"], repo)
-            output_str += util.merge_info_to_markdown(merge_info) + "\n"
-        if show_merge_context and "merge_context" in note:
-            merge_ctx = MergeContext.from_dict(note["merge_context"], repo)
-            output_str += util.merge_context_to_markdown(merge_ctx) + "\n"
-        if show_context and "conflict_context" in note:
-            conflict_ctx = ConflictContext.from_dict(note["conflict_context"], repo)
-            output_str += util.conflict_context_to_markdown(conflict_ctx) + "\n"
-        if show_pr_comments and "pr_comments" in note:
-            output_str += util.pr_comments_to_markdown(note["pr_comments"]) + "\n"
-        if show_user_comment and "user_comment" in note:
-            output_str += util.user_comment_to_markdown(note["user_comment"]) + "\n"
-        # Handle both legacy "solution" and new "solutions" array
-        if show_solution:
-            if "solutions" in note:
-                for idx, solution in enumerate(note["solutions"]):
-                    if len(note["solutions"]) > 1:
-                        output_str += f"## Solution {idx + 1}\n\n"
-                    output_str += util.conflict_solution_to_markdown(solution) + "\n"
-            elif "solution" in note:
-                output_str += (
-                    util.conflict_solution_to_markdown(note["solution"]) + "\n"
-                )
-        if show_merge_description and "merge_description" in note:
-            output_str += (
-                util.merge_description_to_markdown(note["merge_description"]) + "\n"
-            )
-
-        return output_str + "\n"
-    return str(note)
-
-
 class AppContext:
     def __init__(self, config: MergaiConfig = None):
         self.config: MergaiConfig = config if config is not None else MergaiConfig()
@@ -102,16 +38,23 @@ class AppContext:
         self.gh_repo_str: Optional[str] = None
         gh_token = util.gh_auth_token()
         self.gh = github.Github(gh_token) if gh_token else None
-        self._note: Optional[dict] = None
+        self._note: Optional[MergaiNote] = None
 
-    def _require_note(self) -> dict:
-        """Load note and raise ClickException if missing."""
+    def _require_note(self) -> MergaiNote:
+        """Load note and raise ClickException if missing.
 
+        Returns:
+            MergaiNote instance with repo bound.
+
+        Raises:
+            click.ClickException: If no note found.
+        """
         if self._note is not None:
             return self._note
 
         if self.state.note_exists():
-            self._note = self.state.load_note()
+            note_dict = self.state.load_note()
+            self._note = MergaiNote.from_dict(note_dict, self.repo)
 
         if not self._note:
             raise click.ClickException(
@@ -122,97 +65,48 @@ class AppContext:
 
     @property
     def has_note(self) -> bool:
+        """Check if a note file exists."""
         return self.state.note_exists()
 
     @property
-    def note(self) -> dict:
-        if not self.has_note:
-            raise click.ClickException(
-                "No note found. Run 'mergai context init' first."
-            )
+    def note(self) -> MergaiNote:
+        """Get the current note, loading it if necessary.
+
+        Returns:
+            MergaiNote instance with repo bound.
+
+        Raises:
+            click.ClickException: If no note found.
+        """
         return self._require_note()
 
-    def _require_merge_info(self) -> MergeInfo:
-        """Return merge info from note or raise ClickException if missing."""
-
-        self._require_note()
-
-        if "merge_info" not in self._note:
-            raise click.ClickException(
-                "No merge info found in note. Run 'mergai context init' first."
-            )
-
-        return MergeInfo.from_dict(self._note["merge_info"], self.repo)
-
-    @property
-    def has_merge_info(self) -> bool:
-        self._require_note()
-        return "merge_info" in self.note
-
-    @property
-    def merge_info(self) -> MergeInfo:
-        return self._require_merge_info()
-
-    @property
-    def conflict_context(self) -> ConflictContext:
-        """Get the conflict context from note, bound to the repo.
+    def load_note(self) -> Optional[MergaiNote]:
+        """Load note from storage without caching.
 
         Returns:
-            ConflictContext object with repo bound for commit resolution.
-
-        Raises:
-            click.ClickException: If no conflict context found in note.
+            MergaiNote instance or None if not found.
         """
-        if not self.has_conflict_context:
-            raise click.ClickException(
-                "No conflict context found in note. Run 'mergai context create conflict' first."
-            )
-        return ConflictContext.from_dict(self._note["conflict_context"], self.repo)
+        if not self.state.note_exists():
+            return None
+        note_dict = self.state.load_note()
+        return MergaiNote.from_dict(note_dict, self.repo)
 
-    @property
-    def has_conflict_context(self) -> bool:
-        self._require_note()
-        return "conflict_context" in self._note
+    def save_note(self, note: MergaiNote):
+        """Save a MergaiNote to storage.
 
-    @property
-    def has_merge_context(self) -> bool:
-        self._require_note()
-        return "merge_context" in self._note
-
-    @property
-    def merge_context(self) -> MergeContext:
-        """Get the merge context from note, bound to the repo.
-
-        Returns:
-            MergeContext object with repo bound for commit resolution.
-
-        Raises:
-            click.ClickException: If no merge context found in note.
+        Args:
+            note: MergaiNote instance to save.
         """
-        if not self.has_merge_context:
-            raise click.ClickException(
-                "No merge context found in note. Run 'mergai context create merge' first."
-            )
-        return MergeContext.from_dict(self._note["merge_context"], self.repo)
+        self.state.save_note(note.to_dict())
+        # Update cached note
+        self._note = note
 
     def check_all_solutions_committed(self) -> bool:
-        solutions = self.solutions
-        committed = self._get_committed_solution_indices(self._note)
-        return all(i in committed for i in range(len(solutions)))
-
-    @property
-    def solutions(self) -> List[dict]:
-        self._require_note()
-        if "solutions" not in self._note:
-            raise click.ClickException(
-                "No solutions found in note. Run 'mergai resolve' first."
-            )
-        return self._note["solutions"]
-
-    @property
-    def has_solutions(self) -> bool:
-        self._require_note()
-        return "solutions" in self._note
+        """Check if all solutions have been committed."""
+        if not self.note.has_solutions:
+            return True
+        committed = self._get_committed_solution_indices(self.note)
+        return all(i in committed for i in range(len(self.note.solutions)))
 
     @property
     def gh_repo(self) -> GithubRepository.Repository:
@@ -224,14 +118,12 @@ class AppContext:
             raise Exception("GitHub repository not set. Please provide --repo option.")
         return self.gh.get_repo(self.gh_repo_str)
 
-
     @property
     def branches(self) -> BranchNameBuilder:
-        merge_info = self.merge_info
         try:
             return BranchNameBuilder.from_config(
                 self.config.branch,
-                merge_info,
+                self.note.merge_info,
             )
         except ValueError as e:
             raise click.ClickException(
@@ -243,7 +135,6 @@ class AppContext:
                 f"Current format: {self.config.branch.name_format}"
             )
 
-
     def get_note_from_commit(self, commit: str) -> Optional[dict]:
         try:
             return git_utils.get_note_from_commit_as_dict(self.repo, "mergai", commit)
@@ -252,26 +143,25 @@ class AppContext:
 
     def try_get_note_from_commit(self, commit: str) -> Optional[MergaiNote]:
         try:
-            note_dict = git_utils.get_note_from_commit_as_dict(self.repo, "mergai", commit)
+            note_dict = git_utils.get_note_from_commit_as_dict(
+                self.repo, "mergai", commit
+            )
             if note_dict is None:
                 return None
             return MergaiNote.from_dict(note_dict, self.repo)
         except Exception as e:
             return None
 
-    # TODO: refactor
+    def build_resolve_prompt(self) -> str:
+        """Build the prompt for conflict resolution.
 
-    def load_or_create_note(self) -> dict:
-        if self.state.note_exists():
-            return self.state.load_note()
+        Returns:
+            The complete prompt string for the AI agent.
 
-        return {}
-
-    def save_note(self, note: dict):
-        self.state.save_note(note)
-
-    def build_resolve_prompt(self, current_note: dict) -> str:
-        if self.has_solutions:
+        Raises:
+            Exception: If solutions already exist in the note.
+        """
+        if self.note.has_solutions:
             raise Exception(
                 "Current note already has solutions. Cannot build resolve prompt for an existing solution. Please drop existing solutions first."
             )
@@ -283,18 +173,18 @@ class AppContext:
         if project_invariants:
             prompt += project_invariants + "\n\n"
 
-        if "conflict_context" in current_note:
+        if self.note.has_conflict_context:
             prompt += prompts.load_conflict_context_prompt() + "\n\n"
 
-        if "pr_comments" in current_note:
+        if self.note.has_pr_comments:
             prompt += prompts.load_pr_comments_prompt() + "\n\n"
 
-        if "user_comment" in current_note:
+        if self.note.has_user_comment:
             prompt += prompts.load_user_comment_prompt() + "\n\n"
 
         # Prepare note data for prompt serialization
         # Hydrate conflict_context with configurable commit fields
-        note_for_prompt = self._prepare_note_for_prompt(current_note)
+        note_for_prompt = self._prepare_note_for_prompt(self.note)
 
         prompt += "## Note Data\n\n"
         prompt += "```json\n"
@@ -303,33 +193,46 @@ class AppContext:
 
         return prompt
 
-    def _prepare_note_for_prompt(self, note: dict) -> dict:
-        """Prepare a note dict for prompt serialization.
+    def _prepare_note_for_prompt(self, note: MergaiNote) -> dict:
+        """Prepare a note for prompt serialization.
 
         Hydrates context fields (conflict_context, merge_context) using the
         configurable prompt serialization settings from config.
 
         Args:
-            note: The note dict from note.json (storage format).
+            note: The MergaiNote instance.
 
         Returns:
-            A copy of the note with context fields hydrated for prompt use.
+            A dict with context fields hydrated for prompt use.
         """
-        from .models import ConflictContext, MergeContext, MergeInfo
-
-        note_copy = note.copy()
         prompt_config = self.config.prompt.to_prompt_serialization_config()
 
-        if self.has_conflict_context:
-            note_copy["conflict_context"] = self.conflict_context.to_dict(prompt_config)
+        result = {"merge_info": note.merge_info.to_dict()}
 
-        if self.has_merge_context:
-            note_copy["merge_context"] = self.merge_context.to_dict(prompt_config)
+        if note.has_conflict_context:
+            result["conflict_context"] = note.conflict_context.to_dict(prompt_config)
 
-        return note_copy
+        if note.has_merge_context:
+            result["merge_context"] = note.merge_context.to_dict(prompt_config)
 
-    def build_describe_prompt(self, current_note: dict) -> str:
-        if self.has_solutions:
+        if note.has_pr_comments:
+            result["pr_comments"] = note.pr_comments
+
+        if note.has_user_comment:
+            result["user_comment"] = note.user_comment
+
+        return result
+
+    def build_describe_prompt(self) -> str:
+        """Build the prompt for merge description.
+
+        Returns:
+            The complete prompt string for the AI agent.
+
+        Raises:
+            Exception: If solutions already exist in the note.
+        """
+        if self.note.has_solutions:
             raise Exception(
                 "Current note already has solutions. Cannot build describe prompt for an existing solution. Please drop existing solutions first."
             )
@@ -342,7 +245,7 @@ class AppContext:
             prompt += project_invariants + "\n\n"
 
         # Prepare note data for prompt serialization
-        note_for_prompt = self._prepare_note_for_prompt(current_note)
+        note_for_prompt = self._prepare_note_for_prompt(self.note)
 
         prompt += "## Note Data\n\n"
         prompt += "```json\n"
@@ -351,17 +254,10 @@ class AppContext:
 
         return prompt
 
-    def drop_note_field(self, field: str):
-        note = self.load_or_create_note()
-        if field in note:
-            del note[field]
-            if len(note) == 0:
-                self.state.remove_note()
-            else:
-                self.save_note(note)
-
     def drop_all(self):
+        """Drop the entire note."""
         self.state.remove_note()
+        self._note = None
 
     def drop_solution(self, all: bool = False):
         """Drop solution(s) from the note.
@@ -370,64 +266,97 @@ class AppContext:
             all: If True, drop all solutions. If False (default), only drop
                  uncommitted solutions (those not in note_index).
         """
-        note = self.load_or_create_note()
+        if not self.has_note:
+            return
 
-        # Handle legacy "solution" field - migrate to "solutions"
-        if "solution" in note:
-            if "solutions" not in note:
-                note["solutions"] = [note["solution"]]
-            del note["solution"]
-
-        if "solutions" not in note:
+        if not self.note.has_solutions:
             return
 
         if all:
             # Drop all solutions
-            del note["solutions"]
+            self.note.clear_solutions()
             # Also remove solutions entries from note_index
-            if "note_index" in note:
-                note["note_index"] = [
+            if self.note.has_note_index:
+                self.note.note_index = [
                     entry
-                    for entry in note["note_index"]
+                    for entry in self.note.note_index
                     if not any(
                         f.startswith("solutions[") for f in entry.get("fields", [])
                     )
                 ]
+                if not self.note.note_index:
+                    self.note.clear_note_index()
         else:
             # Only drop uncommitted solutions
-            committed_indices = self._get_committed_solution_indices(note)
+            committed_indices = self._get_committed_solution_indices(self.note)
             if committed_indices:
                 # Keep only committed solutions
-                note["solutions"] = [
-                    note["solutions"][i]
+                self.note.solutions = [
+                    self.note.solutions[i]
                     for i in sorted(committed_indices)
-                    if i < len(note["solutions"])
+                    if i < len(self.note.solutions)
                 ]
             else:
                 # No committed solutions, drop all
-                del note["solutions"]
+                self.note.clear_solutions()
 
-        if len(note) == 0:
-            self.state.remove_note()
-        else:
-            self.save_note(note)
+        self.save_note(self.note)
 
-    def _get_committed_solution_indices(self, note: dict) -> set:
+    def drop_conflict_context(self):
+        """Drop conflict_context from the note."""
+        if not self.has_note:
+            return
+        self.note.drop_conflict_context()
+        self.save_note(self.note)
+
+    def drop_merge_context(self):
+        """Drop merge_context from the note."""
+        if not self.has_note:
+            return
+        self.note.drop_merge_context()
+        self.save_note(self.note)
+
+    def drop_pr_comments(self):
+        """Drop pr_comments from the note."""
+        if not self.has_note:
+            return
+        self.note.drop_pr_comments()
+        self.save_note(self.note)
+
+    def drop_user_comment(self):
+        """Drop user_comment from the note."""
+        if not self.has_note:
+            return
+        self.note.drop_user_comment()
+        self.save_note(self.note)
+
+    def drop_merge_info(self):
+        """Drop the entire note (merge_info is required, so dropping it drops all)."""
+        self.drop_all()
+
+    def drop_merge_description(self):
+        """Drop merge_description from the note."""
+        if not self.has_note:
+            return
+        self.note.drop_merge_description()
+        self.save_note(self.note)
+
+    def _get_committed_solution_indices(self, note: MergaiNote) -> set:
         """Get indices of solutions that have been committed.
 
         Args:
-            note: The note dict containing note_index.
+            note: The MergaiNote instance.
 
         Returns:
             Set of solution indices that are in the note_index.
         """
         committed = set()
-        if "note_index" not in note:
+        if not note.has_note_index:
             return committed
 
         import re
 
-        for entry in note["note_index"]:
+        for entry in note.note_index:
             for field in entry.get("fields", []):
                 # Match "solutions[N]" pattern
                 match = re.match(r"solutions\[(\d+)\]", field)
@@ -439,43 +368,24 @@ class AppContext:
 
         return committed
 
-    def _get_uncommitted_solution_index(self, note: dict) -> Optional[int]:
+    def _get_uncommitted_solution_index(self, note: MergaiNote) -> Optional[int]:
         """Get the index of the last uncommitted solution.
 
         Args:
-            note: The note dict.
+            note: The MergaiNote instance.
 
         Returns:
             Index of the last uncommitted solution, or None if all are committed.
         """
-        solutions = note.get("solutions", [])
-        if not solutions:
+        if not note.has_solutions:
             return None
 
         committed = self._get_committed_solution_indices(note)
         # Find the last index that is not committed
-        for i in range(len(solutions) - 1, -1, -1):
+        for i in range(len(note.solutions) - 1, -1, -1):
             if i not in committed:
                 return i
         return None
-
-    def drop_pr_comments(self):
-        self.drop_note_field("pr_comments")
-
-    def drop_conflict_context(self):
-        self.drop_note_field("conflict_context")
-
-    def drop_user_comment(self):
-        self.drop_note_field("user_comment")
-
-    def drop_merge_info(self):
-        self.drop_note_field("merge_info")
-
-    def drop_merge_description(self):
-        self.drop_note_field("merge_description")
-
-    def drop_merge_context(self):
-        self.drop_note_field("merge_context")
 
     def create_conflict_context(
         self,
@@ -484,27 +394,41 @@ class AppContext:
         use_compressed_diffs: bool,
         use_their_commits: bool,
         force: bool,
-    ) -> dict:
-        note = self.load_or_create_note()
+    ) -> ConflictContext:
+        """Create conflict context from current merge state.
 
-        context = git_utils.get_conflict_context(
+        Args:
+            use_diffs: Include diffs in the context.
+            diff_lines_of_context: Number of context lines in diffs.
+            use_compressed_diffs: Use compressed diffs.
+            use_their_commits: Include their commits in context.
+            force: Overwrite existing conflict_context.
+
+        Returns:
+            The created ConflictContext.
+
+        Raises:
+            Exception: If no merge in progress or conflict_context exists (without force).
+        """
+        context_dict = git_utils.get_conflict_context(
             self.repo,
             use_diffs=use_diffs,
             lines_of_context=diff_lines_of_context,
             use_compressed_diffs=use_compressed_diffs,
             use_their_commits=use_their_commits,
         )
-        if context is None:
+        if context_dict is None:
             raise Exception("No merge in progress")
 
-        if "conflict_context" in note and not force:
+        if self.note.has_conflict_context and not force:
             raise Exception(
                 "Conflict context already exists in the note. Use -f/--force to overwrite."
             )
 
-        note["conflict_context"] = context
+        context = ConflictContext.from_dict(context_dict, self.repo)
+        self.note.set_conflict_context(context)
 
-        self.save_note(note)
+        self.save_note(self.note)
 
         return context
 
@@ -513,7 +437,7 @@ class AppContext:
         force: bool = False,
         auto_merged_files: Optional[List[str]] = None,
         merge_strategy: Optional[str] = None,
-    ) -> dict:
+    ) -> MergeContext:
         """Create merge context from merge_info.
 
         Calculates the list of commits being merged by finding the
@@ -527,27 +451,20 @@ class AppContext:
             merge_strategy: The merge strategy used (e.g., 'ort', 'recursive').
 
         Returns:
-            The created merge context dict.
+            The created MergeContext.
 
         Raises:
-            Exception: If merge_info is not initialized or merge_context
-                       already exists (without force).
+            Exception: If merge_context already exists (without force).
         """
-        note = self.load_or_create_note()
-
-        # Require merge_info to be initialized
-        if "merge_info" not in note:
-            raise Exception("merge_info not found. Run 'mergai context init' first.")
-
         # Check for existing merge_context
-        if "merge_context" in note and not force:
+        if self.note.has_merge_context and not force:
             raise Exception(
                 "merge_context already exists. Use -f/--force to overwrite."
             )
 
-        merge_info = note["merge_info"]
-        target_branch = merge_info["target_branch"]
-        merge_commit_sha = merge_info["merge_commit"]
+        merge_info = self.note.merge_info
+        target_branch = merge_info.target_branch
+        merge_commit_sha = merge_info.merge_commit_sha
 
         # Resolve merge commit
         merge_commit = self.repo.commit(merge_commit_sha)
@@ -578,7 +495,7 @@ class AppContext:
 
             important_files_modified = sorted(set(important_files) & all_modified_files)
 
-        context = {
+        context_dict = {
             "merge_commit": merge_commit_hexsha,
             "merged_commits": merged_commits,
             "important_files_modified": important_files_modified,
@@ -586,13 +503,14 @@ class AppContext:
 
         # Add auto_merged info if provided
         if auto_merged_files is not None or merge_strategy is not None:
-            context["auto_merged"] = {
+            context_dict["auto_merged"] = {
                 "strategy": merge_strategy,
                 "files": auto_merged_files or [],
             }
 
-        note["merge_context"] = context
-        self.save_note(note)
+        context = MergeContext.from_dict(context_dict, self.repo)
+        self.note.set_merge_context(context)
+        self.save_note(self.note)
 
         return context
 
@@ -655,12 +573,17 @@ class AppContext:
         return f"An error occurred while trying to process the output: {error}"
 
     def resolve(self, force: bool, yolo: bool):
-        note = self.load_note()
-        if note is None:
-            raise Exception("No note found. Please prepare the context first.")
+        """Run the AI agent to resolve conflicts.
 
+        Args:
+            force: If True, overwrite existing uncommitted solution.
+            yolo: Enable YOLO mode for the agent.
+
+        Raises:
+            Exception: If no note found or agent fails.
+        """
         # Check if there's an uncommitted solution
-        uncommitted_idx = self._get_uncommitted_solution_index(note)
+        uncommitted_idx = self._get_uncommitted_solution_index(self.note)
         if uncommitted_idx is not None and not force:
             raise Exception(
                 "An uncommitted solution already exists in the note. Use -f/--force to overwrite."
@@ -669,8 +592,7 @@ class AppContext:
         # If force and there's an uncommitted solution, we'll replace it
         # Otherwise, we'll append a new solution
 
-        # TODO: implement use_history=True
-        prompt = self.build_resolve_prompt(note, use_history=False)
+        prompt = self.build_resolve_prompt()
 
         agent = self.get_agent(yolo=yolo)
 
@@ -724,17 +646,14 @@ class AppContext:
             raise Exception("Failed to obtain a valid solution from the agent.")
 
         # Add solution to solutions array
-        if "solutions" not in note:
-            note["solutions"] = []
-
         if uncommitted_idx is not None and force:
             # Replace the uncommitted solution
-            note["solutions"][uncommitted_idx] = solution
+            self.note.set_solution_at(uncommitted_idx, solution)
         else:
             # Append new solution
-            note["solutions"].append(solution)
+            self.note.add_solution(solution)
 
-        self.save_note(note)
+        self.save_note(self.note)
 
     def check_describe_response_format(self, response: dict) -> Optional[str]:
         """Check if the describe response has the correct format.
@@ -773,19 +692,15 @@ class AppContext:
         if max_attempts is None:
             max_attempts = self.config.resolve.max_attempts
 
-        note = self.load_note()
-        if note is None:
-            raise Exception("No note found. Please prepare the context first.")
-
-        if "merge_description" in note and not force:
+        if self.note.has_merge_description and not force:
             raise Exception(
                 "Merge description already exists in the note. Use -f/--force to overwrite."
             )
 
-        if "merge_description" in note:
-            del note["merge_description"]
+        if self.note.has_merge_description:
+            self.note.drop_merge_description()
 
-        prompt = self.build_describe_prompt(note)
+        prompt = self.build_describe_prompt()
 
         # No YOLO mode for describe - we don't want file modifications
         agent = self.get_agent(yolo=False)
@@ -859,8 +774,8 @@ class AppContext:
         if description is None:
             raise Exception("Failed to obtain a valid description from the agent.")
 
-        note["merge_description"] = description
-        self.save_note(note)
+        self.note.set_merge_description(description)
+        self.save_note(self.note)
 
     def add_note(self, commit: str):
         self.repo.git.notes(
@@ -894,24 +809,29 @@ class AppContext:
         import os
         import re
 
-        note = self.state.load_note()
-
+        note_dict = self.note.to_dict()
 
         # Build selective note content - always include merge_info
-        selective_note = {}
-        if "merge_info" in note:
-            selective_note["merge_info"] = note["merge_info"]
+        selective_note = {"merge_info": note_dict["merge_info"]}
 
         for field in fields:
             # Handle solutions[N] format
             match = re.match(r"solutions\[(\d+)\]", field)
             if match:
                 idx = int(match.group(1))
-                if "solutions" in note and idx < len(note["solutions"]):
+                if self.note.has_solutions and idx < len(self.note.solutions):
                     # In the git note, store as "solution" (singular) for the specific solution
-                    selective_note["solution"] = note["solutions"][idx]
-            elif field in note:
-                selective_note[field] = note[field]
+                    selective_note["solution"] = self.note.solutions[idx]
+            elif field == "conflict_context" and self.note.has_conflict_context:
+                selective_note["conflict_context"] = note_dict["conflict_context"]
+            elif field == "merge_context" and self.note.has_merge_context:
+                selective_note["merge_context"] = note_dict["merge_context"]
+            elif field == "pr_comments" and self.note.has_pr_comments:
+                selective_note["pr_comments"] = self.note.pr_comments
+            elif field == "user_comment" and self.note.has_user_comment:
+                selective_note["user_comment"] = self.note.user_comment
+            elif field == "merge_description" and self.note.has_merge_description:
+                selective_note["merge_description"] = self.note.merge_description
 
         # Write selective note to temp file and attach as git note
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -932,28 +852,21 @@ class AppContext:
         finally:
             os.unlink(temp_path)
 
-        # Update note_index in note.json
-        note_index_entry = {"sha": commit, "fields": fields}
-        if "note_index" not in note:
-            note["note_index"] = []
-        note["note_index"].append(note_index_entry)
-        self.state.save_note(note)
+        # Update note_index in note
+        self.note.add_note_index_entry(commit, fields)
+        self.save_note(self.note)
 
     def commit_solution(self):
-        if not self.state.note_exists():
-            raise Exception("No note found.")
-
-        note = self.state.load_note()
-
+        """Commit the current solution to the repository."""
         # Find the uncommitted solution
-        uncommitted_idx = self._get_uncommitted_solution_index(note)
+        uncommitted_idx = self._get_uncommitted_solution_index(self.note)
         if uncommitted_idx is None:
-            if "solutions" not in note or len(note["solutions"]) == 0:
+            if not self.note.has_solutions:
                 raise Exception("No solution found in the note.")
             else:
                 raise Exception("All solutions have already been committed.")
 
-        solution = note["solutions"][uncommitted_idx]
+        solution = self.note.solutions[uncommitted_idx]
 
         if not self.repo.is_dirty():
             raise Exception("No changes to commit in the repository.")
@@ -975,8 +888,10 @@ class AppContext:
 
         # Build commit message following Git's merge commit style
         target_branch = self.branches.target_branch
-        if self.has_conflict_context:
-            theirs_sha = git_utils.short_sha(self.conflict_context.theirs_commit_sha)
+        if self.note.has_conflict_context:
+            theirs_sha = git_utils.short_sha(
+                self.note.conflict_context.theirs_commit_sha
+            )
             message = f"Resolve conflicts for merge commit '{theirs_sha}' into {target_branch}\n\n"
         else:
             message = "Resolve conflicts for merge\n\n"
@@ -1026,16 +941,14 @@ class AppContext:
         )
 
     def commit_conflict(self):
-        hint_msg = "Please prepare the conflict context by running:\nmergai create-conflict-context"
-        note = self.load_note()
-        if note is None:
-            raise Exception(f"No note found.\n\n{hint_msg}")
+        """Commit conflict context to the repository."""
+        if not self.note.has_conflict_context:
+            raise Exception(
+                "No conflict context found in the note.\n\n"
+                "Please prepare the conflict context by running:\nmergai context create conflict"
+            )
 
-        context_dict = note.get("conflict_context")
-        if context_dict is None:
-            raise Exception(f"No conflict context found in the note.\n\n{hint_msg}")
-
-        conflict_ctx = ConflictContext.from_dict(context_dict, self.repo)
+        conflict_ctx = self.note.conflict_context
         theirs_sha = git_utils.short_sha(conflict_ctx.theirs_commit_sha)
         files = conflict_ctx.files
         target_branch = self.branches.target_branch
@@ -1071,27 +984,13 @@ class AppContext:
         """Commit the current staged changes as a merge commit.
 
         Creates a commit with the message "Merge commit '<short sha>'" where
-        the short sha comes from merge_info. Requires merge_info to be
-        initialized in the note.
+        the short sha comes from merge_info.
 
         Raises:
-            Exception: If no note found or merge_info is missing.
+            Exception: If no note found.
         """
-        hint_msg = (
-            "Please initialize merge context by running:\nmergai context init <commit>"
-        )
-        note = self.load_note()
-        if note is None:
-            raise Exception(f"No note found.\n\n{hint_msg}")
-
-        merge_info = note.get("merge_info")
-        if merge_info is None:
-            raise Exception(f"No merge_info found in the note.\n\n{hint_msg}")
-
-        merge_commit = merge_info["merge_commit"]
-
         # Build commit message (use short SHA for display)
-        message = f"Merge commit '{git_utils.short_sha(merge_commit)}'\n\n"
+        message = f"Merge commit '{git_utils.short_sha(self.note.merge_info.merge_commit_sha)}'\n\n"
 
         # Add MergAI footer
         message += MERGAI_COMMIT_FOOTER
@@ -1328,22 +1227,8 @@ class AppContext:
             )
 
         # Load and validate merge_info
-        note = self.load_note()
-        if note is None:
-            raise click.ClickException(
-                "No note found. Please initialize merge context by running:\n"
-                "mergai context init <commit>"
-            )
-
-        merge_info = note.get("merge_info")
-        if merge_info is None:
-            raise click.ClickException(
-                "No merge_info found in the note. Please initialize merge context by running:\n"
-                "mergai context init <commit>"
-            )
-
-        target_branch_sha = merge_info.get("target_branch_sha")
-        merge_commit_sha = merge_info.get("merge_commit")
+        target_branch_sha = self.note.merge_info.target_branch_sha
+        merge_commit_sha = self.note.merge_info.merge_commit_sha
 
         if not target_branch_sha or not merge_commit_sha:
             raise click.ClickException(
@@ -1379,12 +1264,15 @@ class AppContext:
         # First, write the current index as a tree
         tree_sha = self.repo.git.write_tree()
 
-        # Build combined note (we'll use a placeholder SHA for now, update after commit)
-        combined_note = self._build_combined_note(commits_with_notes, "PLACEHOLDER")
+        # Build combined note dict (we'll use a placeholder SHA for now, update after commit)
+        combined_note_dict = self._build_combined_note(
+            commits_with_notes, "PLACEHOLDER"
+        )
 
         # Build commit message
+        merge_info_dict = self.note.merge_info.to_dict()
         message = self._build_squash_commit_message(
-            merge_info, commits_with_notes, combined_note
+            merge_info_dict, commits_with_notes, combined_note_dict
         )
 
         # Create commit with two parents: target_branch_sha (first parent) and merge_commit_sha (second parent)
@@ -1397,13 +1285,16 @@ class AppContext:
         self.repo.git.reset("--hard", new_commit_sha)
 
         # Rebuild combined note with correct SHA
-        combined_note = self._build_combined_note(commits_with_notes, new_commit_sha)
+        combined_note_dict = self._build_combined_note(
+            commits_with_notes, new_commit_sha
+        )
 
         # Also include merge_info from our local note (in case git notes didn't have it)
-        if "merge_info" not in combined_note:
-            combined_note["merge_info"] = merge_info
+        if "merge_info" not in combined_note_dict:
+            combined_note_dict["merge_info"] = merge_info_dict
 
-        # Save combined note to local state
+        # Save combined note to local state (convert dict to MergaiNote)
+        combined_note = MergaiNote.from_dict(combined_note_dict, self.repo)
         self.save_note(combined_note)
 
         # Attach note to the new commit
@@ -1414,7 +1305,7 @@ class AppContext:
             f"Successfully squashed {len(commits_with_notes)} commit(s) into {git_utils.short_sha(new_commit_sha)}"
         )
 
-    def rebuild_note_from_commits(self) -> dict:
+    def rebuild_note_from_commits(self) -> MergaiNote:
         """Rebuild note.json from git commit notes.
 
         Scans commits from HEAD backwards to find and collect all mergai notes,
@@ -1431,7 +1322,7 @@ class AppContext:
            target_branch_sha as the stop point
 
         Returns:
-            The rebuilt note dict.
+            The rebuilt MergaiNote.
 
         Raises:
             click.ClickException: If merge_info is inconsistent across commits
@@ -1475,8 +1366,8 @@ class AppContext:
         # Reverse to process oldest first (for consistent indexing)
         commits_with_notes.reverse()
 
-        # Build the new note
-        note = {
+        # Build the new note as a dict first
+        note_dict = {
             "solutions": [],
             "note_index": [],
         }
@@ -1490,7 +1381,7 @@ class AppContext:
             if "merge_info" in git_note:
                 if reference_merge_info is None:
                     reference_merge_info = git_note["merge_info"]
-                    note["merge_info"] = git_note["merge_info"]
+                    note_dict["merge_info"] = git_note["merge_info"]
                 else:
                     # Check consistency
                     current_mi = git_note["merge_info"]
@@ -1510,50 +1401,50 @@ class AppContext:
 
             # Handle conflict_context (at most one)
             if "conflict_context" in git_note:
-                if "conflict_context" not in note:
-                    note["conflict_context"] = git_note["conflict_context"]
+                if "conflict_context" not in note_dict:
+                    note_dict["conflict_context"] = git_note["conflict_context"]
                     fields_for_this_commit.append("conflict_context")
 
             # Handle merge_context (at most one)
             if "merge_context" in git_note:
-                if "merge_context" not in note:
-                    note["merge_context"] = git_note["merge_context"]
+                if "merge_context" not in note_dict:
+                    note_dict["merge_context"] = git_note["merge_context"]
                     fields_for_this_commit.append("merge_context")
 
             # Handle solution (singular in git note -> add to solutions array)
             if "solution" in git_note:
-                idx = len(note["solutions"])
-                note["solutions"].append(git_note["solution"])
+                idx = len(note_dict["solutions"])
+                note_dict["solutions"].append(git_note["solution"])
                 fields_for_this_commit.append(f"solutions[{idx}]")
 
             # Handle solutions (array in git note -> add all to solutions array)
             if "solutions" in git_note:
                 for solution in git_note["solutions"]:
-                    idx = len(note["solutions"])
-                    note["solutions"].append(solution)
+                    idx = len(note_dict["solutions"])
+                    note_dict["solutions"].append(solution)
                     fields_for_this_commit.append(f"solutions[{idx}]")
 
             # Handle merge_description
             if "merge_description" in git_note:
-                if "merge_description" not in note:
-                    note["merge_description"] = git_note["merge_description"]
+                if "merge_description" not in note_dict:
+                    note_dict["merge_description"] = git_note["merge_description"]
                     fields_for_this_commit.append("merge_description")
 
             # Handle pr_comments
             if "pr_comments" in git_note:
-                if "pr_comments" not in note:
-                    note["pr_comments"] = git_note["pr_comments"]
+                if "pr_comments" not in note_dict:
+                    note_dict["pr_comments"] = git_note["pr_comments"]
                     fields_for_this_commit.append("pr_comments")
 
             # Handle user_comment
             if "user_comment" in git_note:
-                if "user_comment" not in note:
-                    note["user_comment"] = git_note["user_comment"]
+                if "user_comment" not in note_dict:
+                    note_dict["user_comment"] = git_note["user_comment"]
                     fields_for_this_commit.append("user_comment")
 
             # Add to note_index if we collected any fields
             if fields_for_this_commit:
-                note["note_index"].append(
+                note_dict["note_index"].append(
                     {
                         "sha": commit_sha,
                         "fields": fields_for_this_commit,
@@ -1561,9 +1452,10 @@ class AppContext:
                 )
 
         # Clean up empty collections
-        if not note["solutions"]:
-            del note["solutions"]
-        if not note["note_index"]:
-            del note["note_index"]
+        if not note_dict["solutions"]:
+            del note_dict["solutions"]
+        if not note_dict["note_index"]:
+            del note_dict["note_index"]
 
-        return note
+        # Convert to MergaiNote
+        return MergaiNote.from_dict(note_dict, self.repo)

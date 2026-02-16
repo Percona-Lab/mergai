@@ -82,13 +82,13 @@ def _create_pr(
 def _build_solutions_pr_body(app: AppContext) -> str:
     markdown_config = MarkdownConfig.for_pr(app.repo)
 
-    body = util.merge_info_to_markdown(app.merge_info, markdown_config)
+    body = util.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
-    body += util.merge_context_to_markdown(app.merge_context, markdown_config)
+    body += util.merge_context_to_markdown(app.note.merge_context, markdown_config)
     body += "\n\n"
-    body += util.conflict_context_to_markdown(app.conflict_context, markdown_config)
+    body += util.conflict_context_to_markdown(app.note.conflict_context, markdown_config)
     body += "\n\n"
-    body += util.solutions_to_markdown(app.solutions)
+    body += util.solutions_to_markdown(app.note.solutions)
     body += "\n\n"
 
     return body
@@ -97,9 +97,9 @@ def _build_solutions_pr_body(app: AppContext) -> str:
 def _build_merge_pr_body(app: AppContext) -> str:
     markdown_config = MarkdownConfig.for_pr(app.repo)
 
-    body = util.merge_info_to_markdown(app.merge_info, markdown_config)
+    body = util.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
-    body += util.merge_context_to_markdown(app.merge_context, markdown_config)
+    body += util.merge_context_to_markdown(app.note.merge_context, markdown_config)
     body += "\n\n"
 
     return body
@@ -110,7 +110,7 @@ def _create_solution_pr(
 ) -> None:
     """Create a PR from the current branch (with existing solution commits) to the conflict branch."""
 
-    merge_info = app.merge_info
+    merge_info = app.note.merge_info
     branches = app.branches
 
     if not app.check_all_solutions_committed():
@@ -118,8 +118,7 @@ def _create_solution_pr(
             "You have uncommitted solution(s). Run 'mergai commit solution' first."
         )
 
-    solutions = app.solutions
-    if len(solutions) == 0:
+    if not app.note.has_solutions or len(app.note.solutions) == 0:
         raise click.ClickException("No solutions found. Run 'mergai resolve' first.")
 
     merge_commit_short = git_utils.short_sha(merge_info.merge_commit_sha)
@@ -141,20 +140,19 @@ def _create_solution_pr(
 
 def _build_main_pr_body(app: AppContext) -> str:
     """Build PR body for main PR from merge_context or conflict resolution data."""
-
-    if app.has_conflict_context and app.has_solutions:
+    if app.note.has_conflict_context and app.note.has_solutions:
         return _build_solutions_pr_body(app)
 
-    if app.has_merge_context:
+    if app.note.has_merge_context:
         return _build_merge_pr_body(app)
 
-    if app.has_conflict_context and not app.has_solutions:
+    if app.note.has_conflict_context and not app.note.has_solutions:
         raise click.ClickException(
             "Found conflict_context but no solutions. "
             "Run 'mergai resolve' to generate a solution first."
         )
 
-    if app.has_solutions and not app.has_conflict_context:
+    if app.note.has_solutions and not app.note.has_conflict_context:
         raise click.ClickException(
             "Found solutions but no conflict_context. "
             "Run 'mergai context create conflict' first."
@@ -171,7 +169,7 @@ def _create_main_pr(
 ) -> None:
     """Create a PR from the main branch to target_branch (merge or conflict resolution)."""
 
-    merge_commit_short = git_utils.short_sha(app.merge_info.merge_commit_sha)
+    merge_commit_short = git_utils.short_sha(app.note.merge_info.merge_commit_sha)
     # TODO: title format from config
     title = f"Merge {merge_commit_short} into {app.branches.target_branch}"
 

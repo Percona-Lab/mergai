@@ -181,7 +181,8 @@ def delete(
                 raise click.ClickException(
                     f"Failed to delete local branch '{branch_name}': {e}"
                 )
-        elif not ignore_missing:
+        elif not ignore_missing and not remote:
+            # Only require local branch when not deleting remote; with -r we allow remote-only delete
             raise click.ClickException(f"Local branch '{branch_name}' does not exist")
         else:
             click.echo(f"Local branch '{branch_name}' does not exist (skipped)")
