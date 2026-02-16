@@ -4,10 +4,10 @@ from typing import Optional, List
 from dataclasses import dataclass
 from git import Commit
 from ..app import AppContext
-from .. import git_utils
+from ..utils import git_utils
 from ..config import MergePicksConfig
 from ..merge_pick_strategies import MergePickCommit, MergePickStrategyContext
-from ..util import format_number, format_commit_info, format_commit_info_oneline, print_or_page
+from ..utils.util import format_number, format_commit_info, format_commit_info_oneline, print_or_page
 
 log = logging.getLogger(__name__)
 

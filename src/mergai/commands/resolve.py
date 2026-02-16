@@ -1,6 +1,6 @@
 import click
 from ..app import AppContext
-from .. import util
+from ..utils import util
 from .context import conflict_context_flags
 
 

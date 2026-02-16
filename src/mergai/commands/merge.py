@@ -7,7 +7,7 @@ using the SHA from merge_info.
 import click
 from git.exc import GitCommandError
 from ..app import AppContext
-from .. import git_utils
+from ..utils import git_utils
 
 
 # Exit codes

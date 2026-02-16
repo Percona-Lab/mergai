@@ -3,8 +3,8 @@ from ..app import AppContext
 from ..models import MarkdownConfig
 from github import PullRequest as GithubPullRequest
 from github import GithubException
-from .. import git_utils
-from .. import util
+from ..utils import git_utils
+from ..utils import util
 from typing import Optional, List
 from urllib.parse import urlencode, quote
 

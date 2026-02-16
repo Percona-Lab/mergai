@@ -1,8 +1,8 @@
 import click
 import json
 import git
-from .. import git_utils
-from .. import util
+from ..utils import git_utils
+from ..utils import util
 from ..app import AppContext
 from ..models import ConflictContext, MergeInfo, MergeContext
 

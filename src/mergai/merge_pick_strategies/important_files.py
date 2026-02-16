@@ -84,7 +84,7 @@ class ImportantFilesStrategy(MergePickStrategy):
         Returns:
             ImportantFilesResult if important files are modified, None otherwise.
         """
-        from .. import git_utils
+        from ..utils import git_utils
 
         if not self.config.files:
             return None

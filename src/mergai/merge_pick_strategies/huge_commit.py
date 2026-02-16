@@ -90,7 +90,7 @@ class HugeCommitStrategy(MergePickStrategy):
         Returns:
             HugeCommitResult if the commit is huge, None otherwise.
         """
-        from .. import git_utils
+        from ..utils import git_utils
 
         stats = git_utils.get_commit_stats(repo, commit)
         if (

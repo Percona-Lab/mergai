@@ -11,7 +11,7 @@ branch names used in the merge conflict resolution workflow:
 import click
 from ..app import AppContext
 from ..utils.branch_name_builder import BranchType
-from .. import git_utils
+from ..utils import git_utils
 
 
 BRANCH_ALL = "all"

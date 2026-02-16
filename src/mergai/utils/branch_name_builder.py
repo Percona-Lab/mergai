@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Optional
 import re
-from .. import git_utils
+from . import git_utils
 from ..models import MergeInfo
 from ..config import BranchConfig
 

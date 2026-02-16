@@ -2,11 +2,11 @@ import git
 import click
 import logging
 import textwrap
-from . import git_utils
-from . import util
+from .utils import git_utils
+from .utils import util
 from . import prompts
 from .agents.factory import create_agent
-from .state_store import StateStore
+from .utils.state_store import StateStore
 from .config import MergaiConfig
 from .models import (
     ConflictContext,

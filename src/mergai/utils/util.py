@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
 from datetime import datetime, timezone
-from .models import (
+from ..models import (
     MergeInfo,
     MergeContext,
     ConflictContext,
@@ -23,7 +23,7 @@ from .models import (
     EnhancedCommit,
 )
 
-from .config import BranchConfig
+from ..config import BranchConfig
 
 
 def gh_auth_token() -> str:

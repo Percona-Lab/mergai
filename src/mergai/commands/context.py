@@ -11,7 +11,7 @@ import click
 from typing import Optional
 
 from ..app import AppContext
-from .. import git_utils
+from ..utils import git_utils
 from ..utils.branch_name_builder import BranchNameBuilder
 
 

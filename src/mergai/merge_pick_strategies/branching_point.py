@@ -80,7 +80,7 @@ class BranchingPointStrategy(MergePickStrategy):
         Returns:
             BranchingPointResult if the commit is a branching point, None otherwise.
         """
-        from .. import git_utils
+        from ..utils import git_utils
 
         if not context.upstream_ref:
             return None
