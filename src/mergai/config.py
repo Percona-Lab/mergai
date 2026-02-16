@@ -1,34 +1,22 @@
 """Configuration file support for MergAI.
 
 This module handles loading and parsing the .mergai/config.yaml configuration file.
-
-The config file supports a nested structure where each command/subcommand
-can have its own section. Example:
-
-    # Fork command settings
-    fork:
-      upstream_url: git@github.com:mongodb/mongo.git
-
-    # Resolve command settings
-    resolve:
-      agent: gemini-cli
-      max_attempts: 3
 """
 
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import Optional, Dict, Any, List
 import logging
 import yaml
 
-if TYPE_CHECKING:
-    from .merge_pick_strategies import MergePickStrategy
-    from .models import CommitSerializationConfig, ContextSerializationConfig
+from .models import CommitSerializationConfig, ContextSerializationConfig
+from .merge_pick_strategies import MergePickStrategy
 
 log = logging.getLogger(__name__)
 
 
 DEFAULT_CONFIG_PATH = ".mergai/config.yaml"
+DEFAULT_COMMIT_FIELDS = ["hexsha"]
 
 
 @dataclass
@@ -139,67 +127,60 @@ class BranchConfig:
 
 
 @dataclass
-class ContextConfig:
-    """Configuration for context serialization.
+class PromptConfig:
+    """Configuration for prompt generation.
 
     Controls how commits are serialized when generating prompts for AI agents.
     The fields specified here determine what information about commits is
     included in the prompt.
 
     Attributes:
-        prompt_commit_fields: List of commit fields to include in prompts.
+        commit_fields: List of commit fields to include in prompts.
             Valid values: hexsha, short_sha, author, authored_date, summary,
             message, parents.
 
     Example YAML config:
-        context:
-          prompt_commit_fields:
+        prompt:
+          commit_fields:
             - hexsha
             - authored_date
             - summary
             - author
     """
 
-    prompt_commit_fields: List[str] = field(
-        default_factory=lambda: ["hexsha"]
+    commit_fields: List[str] = field(
+        default_factory=lambda: DEFAULT_COMMIT_FIELDS.copy()
     )
 
     @classmethod
-    def from_dict(cls, data: dict) -> "ContextConfig":
-        """Create a ContextConfig from a dictionary.
+    def from_dict(cls, data: dict) -> "PromptConfig":
+        """Create a PromptConfig from a dictionary.
 
         Args:
             data: Dictionary with configuration values.
 
         Returns:
-            ContextConfig instance with values from data.
+            PromptConfig instance with values from data.
         """
         return cls(
-            prompt_commit_fields=data.get(
-                "prompt_commit_fields",
-                cls.prompt_commit_fields.__func__(),  # Get default from factory
-            ),
+            commit_fields=data.get("commit_fields", DEFAULT_COMMIT_FIELDS.copy()),
         )
 
-    def to_commit_serialization_config(self) -> "CommitSerializationConfig":
+    def to_commit_serialization_config(self) -> CommitSerializationConfig:
         """Convert to CommitSerializationConfig.
 
         Returns:
-            CommitSerializationConfig with fields enabled based on prompt_commit_fields.
+            CommitSerializationConfig with fields enabled based on commit_fields.
         """
-        from .models import CommitSerializationConfig
+        return CommitSerializationConfig.from_list(self.commit_fields)
 
-        return CommitSerializationConfig.from_list(self.prompt_commit_fields)
-
-    def to_prompt_serialization_config(self) -> "ContextSerializationConfig":
+    def to_prompt_serialization_config(self) -> ContextSerializationConfig:
         """Create ContextSerializationConfig for prompt mode.
 
         Returns:
             ContextSerializationConfig configured for prompt mode with
             commit fields from this config.
         """
-        from .models import ContextSerializationConfig
-
         return ContextSerializationConfig.prompt(self.to_commit_serialization_config())
 
 
@@ -231,7 +212,7 @@ class MergePicksConfig:
         strategies: Ordered list of merge-pick strategies to evaluate.
     """
 
-    strategies: List["MergePickStrategy"] = field(default_factory=list)
+    strategies: List[MergePickStrategy] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data) -> "MergePicksConfig":
@@ -284,14 +265,14 @@ class MergaiConfig:
         fork: Configuration for the fork subcommand (includes merge_picks).
         resolve: Configuration for the resolve command.
         branch: Configuration for branch naming.
-        context: Configuration for context serialization (prompts).
+        prompt: Configuration for prompt generation.
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
 
     fork: ForkConfig = field(default_factory=ForkConfig)
     resolve: ResolveConfig = field(default_factory=ResolveConfig)
     branch: BranchConfig = field(default_factory=BranchConfig)
-    context: ContextConfig = field(default_factory=ContextConfig)
+    prompt: PromptConfig = field(default_factory=PromptConfig)
     _raw: Dict[str, Any] = field(default_factory=dict)
 
     def get_section(self, name: str) -> Dict[str, Any]:
@@ -337,17 +318,17 @@ class MergaiConfig:
             BranchConfig.from_dict(branch_data) if branch_data else BranchConfig()
         )
 
-        # Parse context section if present
-        context_data = data.get("context", {})
-        context_config = (
-            ContextConfig.from_dict(context_data) if context_data else ContextConfig()
+        # Parse prompt section if present
+        prompt_data = data.get("prompt", {})
+        prompt_config = (
+            PromptConfig.from_dict(prompt_data) if prompt_data else PromptConfig()
         )
 
         return cls(
             fork=fork_config,
             resolve=resolve_config,
             branch=branch_config,
-            context=context_config,
+            prompt=prompt_config,
             _raw=data,
         )
 

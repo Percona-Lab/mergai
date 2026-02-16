@@ -9,85 +9,40 @@ branch names used in the merge conflict resolution workflow:
 """
 
 import click
-from typing import Optional
 from ..app import AppContext
-from ..util import BranchNameBuilder, BranchType, ParsedBranchName
+from ..utils.branch_name_builder import BranchType
 from .. import git_utils
 
 
-# Valid branch types for CLI validation
-BRANCH_TYPES = [t.value for t in BranchType]
+BRANCH_ALL = "all"
 
-# Valid branch types for delete command (includes 'all')
-DELETE_BRANCH_TYPES = BRANCH_TYPES + ["all"]
+# Excluded types for common operations:
+# - target: not valid for create/push/delete commands
+EXCLUDED_TYPES = [BranchType.TARGET.value]
 
-# Valid branch types for push command (includes 'all')
-PUSH_BRANCH_TYPES = BRANCH_TYPES + ["all"]
+# Common valid branch types, includes all except EXCLUDED_TYPES
+COMMON_BRANCH_TYPES = [t.value for t in BranchType if t not in EXCLUDED_TYPES]
+
+# Valid branch types for create command ('target' not included)
+CREATE_BRANCH_TYPES = COMMON_BRANCH_TYPES
+
+# Valid branch types for delete command (includes 'all'; 'target' not included)
+DELETE_BRANCH_TYPES = COMMON_BRANCH_TYPES + [BRANCH_ALL]
+
+# List of branch types to delete when 'all' is specified
+DELETE_ALL_BRANCH_TYPES = COMMON_BRANCH_TYPES
+
+# Valid branch types for push command (includes 'all'; 'target' not included)
+PUSH_BRANCH_TYPES = COMMON_BRANCH_TYPES + [BRANCH_ALL]
+
+# List of branch types to push when 'all' is specified
+PUSH_ALL_BRANCH_TYPES = COMMON_BRANCH_TYPES
 
 # Valid branch types for switch command (includes 'target')
-SWITCH_BRANCH_TYPES = BRANCH_TYPES + ["target"]
+SWITCH_BRANCH_TYPES = COMMON_BRANCH_TYPES + [BranchType.TARGET.value]
 
 # Valid token names for the info command
 TOKEN_NAMES = ["target_branch", "target_branch_sha", "merge_commit_sha", "type"]
-
-
-def get_current_branch_parsed(app: AppContext) -> Optional[ParsedBranchName]:
-    """Parse the current branch name as a mergai branch.
-
-    Args:
-        app: Application context with config and repo.
-
-    Returns:
-        ParsedBranchName if current branch matches the format, None otherwise.
-    """
-    current_branch = git_utils.get_current_branch(app.repo)
-    return BranchNameBuilder.parse_branch_name_with_config(
-        current_branch, app.config.branch
-    )
-
-
-def get_branch_builder(
-    app: AppContext,
-    commit: Optional[str],
-    target: Optional[str],
-) -> BranchNameBuilder:
-    """Create a BranchNameBuilder from CLI arguments.
-
-    Uses app.get_merge_info() to resolve commit and target, which checks:
-    1. merge_info in note.json
-    2. Current mergai branch name
-    3. CLI-provided values override auto-detected ones
-
-    Args:
-        app: Application context with config and repo.
-        commit: Commit SHA or ref to use for branch naming, or None to auto-detect.
-        target: Target branch name, or None to auto-detect.
-
-    Returns:
-        Configured BranchNameBuilder instance.
-
-    Raises:
-        click.ClickException: If commit reference is invalid, cannot be determined,
-            or branch name format is invalid.
-    """
-    info = app.get_merge_info(commit=commit, target=target)
-
-    try:
-        return BranchNameBuilder.from_config(
-            app.config.branch,
-            target_branch=info.target_branch,
-            merge_commit_sha=info.merge_commit_sha,
-            target_branch_sha=info.target_branch_sha,
-        )
-    except ValueError as e:
-        raise click.ClickException(
-            f"Invalid branch name format in config: {e}\n\n"
-            f"The format string must contain:\n"
-            f"  - %(target_branch)\n"
-            f"  - Either %(merge_commit_sha) or %(merge_commit_short_sha)\n"
-            f"  - Either %(target_branch_sha) or %(target_branch_short_sha)\n\n"
-            f"Current format: {app.config.branch.name_format}"
-        )
 
 
 @click.group()
@@ -102,28 +57,26 @@ def branch():
     - main: Main working branch for merge resolution
     - conflict: Branch with committed merge markers
     - solution: Branch for solution attempts (PRs from here)
+    - target: The branch we're merging into (e.g., 'master' or 'v8.0')
+
+    The following commands support the 'all' type:
+    - delete
+    - push
+    - switch
+
+    The following commands support the 'target' type:
+    - switch
 
     Branch names are generated using the format from .mergai/config.yaml:
     branch.name_format (default: "mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)")
-
-    When on a mergai branch, COMMIT and --target can often be omitted
-    as they will be extracted from the current branch name.
     """
     pass
 
 
 @branch.command()
 @click.pass_obj
-@click.argument("type", type=click.Choice(BRANCH_TYPES, case_sensitive=False))
-@click.argument("commit", type=str, required=False, default=None)
-@click.option(
-    "--target",
-    "-t",
-    type=str,
-    default=None,
-    help="Target branch name (default: extracted from current branch or current branch name)",
-)
-def create(app: AppContext, type: str, commit: Optional[str], target: Optional[str]):
+@click.argument("type", type=click.Choice(CREATE_BRANCH_TYPES, case_sensitive=False))
+def create(app: AppContext, type: str):
     """Create a merge-related branch and check it out.
 
     Creates a branch using the configured naming format and checks it out.
@@ -131,24 +84,15 @@ def create(app: AppContext, type: str, commit: Optional[str], target: Optional[s
 
     TYPE is one of: main, conflict, solution
 
-    COMMIT is the commit SHA or ref. If omitted and currently on a mergai
-    branch, the commit will be extracted from the current branch name.
+    The target branch is not supported.
 
     \b
     Branch purposes:
     - main: Main working branch where merge resolution work is integrated
     - conflict: Contains the merge commit with committed merge markers
     - solution: Contains solution attempts; PRs go from solution to conflict
-
-    \b
-    Examples:
-        mergai branch create main abc1234
-        mergai branch create solution abc1234 --target v8.0
-        mergai branch create conflict HEAD
-        mergai branch create solution          # when on a mergai branch
     """
-    builder = get_branch_builder(app, commit, target)
-    branch_name = builder.get_branch_name(type)
+    branch_name = app.branches.get_branch_name(type)
 
     # Check if branch exists on origin
     if git_utils.branch_exists_on_remote(app.repo, branch_name):
@@ -175,14 +119,6 @@ def create(app: AppContext, type: str, commit: Optional[str], target: Optional[s
 @branch.command()
 @click.pass_obj
 @click.argument("type", type=click.Choice(DELETE_BRANCH_TYPES, case_sensitive=False))
-@click.argument("commit", type=str, required=False, default=None)
-@click.option(
-    "--target",
-    "-t",
-    type=str,
-    default=None,
-    help="Target branch name (default: extracted from current branch or current branch name)",
-)
 @click.option(
     "--remote",
     "-r",
@@ -199,8 +135,6 @@ def create(app: AppContext, type: str, commit: Optional[str], target: Optional[s
 def delete(
     app: AppContext,
     type: str,
-    commit: Optional[str],
-    target: Optional[str],
     remote: bool,
     ignore_missing: bool,
 ):
@@ -210,26 +144,16 @@ def delete(
 
     TYPE is one of: main, conflict, solution, all
 
-    COMMIT is the commit SHA or ref. If omitted and currently on a mergai
-    branch, the commit will be extracted from the current branch name.
+    The target branch is not supported.
 
     Use 'all' as TYPE to delete all three branch types at once.
     Use --remote to also delete from origin.
     Use --ignore-missing to not fail if branch doesn't exist.
-
-    \b
-    Examples:
-        mergai branch delete main abc1234
-        mergai branch delete solution abc1234 --remote
-        mergai branch delete all abc1234 -r
-        mergai branch delete main abc1234 --ignore-missing
-        mergai branch delete all --remote     # when on a mergai branch
     """
-    builder = get_branch_builder(app, commit, target)
 
     # Determine which branch types to delete
-    if type == "all":
-        types_to_delete = BRANCH_TYPES
+    if type == BRANCH_ALL:
+        types_to_delete = DELETE_ALL_BRANCH_TYPES
         # When deleting all branches, don't fail on missing - just report
         ignore_missing = True
     else:
@@ -238,7 +162,7 @@ def delete(
     current_branch = git_utils.get_current_branch(app.repo)
 
     for branch_type in types_to_delete:
-        branch_name = builder.get_branch_name(branch_type)
+        branch_name = app.branches.get_branch_name(branch_type)
 
         # Check if we're on the branch we're trying to delete
         if current_branch == branch_name:
@@ -287,13 +211,6 @@ def delete(
 @click.pass_obj
 @click.argument("type", type=click.Choice(PUSH_BRANCH_TYPES, case_sensitive=False))
 @click.option(
-    "--target",
-    "-t",
-    type=str,
-    default=None,
-    help="Target branch name (default: extracted from current branch or current branch name)",
-)
-@click.option(
     "--force",
     "-f",
     is_flag=True,
@@ -309,7 +226,6 @@ def delete(
 def push(
     app: AppContext,
     type: str,
-    target: Optional[str],
     force: bool,
     ignore_missing: bool,
 ):
@@ -319,31 +235,25 @@ def push(
 
     TYPE is one of: main, conflict, solution, all
 
+    The target branch is not supported.
+
     Use 'all' as TYPE to push all three branch types at once (only pushes
     branches that exist locally).
     Use --force to force push using --force-with-lease.
     Use --ignore-missing to not fail if branch doesn't exist locally.
 
-    \b
-    Examples:
-        mergai branch push main
-        mergai branch push solution --force
-        mergai branch push all
-        mergai branch push all -f
-        mergai branch push main --ignore-missing
     """
-    builder = get_branch_builder(app, None, target)
 
     # Determine which branch types to push
-    if type == "all":
-        types_to_push = BRANCH_TYPES
+    if type == BRANCH_ALL:
+        types_to_push = PUSH_ALL_BRANCH_TYPES
         # When pushing all branches, don't fail on missing - just report
         ignore_missing = True
     else:
         types_to_push = [type]
 
     for branch_type in types_to_push:
-        branch_name = builder.get_branch_name(branch_type)
+        branch_name = app.branches.get_branch_name(branch_type)
 
         # Check if branch exists locally
         local_exists = git_utils.branch_exists_locally(app.repo, branch_name)
@@ -354,7 +264,9 @@ def push(
                     push_args.insert(1, "--force-with-lease")
                 app.repo.git.push(*push_args)
                 force_msg = " (force)" if force else ""
-                click.echo(f"Pushed branch{force_msg}: {branch_name} -> origin/{branch_name}")
+                click.echo(
+                    f"Pushed branch{force_msg}: {branch_name} -> origin/{branch_name}"
+                )
             except Exception as e:
                 raise click.ClickException(
                     f"Failed to push branch '{branch_name}': {e}"
@@ -367,123 +279,8 @@ def push(
 
 @branch.command()
 @click.pass_obj
-@click.argument("token", type=click.Choice(TOKEN_NAMES), required=False, default=None)
-@click.option(
-    "--branch",
-    "-b",
-    "branch_name",
-    type=str,
-    default=None,
-    help="Branch name to parse (default: current branch)",
-)
-def info(app: AppContext, token: Optional[str], branch_name: Optional[str]):
-    """Print parsed information from a mergai branch name.
-
-    Parses the branch name and prints its components. If TOKEN is specified,
-    prints only that token's value. Otherwise, prints all components.
-
-    TOKEN is one of: target_branch, target_branch_sha, merge_commit_sha, type
-
-    \b
-    Examples:
-        mergai branch info                    # print all info for current branch
-        mergai branch info target_branch      # print just the target branch
-        mergai branch info type               # print just the branch type
-        mergai branch info -b mergai/v8.0-abc123-def456/main  # parse specific branch
-    """
-    # Determine which branch to parse
-    if branch_name is None:
-        branch_name = git_utils.get_current_branch(app.repo)
-
-    # Parse the branch name
-    parsed = BranchNameBuilder.parse_branch_name_with_config(
-        branch_name, app.config.branch
-    )
-
-    if parsed is None:
-        raise click.ClickException(
-            f"Branch '{branch_name}' does not match the mergai branch format. "
-            f"Expected format: {app.config.branch.name_format}"
-        )
-
-    if token is not None:
-        # Print just the requested token value
-        value = getattr(parsed, token if token != "type" else "branch_type")
-        click.echo(value)
-    else:
-        # Print all components
-        click.echo(f"target_branch: {parsed.target_branch}")
-        click.echo(f"target_branch_sha: {parsed.target_branch_sha}")
-        click.echo(f"merge_commit_sha: {parsed.merge_commit_sha}")
-        click.echo(f"type: {parsed.branch_type}")
-
-
-@branch.command()
-@click.pass_obj
-@click.option(
-    "--branch",
-    "-b",
-    "branch_name",
-    type=str,
-    default=None,
-    help="Branch name to check (default: current branch)",
-)
-@click.option(
-    "--quiet",
-    "-q",
-    is_flag=True,
-    default=False,
-    help="Don't print anything, just set exit code",
-)
-def check(app: AppContext, branch_name: Optional[str], quiet: bool):
-    """Check if a branch is a mergai branch.
-
-    Exits with code 0 if the branch matches the mergai format, 1 otherwise.
-    Useful for scripting and conditional logic.
-
-    \b
-    Examples:
-        mergai branch check                   # check current branch
-        mergai branch check -b some-branch    # check specific branch
-        mergai branch check --quiet           # silent mode for scripts
-
-    \b
-    Script usage:
-        if mergai branch check --quiet; then
-            echo "On a mergai branch"
-        fi
-    """
-    # Determine which branch to check
-    if branch_name is None:
-        branch_name = git_utils.get_current_branch(app.repo)
-
-    # Parse the branch name
-    parsed = BranchNameBuilder.parse_branch_name_with_config(
-        branch_name, app.config.branch
-    )
-
-    if parsed is not None:
-        if not quiet:
-            click.echo(f"'{branch_name}' is a mergai branch")
-        raise SystemExit(0)
-    else:
-        if not quiet:
-            click.echo(f"'{branch_name}' is not a mergai branch")
-        raise SystemExit(1)
-
-
-@branch.command()
-@click.pass_obj
 @click.argument("type", type=click.Choice(SWITCH_BRANCH_TYPES, case_sensitive=False))
-@click.option(
-    "--target",
-    "-t",
-    "target_branch",
-    type=str,
-    default=None,
-    help="Target branch name (default: extracted from current branch or merge_info)",
-)
-def switch(app: AppContext, type: str, target_branch: Optional[str]):
+def switch(app: AppContext, type: str):
     """Switch to a merge-related branch.
 
     Switches to the specified branch type. The branch must exist locally.
@@ -503,32 +300,8 @@ def switch(app: AppContext, type: str, target_branch: Optional[str]):
         mergai branch switch solution      # switch to solution branch
         mergai branch switch target        # switch to target branch (e.g., master)
     """
-    if type == "target":
-        # Get target branch from CLI option, merge_info, or current branch
-        if target_branch is not None:
-            branch_name = target_branch
-        else:
-            # Try to get from merge_info in note.json
-            note = app.load_note()
-            if note and "merge_info" in note:
-                branch_name = note["merge_info"].get("target_branch")
-            else:
-                # Try to parse from current mergai branch name
-                parsed = get_current_branch_parsed(app)
-                if parsed:
-                    branch_name = parsed.target_branch
-                else:
-                    branch_name = None
 
-        if branch_name is None:
-            raise click.ClickException(
-                "Cannot determine target branch. "
-                "Run 'mergai context init' or specify --target."
-            )
-    else:
-        # Build branch name for main/conflict/solution types
-        builder = get_branch_builder(app, None, target_branch)
-        branch_name = builder.get_branch_name(type)
+    branch_name = app.branches.get_branch_name(type)
 
     # Check if already on this branch
     current_branch = git_utils.get_current_branch(app.repo)

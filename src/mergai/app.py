@@ -1,5 +1,4 @@
 import git
-import subprocess
 import click
 import logging
 import textwrap
@@ -9,7 +8,7 @@ from . import prompts
 from .agents.factory import create_agent
 from .state_store import StateStore
 from .config import MergaiConfig
-from .models import ConflictContext, MergeContext, MergeInfo
+from .models import ConflictContext, MergeContext, MergeInfo, MergaiNote
 import github
 from github import Repository as GithubRepository
 import json
@@ -17,30 +16,12 @@ from typing import Optional, Tuple, List
 import tempfile
 from pathlib import Path
 from .agents.base import Agent
-from .util import BranchNameBuilder
+from .utils.branch_name_builder import BranchNameBuilder
 
 log = logging.getLogger(__name__)
 
 # TODO: Make this configurable via settings/config file
 MERGAI_COMMIT_FOOTER = "Note: commit created by mergai"
-
-
-def gh_auth_token() -> str:
-    import os
-
-    token = os.getenv("GITHUB_TOKEN")
-    if token is not None:
-        return token
-    token = os.getenv("GH_TOKEN")
-    if token is not None:
-        return token
-
-    try:
-        token = subprocess.check_output(["gh", "auth", "token"], text=True).strip()
-    except:
-        token = None
-
-    return token
 
 
 def convert_note(
@@ -118,9 +99,9 @@ class AppContext:
         self.config: MergaiConfig = config if config is not None else MergaiConfig()
         self.repo: git.Repo = git.Repo(".")
         self.state: StateStore = StateStore(self.repo.working_tree_dir)
-        gh_token = gh_auth_token()
         self.gh_repo_str: Optional[str] = None
-        self.gh = github.Github(gh_auth_token()) if gh_token else None
+        gh_token = util.gh_auth_token()
+        self.gh = github.Github(gh_token) if gh_token else None
         self._note: Optional[dict] = None
 
     def _require_note(self) -> dict:
@@ -129,7 +110,8 @@ class AppContext:
         if self._note is not None:
             return self._note
 
-        self._note = self.load_note()
+        if self.state.note_exists():
+            self._note = self.state.load_note()
 
         if not self._note:
             raise click.ClickException(
@@ -137,6 +119,18 @@ class AppContext:
             )
 
         return self._note
+
+    @property
+    def has_note(self) -> bool:
+        return self.state.note_exists()
+
+    @property
+    def note(self) -> dict:
+        if not self.has_note:
+            raise click.ClickException(
+                "No note found. Run 'mergai context init' first."
+            )
+        return self._require_note()
 
     def _require_merge_info(self) -> MergeInfo:
         """Return merge info from note or raise ClickException if missing."""
@@ -151,17 +145,9 @@ class AppContext:
         return MergeInfo.from_dict(self._note["merge_info"], self.repo)
 
     @property
-    def branches(self) -> BranchNameBuilder:
-        merge_info = self.merge_info
-        try:
-            return util.BranchNameBuilder.from_config(
-                self.config.branch,
-                merge_info.target_branch,
-                merge_info.merge_commit_sha,
-                merge_info.target_branch_sha,
-            )
-        except ValueError as e:
-            raise click.ClickException(f"Invalid branch name format in config: {e}")
+    def has_merge_info(self) -> bool:
+        self._require_note()
+        return "merge_info" in self.note
 
     @property
     def merge_info(self) -> MergeInfo:
@@ -225,14 +211,11 @@ class AppContext:
 
     @property
     def has_solutions(self) -> bool:
+        self._require_note()
         return "solutions" in self._note
 
-    # TODO: refactor
-
-    def get_repo(self) -> git.Repo:
-        return self.repo
-
-    def get_gh_repo(self) -> GithubRepository.Repository:
+    @property
+    def gh_repo(self) -> GithubRepository.Repository:
         if self.gh is None:
             raise Exception(
                 "GitHub token not found. Please set GITHUB_TOKEN or GH_TOKEN."
@@ -241,224 +224,42 @@ class AppContext:
             raise Exception("GitHub repository not set. Please provide --repo option.")
         return self.gh.get_repo(self.gh_repo_str)
 
-    def get_merge_info(
-        self,
-        commit: Optional[str] = None,
-        target: Optional[str] = None,
-    ) -> MergeInfo:
-        """Get merge info from note.json or current branch.
 
-        Resolves target_branch, target_branch_sha, and merge_commit_sha using the following
-        priority:
-        1. If merge_info exists in note.json, use those values
-        2. Otherwise, try to parse from current mergai branch name
-        3. If neither exists, raise an exception
-        4. If both exist and values differ, raise an exception
-
-        CLI-provided values (commit, target) override the auto-detected values.
-
-        Args:
-            commit: Optional commit SHA or ref to override auto-detection.
-            target: Optional target branch to override auto-detection.
-
-        Returns:
-            MergeInfo with target_branch, target_branch_sha, and merge_commit_sha.
-
-        Raises:
-            click.ClickException: If info cannot be determined or conflicts.
-        """
-        # Get values from note.json if merge_info exists
-        note = self.load_note()
-        note_target = None
-        note_target_sha = None
-        note_commit = None
-        if note and "merge_info" in note:
-            merge_info = note["merge_info"]
-            note_target = merge_info.get("target_branch")
-            note_target_sha = merge_info.get("target_branch_sha")
-            note_commit = merge_info.get("merge_commit")
-
-        # Get values from current branch name
-        current_branch = git_utils.get_current_branch(self.repo)
-        parsed = util.BranchNameBuilder.parse_branch_name_with_config(
-            current_branch, self.config.branch
-        )
-        branch_target = parsed.target_branch if parsed else None
-        branch_target_sha = parsed.target_branch_sha if parsed else None
-        branch_commit = parsed.merge_commit_sha if parsed else None
-
-        # Check for conflicts between note and branch (when both exist)
-        # Compare by resolving both to full SHA for accurate comparison
-        if note_target and branch_target and note_target != branch_target:
-            raise click.ClickException(
-                f"Conflict: target_branch in note.json ({note_target}) differs from "
-                f"current branch ({branch_target}). Use --target to specify explicitly."
+    @property
+    def branches(self) -> BranchNameBuilder:
+        merge_info = self.merge_info
+        try:
+            return BranchNameBuilder.from_config(
+                self.config.branch,
+                merge_info,
             )
-        if note_commit and branch_commit:
-            # Resolve branch_commit (possibly short) to full SHA for comparison
-            try:
-                branch_commit_full = self.repo.commit(branch_commit).hexsha
-                if note_commit != branch_commit_full:
-                    raise click.ClickException(
-                        f"Conflict: merge_commit in note.json ({note_commit}) differs from "
-                        f"current branch ({branch_commit}). Use COMMIT argument to specify explicitly."
-                    )
-            except Exception:
-                # If we can't resolve, compare as-is
-                if note_commit != branch_commit:
-                    raise click.ClickException(
-                        f"Conflict: merge_commit in note.json ({note_commit}) differs from "
-                        f"current branch ({branch_commit}). Use COMMIT argument to specify explicitly."
-                    )
-
-        # Resolve final values: CLI args > note.json > branch > error
-        # Resolve merge_commit to full SHA
-        if commit is not None:
-            # CLI-provided commit - resolve to full SHA
-            try:
-                resolved = self.repo.commit(commit)
-                final_commit = resolved.hexsha
-            except Exception as e:
-                raise click.ClickException(f"Invalid commit reference '{commit}': {e}")
-        elif note_commit:
-            final_commit = note_commit
-        elif branch_commit:
-            # Resolve to full SHA
-            try:
-                final_commit = self.repo.commit(branch_commit).hexsha
-            except Exception as e:
-                raise click.ClickException(
-                    f"Cannot resolve commit from branch name '{branch_commit}': {e}"
-                )
-        else:
+        except ValueError as e:
             raise click.ClickException(
-                "Cannot determine merge commit. Either:\n"
-                "  - Run 'mergai context init' first, or\n"
-                "  - Switch to a mergai branch, or\n"
-                "  - Provide COMMIT argument explicitly."
+                f"Invalid branch name format in config: {e}\n\n"
+                f"The format string must contain:\n"
+                f"  - %(target_branch)\n"
+                f"  - Either %(merge_commit_sha) or %(merge_commit_short_sha)\n"
+                f"  - Either %(target_branch_sha) or %(target_branch_short_sha)\n\n"
+                f"Current format: {self.config.branch.name_format}"
             )
 
-        # Resolve target_branch
-        if target is not None:
-            final_target = target
-        elif note_target:
-            final_target = note_target
-        elif branch_target:
-            final_target = branch_target
-        else:
-            # Fall back to current branch name (matches old behavior)
-            final_target = current_branch
 
-        # Resolve target_branch_sha
-        if note_target_sha:
-            final_target_sha = note_target_sha
-        elif branch_target_sha:
-            # Resolve to full SHA
-            try:
-                final_target_sha = self.repo.commit(branch_target_sha).hexsha
-            except Exception:
-                # If can't resolve, use as-is
-                final_target_sha = branch_target_sha
-        else:
-            # Resolve from target branch
-            # Uses fallback to origin/ for remote-only branches (common in CI)
-            try:
-                final_target_sha = git_utils.resolve_ref_sha(self.repo, final_target)
-            except ValueError as e:
-                raise click.ClickException(str(e))
+    def get_note_from_commit(self, commit: str) -> Optional[dict]:
+        try:
+            return git_utils.get_note_from_commit_as_dict(self.repo, "mergai", commit)
+        except Exception as e:
+            raise click.ClickException(f"Failed to get note for commit {commit}: {e}")
 
-        return MergeInfo(
-            target_branch=final_target,
-            target_branch_sha=final_target_sha,
-            merge_commit_sha=final_commit,
-            _repo=self.repo,
-        )
-
-    def _get_target_branch_name(self) -> str:
-        """Get the target branch name for commit messages.
-
-        Returns the target branch name by:
-        1. Checking merge_info in note.json
-        2. Parsing the current branch if it's a mergai branch
-        3. Otherwise, returning the current branch name (Git's default behavior)
-
-        Returns:
-            The target branch name to use in commit messages.
-        """
-        # Try to get from merge context (note.json or branch)
-        note = self.load_note()
-        if note and "merge_info" in note:
-            target = note["merge_info"].get("target_branch")
-            if target:
-                return target
-
-        current_branch = git_utils.get_current_branch(self.repo)
-        parsed = util.BranchNameBuilder.parse_branch_name_with_config(
-            current_branch, self.config.branch
-        )
-        if parsed:
-            return parsed.target_branch
-        return current_branch
-
-    def read_note(self, commit: str) -> Optional[dict]:
-        note_str = git_utils.read_commit_note(self.repo, "mergai", commit)
-        if not note_str:
+    def try_get_note_from_commit(self, commit: str) -> Optional[MergaiNote]:
+        try:
+            note_dict = git_utils.get_note_from_commit_as_dict(self.repo, "mergai", commit)
+            if note_dict is None:
+                return None
+            return MergaiNote.from_dict(note_dict, self.repo)
+        except Exception as e:
             return None
 
-        try:
-            note = json.loads(note_str)
-            return note
-        except json.JSONDecodeError as e:
-            raise Exception(f"Failed to parse note for commit {commit} as JSON: {e}")
-
-    def load_note(self) -> Optional[dict]:
-        if self.state.note_exists():
-            return self.state.load_note()
-
-        return None
-
-    def get_notes(self):
-        """Return all commits with notes from HEAD until the merge commit (from merge_info).
-
-        Each item is (commit, note) where note is the parsed note dict or None if the
-        commit has no mergai note. Stops when the merge commit (merge_info["merge_commit"])
-        is reached, inclusive.
-        """
-        merge_commit_sha = None
-        note = self.load_note()
-        if note and "merge_info" in note:
-            try:
-                merge_commit_sha = self.repo.commit(
-                    note["merge_info"]["merge_commit"]
-                ).hexsha
-            except Exception:
-                pass
-
-        notes = []
-        for commit in self.repo.iter_commits():
-            note_str = git_utils.read_commit_note(self.repo, "mergai", commit.hexsha)
-            if note_str is not None:
-                try:
-                    note = json.loads(note_str)
-                except json.JSONDecodeError:
-                    note = None
-            else:
-                note = None
-
-            if note and "merge_info" in note and merge_commit_sha is None:
-                try:
-                    merge_commit_sha = self.repo.commit(
-                        note["merge_info"]["merge_commit"]
-                    ).hexsha
-                except Exception:
-                    pass
-
-            notes.append((commit, note))
-
-            if merge_commit_sha and commit.hexsha == merge_commit_sha:
-                break
-
-        return notes
+    # TODO: refactor
 
     def load_or_create_note(self) -> dict:
         if self.state.note_exists():
@@ -469,9 +270,11 @@ class AppContext:
     def save_note(self, note: dict):
         self.state.save_note(note)
 
-    def build_resolve_prompt(self, current_note: dict, use_history: bool) -> str:
-        if use_history:
-            raise Exception("use_history in build_resolve_prompt is not supported yet.")
+    def build_resolve_prompt(self, current_note: dict) -> str:
+        if self.has_solutions:
+            raise Exception(
+                "Current note already has solutions. Cannot build resolve prompt for an existing solution. Please drop existing solutions first."
+            )
 
         system_prompt_resolve = prompts.load_system_prompt_resolve()
         project_invariants = util.load_if_exists(".mergai/invariants.md")
@@ -514,22 +317,23 @@ class AppContext:
         """
         from .models import ConflictContext, MergeContext, MergeInfo
 
-        result = note.copy()
-        prompt_config = self.config.context.to_prompt_serialization_config()
+        note_copy = note.copy()
+        prompt_config = self.config.prompt.to_prompt_serialization_config()
 
-        # Hydrate conflict_context if present
-        if "conflict_context" in result:
-            ctx = ConflictContext.from_dict(result["conflict_context"], self.repo)
-            result["conflict_context"] = ctx.to_dict(prompt_config)
+        if self.has_conflict_context:
+            note_copy["conflict_context"] = self.conflict_context.to_dict(prompt_config)
 
-        # Hydrate merge_context if present
-        if "merge_context" in result:
-            ctx = MergeContext.from_dict(result["merge_context"], self.repo)
-            result["merge_context"] = ctx.to_dict(prompt_config)
+        if self.has_merge_context:
+            note_copy["merge_context"] = self.merge_context.to_dict(prompt_config)
 
-        return result
+        return note_copy
 
     def build_describe_prompt(self, current_note: dict) -> str:
+        if self.has_solutions:
+            raise Exception(
+                "Current note already has solutions. Cannot build describe prompt for an existing solution. Please drop existing solutions first."
+            )
+
         system_prompt_describe = prompts.load_system_prompt_describe()
         prompt = system_prompt_describe + "\n\n"
 
@@ -546,9 +350,6 @@ class AppContext:
         prompt += "\n```\n"
 
         return prompt
-
-    def drop_conflict_prompt(self):
-        self.state.drop_conflict_prompt()
 
     def drop_note_field(self, field: str):
         note = self.load_or_create_note()
@@ -658,27 +459,6 @@ class AppContext:
                 return i
         return None
 
-    def _migrate_solution_to_solutions(self, note: dict) -> dict:
-        """Migrate legacy 'solution' field to 'solutions' array.
-
-        Args:
-            note: The note dict to migrate.
-
-        Returns:
-            The migrated note dict.
-        """
-        if "solution" in note and "solutions" not in note:
-            note["solutions"] = [note["solution"]]
-            del note["solution"]
-            # Also migrate note_index entries
-            if "note_index" in note:
-                for entry in note["note_index"]:
-                    entry["fields"] = [
-                        "solutions[0]" if f == "solution" else f
-                        for f in entry.get("fields", [])
-                    ]
-        return note
-
     def drop_pr_comments(self):
         self.drop_note_field("pr_comments")
 
@@ -693,6 +473,9 @@ class AppContext:
 
     def drop_merge_description(self):
         self.drop_note_field("merge_description")
+
+    def drop_merge_context(self):
+        self.drop_note_field("merge_context")
 
     def create_conflict_context(
         self,
@@ -831,10 +614,6 @@ class AppContext:
 
         return []
 
-    def drop_merge_context(self):
-        """Drop the merge_context from the note."""
-        self.drop_note_field("merge_context")
-
     def get_agent(self, agent_desc: str = None, yolo: bool = False) -> "Agent":
         """Get an agent instance for conflict resolution.
 
@@ -875,16 +654,10 @@ class AppContext:
     def error_to_prompt(self, error: str) -> str:
         return f"An error occurred while trying to process the output: {error}"
 
-    def resolve(self, force: bool, yolo: bool, max_attempts: int = None):
-        if max_attempts is None:
-            max_attempts = self.config.resolve.max_attempts
-
+    def resolve(self, force: bool, yolo: bool):
         note = self.load_note()
         if note is None:
             raise Exception("No note found. Please prepare the context first.")
-
-        # Migrate legacy solution field
-        note = self._migrate_solution_to_solutions(note)
 
         # Check if there's an uncommitted solution
         uncommitted_idx = self._get_uncommitted_solution_index(note)
@@ -912,6 +685,7 @@ class AppContext:
         error = None
         solution = None
         # TODO: refactor retry logic
+        max_attempts = self.config.resolve.max_attempts
         for attempt in range(max_attempts):
             if error is not None:
                 click.echo(
@@ -1122,8 +896,6 @@ class AppContext:
 
         note = self.state.load_note()
 
-        # Migrate legacy solution field
-        note = self._migrate_solution_to_solutions(note)
 
         # Build selective note content - always include merge_info
         selective_note = {}
@@ -1173,10 +945,6 @@ class AppContext:
 
         note = self.state.load_note()
 
-        # Migrate legacy solution field
-        note = self._migrate_solution_to_solutions(note)
-        self.save_note(note)
-
         # Find the uncommitted solution
         uncommitted_idx = self._get_uncommitted_solution_index(note)
         if uncommitted_idx is None:
@@ -1206,7 +974,7 @@ class AppContext:
                 self.repo.index.add([item.a_path])
 
         # Build commit message following Git's merge commit style
-        target_branch = self._get_target_branch_name()
+        target_branch = self.branches.target_branch
         if self.has_conflict_context:
             theirs_sha = git_utils.short_sha(self.conflict_context.theirs_commit_sha)
             message = f"Resolve conflicts for merge commit '{theirs_sha}' into {target_branch}\n\n"
@@ -1270,7 +1038,7 @@ class AppContext:
         conflict_ctx = ConflictContext.from_dict(context_dict, self.repo)
         theirs_sha = git_utils.short_sha(conflict_ctx.theirs_commit_sha)
         files = conflict_ctx.files
-        target_branch = self._get_target_branch_name()
+        target_branch = self.branches.target_branch
 
         # Build commit message following Git's merge commit style
         message = f"Merge commit '{theirs_sha}' into {target_branch}\n\n"
@@ -1356,7 +1124,7 @@ class AppContext:
         for commit in self.repo.iter_commits():
             if commit.hexsha == target_sha_full:
                 break
-            git_note = self.read_note(commit.hexsha)
+            git_note = self.get_note_from_commit(commit.hexsha)
             commits_with_notes.append((commit, git_note))
         else:
             # We didn't find target_sha in the history
@@ -1670,7 +1438,7 @@ class AppContext:
                                   or cannot determine scan range.
         """
         current_branch = git_utils.get_current_branch(self.repo)
-        parsed = util.BranchNameBuilder.parse_branch_name_with_config(
+        parsed = BranchNameBuilder.parse_branch_name_with_config(
             current_branch, self.config.branch
         )
 
@@ -1685,7 +1453,7 @@ class AppContext:
         # Collect commits and their notes
         commits_with_notes = []
         for commit in self.repo.iter_commits():
-            git_note = self.read_note(commit.hexsha)
+            git_note = self.get_note_from_commit(commit.hexsha)
             if git_note:
                 commits_with_notes.append((commit.hexsha, git_note))
 

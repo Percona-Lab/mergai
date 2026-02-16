@@ -11,14 +11,14 @@ from urllib.parse import urlencode, quote
 
 def _build_pr_url(repo_str: str, title: str, body: str, head: str, base: str) -> str:
     """Build a GitHub URL for creating a PR with pre-filled information.
-    
+
     Args:
         repo_str: Repository in 'owner/repo' format.
         title: PR title.
         body: PR body/description.
         head: Source branch name.
         base: Target branch name.
-    
+
     Returns:
         GitHub compare URL with query parameters for PR creation.
     """
@@ -34,18 +34,23 @@ def _build_pr_url(repo_str: str, title: str, body: str, head: str, base: str) ->
 
 
 def _create_pr(
-    app: AppContext, title: str, body: str, head: str, base: str, dry_run: bool = False, url_only: bool = False
+    app: AppContext,
+    title: str,
+    body: str,
+    head: str,
+    base: str,
+    dry_run: bool = False,
+    url_only: bool = False,
 ):
-    gh_repo = app.get_gh_repo()
-    
+
     if url_only:
-        url = _build_pr_url(gh_repo.full_name, title, body, head, base)
+        url = _build_pr_url(app.gh_repo.full_name, title, body, head, base)
         click.echo(f"Open this URL to create the PR:\n\n{url}")
         return None
-    
+
     click.echo(
         f"Creating PR:\n"
-        f"    repo: {gh_repo.full_name}\n"
+        f"    repo: {app.gh_repo.full_name}\n"
         f"    from: {head}\n"
         f"      to: {base}\n"
         f"   title: {title}"
@@ -58,7 +63,7 @@ def _create_pr(
         return None
 
     try:
-        pr = gh_repo.create_pull(title=title, body=body, head=head, base=base)
+        pr = app.gh_repo.create_pull(title=title, body=body, head=head, base=base)
         click.echo(f"PR created: {pr.html_url}")
         return pr
     except GithubException as e:
@@ -85,20 +90,24 @@ def _build_solutions_pr_body(app: AppContext) -> str:
     body += "\n\n"
     body += util.solutions_to_markdown(app.solutions)
     body += "\n\n"
+
     return body
 
 
 def _build_merge_pr_body(app: AppContext) -> str:
     markdown_config = MarkdownConfig.for_pr(app.repo)
-    
+
     body = util.merge_info_to_markdown(app.merge_info, markdown_config)
     body += "\n\n"
     body += util.merge_context_to_markdown(app.merge_context, markdown_config)
     body += "\n\n"
+
     return body
 
 
-def _create_solution_pr(app: AppContext, dry_run: bool, url_only: bool = False, skip_body: bool = False) -> None:
+def _create_solution_pr(
+    app: AppContext, dry_run: bool, url_only: bool = False, skip_body: bool = False
+) -> None:
     """Create a PR from the current branch (with existing solution commits) to the conflict branch."""
 
     merge_info = app.merge_info
@@ -115,7 +124,7 @@ def _create_solution_pr(app: AppContext, dry_run: bool, url_only: bool = False, 
 
     merge_commit_short = git_utils.short_sha(merge_info.merge_commit_sha)
     # TODO: title format from config
-    title = f"Resolve conflicts for merge {merge_commit_short} into {merge_info.target_branch}"
+    title = f"Resolve conflicts for merge {merge_commit_short} into {app.branches.target_branch}"
 
     body = "" if skip_body else _build_solutions_pr_body(app)
 
@@ -157,13 +166,15 @@ def _build_main_pr_body(app: AppContext) -> str:
     )
 
 
-def _create_main_pr(app: AppContext, dry_run: bool, url_only: bool = False, skip_body: bool = False) -> None:
+def _create_main_pr(
+    app: AppContext, dry_run: bool, url_only: bool = False, skip_body: bool = False
+) -> None:
     """Create a PR from the main branch to target_branch (merge or conflict resolution)."""
 
     merge_commit_short = git_utils.short_sha(app.merge_info.merge_commit_sha)
     # TODO: title format from config
-    title = f"Merge {merge_commit_short} into {app.merge_info.target_branch}"
-    
+    title = f"Merge {merge_commit_short} into {app.branches.target_branch}"
+
     body = "" if skip_body else _build_main_pr_body(app)
 
     _create_pr(
@@ -171,7 +182,7 @@ def _create_main_pr(app: AppContext, dry_run: bool, url_only: bool = False, skip
         title,
         body,
         app.branches.main_branch,
-        app.merge_info.target_branch,
+        app.branches.target_branch,
         dry_run=dry_run,
         url_only=url_only,
     )
@@ -215,7 +226,9 @@ def pr(app: AppContext, repo: Optional[str]):
 @click.argument(
     "pr_type", type=click.Choice(["main", "solution"], case_sensitive=False)
 )
-def create(app: AppContext, pr_type: str, dry_run: bool, url_only: bool, skip_body: bool):
+def create(
+    app: AppContext, pr_type: str, dry_run: bool, url_only: bool, skip_body: bool
+):
     """Create a pull request.
 
     PR_TYPE specifies which type of PR to create:
@@ -256,7 +269,7 @@ def create(app: AppContext, pr_type: str, dry_run: bool, url_only: bool, skip_bo
     """
     if dry_run and url_only:
         raise click.ClickException("Cannot use --dry-run and --url-only together.")
-    
+
     if pr_type.lower() == "solution":
         _create_solution_pr(app, dry_run, url_only, skip_body)
     else:
@@ -264,9 +277,8 @@ def create(app: AppContext, pr_type: str, dry_run: bool, url_only: bool, skip_bo
 
 
 def get_prs_for_current_branch(app: AppContext) -> List[GithubPullRequest.PullRequest]:
-    gh_repo = app.get_gh_repo()
     # TODO: the head should include the repo owner
-    pulls = gh_repo.get_pulls(
+    pulls = app.gh_repo.get_pulls(
         sort="created", head=git_utils.get_current_branch(app.repo)
     )
     return list(

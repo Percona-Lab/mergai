@@ -1,6 +1,6 @@
 from git import Repo, Commit, Blob
-import hashlib
 import re
+import json
 from typing import Iterator, Tuple, Optional, List
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -26,6 +26,11 @@ class ConflictType(StrEnum):
 def short_sha(sha: str) -> str:
     return sha[:11]
 
+def is_merge_commit(commit: Commit) -> bool:
+    return len(commit.parents) > 1
+
+def is_merge_commit_parent(commit: Commit, parent_sha: str) -> bool:
+    return is_merge_commit(commit) and commit.parents[1].hexsha == parent_sha
 
 def resolve_ref_sha(repo: Repo, ref: str, try_remote: bool = True) -> str:
     """Resolve a git reference (branch, tag, SHA) to its full SHA.
@@ -393,12 +398,19 @@ def merge_has_conflicts(repo: Repo, parent1: Commit, parent2: Commit) -> bool:
         return True
 
 
-def read_commit_note(repo: Repo, ref: str, commit: str) -> Optional[str]:
+def get_note_from_commit(repo: Repo, ref: str, commit: str) -> Optional[str]:
     try:
         note = repo.git.notes("--ref", ref, "show", repo.commit(commit).hexsha)
         return note
     except Exception as e:
         return None
+
+def get_note_from_commit_as_dict(repo: Repo, ref: str, commit: str) -> Optional[dict]:
+    note_str = get_note_from_commit(repo, ref, commit)
+    if not note_str:
+        return None
+
+    return json.loads(note_str)
 
 
 def find_remote_by_url(repo: Repo, url: str) -> Optional[str]:

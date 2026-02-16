@@ -808,3 +808,34 @@ class MergeContext:
         if self.auto_merged:
             result["auto_merged"] = self.auto_merged
         return result
+
+
+@dataclass
+class MergaiNote:
+    merge_info: MergeInfo
+    conflict_context: Optional[ConflictContext] = None
+    merge_context: Optional[MergeContext] = None
+    solutions: Optional[List[dict]] = None
+    pr_comments: Optional[List[dict]] = None
+    user_comment: Optional[str] = None
+    merge_description: Optional[str] = None
+    note_index: Optional[List[dict]] = None
+
+    _data: dict = field(default_factory=dict, repr=False, compare=False)
+
+    @classmethod
+    def from_dict(cls, data: dict, repo: "Repo" = None) -> "MergaiNote":
+        return cls(
+            _data=data,
+            merge_info=MergeInfo.from_dict(data["merge_info"], repo),
+            conflict_context=ConflictContext.from_dict(data["conflict_context"]) if "conflict_context" in data else None,
+            merge_context=MergeContext.from_dict(data["merge_context"]) if "merge_context" in data else None,
+            solutions=data.get("solutions") if "solutions" in data else None,
+            pr_comments=data.get("pr_comments") if "pr_comments" in data else None,
+            user_comment=data.get("user_comment") if "user_comment" in data else None,
+            merge_description=data.get("merge_description") if "merge_description" in data else None,
+            note_index=data.get("note_index") if "note_index" in data else None,
+        )
+
+    def to_dict(self) -> dict:
+        return self._data

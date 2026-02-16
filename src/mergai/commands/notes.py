@@ -333,8 +333,6 @@ def update(
         mergai notes update --theirs     # Resolve conflicts keeping remote
         mergai notes update -f           # Force overwrite local (DESTRUCTIVE)
     """
-    repo = app.get_repo()
-
     # Validate options
     if sum([force, strategy_ours, strategy_theirs]) > 1:
         raise click.ClickException(
@@ -342,8 +340,8 @@ def update(
         )
 
     # Check for in-progress merge
-    if notes_merge_in_progress(repo):
-        conflicts = get_notes_merge_conflicts(repo)
+    if notes_merge_in_progress(app.repo):
+        conflicts = get_notes_merge_conflicts(app.repo)
         click.echo("Notes merge already in progress.", err=True)
         click.echo("")
         if conflicts:
@@ -367,7 +365,7 @@ def update(
 
         try:
             refspec = "+refs/notes/mergai*:refs/notes/mergai*"
-            repo.git.fetch(remote, refspec)
+            app.repo.git.fetch(remote, refspec)
             click.echo(click.style("Done. ", fg="green") + "Local notes overwritten with remote.")
         except Exception as e:
             raise click.ClickException(f"Failed to fetch notes: {e}")
@@ -376,12 +374,12 @@ def update(
     # Fetch remote notes to temporary refs
     click.echo(f"Fetching notes from {remote}...")
 
-    has_local_notes = ref_exists(repo, f"refs/notes/{NOTES_REF}")
-    has_local_markers = ref_exists(repo, f"refs/notes/{NOTES_MARKER_REF}")
+    has_local_notes = ref_exists(app.repo, f"refs/notes/{NOTES_REF}")
+    has_local_markers = ref_exists(app.repo, f"refs/notes/{NOTES_MARKER_REF}")
 
     try:
         # Fetch main notes
-        repo.git.fetch(
+        app.repo.git.fetch(
             remote, f"refs/notes/{NOTES_REF}:refs/notes/{NOTES_REMOTE_TMP_REF}"
         )
         has_remote_notes = True
@@ -390,7 +388,7 @@ def update(
 
     try:
         # Fetch marker notes
-        repo.git.fetch(
+        app.repo.git.fetch(
             remote,
             f"refs/notes/{NOTES_MARKER_REF}:refs/notes/{NOTES_MARKER_REMOTE_TMP_REF}",
         )
@@ -400,16 +398,16 @@ def update(
 
     if not has_remote_notes and not has_remote_markers:
         click.echo("No remote notes found.")
-        cleanup_temp_refs(repo)
+        cleanup_temp_refs(app.repo)
         return
 
     # Preview the merge
     if has_remote_notes:
         if has_local_notes:
-            preview = preview_notes_merge(repo, NOTES_REF, NOTES_REMOTE_TMP_REF)
+            preview = preview_notes_merge(app.repo, NOTES_REF, NOTES_REMOTE_TMP_REF)
         else:
             # No local notes, all remote notes are "new"
-            remote_notes = list_notes_for_ref(repo, NOTES_REMOTE_TMP_REF)
+            remote_notes = list_notes_for_ref(app.repo, NOTES_REMOTE_TMP_REF)
             preview = NotesMergePreview(
                 local_only=[],
                 remote_only=[
@@ -440,7 +438,7 @@ def update(
         if dry_run:
             click.echo("")
             click.echo("Dry run - no changes made.")
-            cleanup_temp_refs(repo)
+            cleanup_temp_refs(app.repo)
             return
 
         # If there are conflicts and no strategy specified, fail with instructions
@@ -499,10 +497,10 @@ def update(
                 if strategy:
                     merge_args.extend(["-s", strategy])
                 merge_args.append(f"refs/notes/{NOTES_REMOTE_TMP_REF}")
-                repo.git.notes(*merge_args)
+                app.repo.git.notes(*merge_args)
             else:
                 # No local notes - just copy the remote ref
-                repo.git.update_ref(
+                app.repo.git.update_ref(
                     f"refs/notes/{NOTES_REF}", f"refs/notes/{NOTES_REMOTE_TMP_REF}"
                 )
 
@@ -510,7 +508,7 @@ def update(
         if has_remote_markers:
             click.echo("Merging marker notes (using remote version)...")
             if has_local_markers:
-                repo.git.notes(
+                app.repo.git.notes(
                     "--ref",
                     NOTES_MARKER_REF,
                     "merge",
@@ -519,13 +517,13 @@ def update(
                     f"refs/notes/{NOTES_MARKER_REMOTE_TMP_REF}",
                 )
             else:
-                repo.git.update_ref(
+                app.repo.git.update_ref(
                     f"refs/notes/{NOTES_MARKER_REF}",
                     f"refs/notes/{NOTES_MARKER_REMOTE_TMP_REF}",
                 )
 
         # Cleanup temp refs
-        cleanup_temp_refs(repo)
+        cleanup_temp_refs(app.repo)
 
         click.echo("")
         click.echo(click.style("Success! ", fg="green") + f"Notes updated from {remote}.")
@@ -559,7 +557,7 @@ def update(
             click.echo("Or abort: mergai notes merge --abort")
             raise SystemExit(1)
         else:
-            cleanup_temp_refs(repo)
+            cleanup_temp_refs(app.repo)
             raise click.ClickException(f"Failed to merge notes: {e}")
 
 
@@ -575,7 +573,7 @@ def push(app: AppContext, remote: str):
         mergai notes push upstream  # Push to upstream remote
     """
     try:
-        app.get_repo().git.push(remote, "refs/notes/mergai*:refs/notes/mergai*")
+        app.repo.git.push(remote, "refs/notes/mergai*:refs/notes/mergai*")
         click.echo(f"Notes pushed to {remote}.")
     except Exception as e:
         raise click.ClickException(f"Failed to push notes: {e}")
@@ -613,12 +611,10 @@ def merge_cmd(app: AppContext, do_commit: bool, do_abort: bool):
         mergai notes merge --commit  # Finalize the merge
         mergai notes merge --abort   # Abort the merge
     """
-    repo = app.get_repo()
-
     if do_commit and do_abort:
         raise click.ClickException("Cannot use both --commit and --abort.")
 
-    if not notes_merge_in_progress(repo):
+    if not notes_merge_in_progress(app.repo):
         if do_commit or do_abort:
             click.echo("No notes merge in progress.")
         else:
@@ -629,23 +625,23 @@ def merge_cmd(app: AppContext, do_commit: bool, do_abort: bool):
 
     if do_commit:
         try:
-            repo.git.notes("--ref", NOTES_REF, "merge", "--commit")
-            cleanup_temp_refs(repo)
+            app.repo.git.notes("--ref", NOTES_REF, "merge", "--commit")
+            cleanup_temp_refs(app.repo)
             click.echo(click.style("Success! ", fg="green") + "Notes merge completed.")
         except Exception as e:
             raise click.ClickException(f"Failed to commit notes merge: {e}")
 
     elif do_abort:
         try:
-            repo.git.notes("--ref", NOTES_REF, "merge", "--abort")
-            cleanup_temp_refs(repo)
+            app.repo.git.notes("--ref", NOTES_REF, "merge", "--abort")
+            cleanup_temp_refs(app.repo)
             click.echo("Notes merge aborted.")
         except Exception as e:
             raise click.ClickException(f"Failed to abort notes merge: {e}")
 
     else:
         # Show status
-        conflicts = get_notes_merge_conflicts(repo)
+        conflicts = get_notes_merge_conflicts(app.repo)
         click.echo("Notes merge in progress.")
         click.echo("")
 
@@ -684,11 +680,10 @@ def status(app: AppContext, verbose: bool):
         mergai notes status      # Show summary
         mergai notes status -v   # Show detailed list
     """
-    repo = app.get_repo()
 
     # Check for merge in progress
-    if notes_merge_in_progress(repo):
-        conflicts = get_notes_merge_conflicts(repo)
+    if notes_merge_in_progress(app.repo):
+        conflicts = get_notes_merge_conflicts(app.repo)
         click.echo(click.style("Notes merge in progress!", fg="yellow"))
         click.echo("")
         if conflicts:
@@ -700,8 +695,8 @@ def status(app: AppContext, verbose: bool):
         click.echo("")
 
     # List notes
-    has_notes = ref_exists(repo, f"refs/notes/{NOTES_REF}")
-    has_markers = ref_exists(repo, f"refs/notes/{NOTES_MARKER_REF}")
+    has_notes = ref_exists(app.repo, f"refs/notes/{NOTES_REF}")
+    has_markers = ref_exists(app.repo, f"refs/notes/{NOTES_MARKER_REF}")
 
     if not has_notes:
         click.echo("No local notes found.")
@@ -709,8 +704,8 @@ def status(app: AppContext, verbose: bool):
         click.echo("To fetch notes from remote: mergai notes update")
         return
 
-    notes_map = list_notes_for_ref(repo, NOTES_REF)
-    markers_map = list_notes_for_ref(repo, NOTES_MARKER_REF)
+    notes_map = list_notes_for_ref(app.repo, NOTES_REF)
+    markers_map = list_notes_for_ref(app.repo, NOTES_MARKER_REF)
 
     click.echo(f"Local notes: {len(notes_map)}")
     click.echo(f"Marker notes: {len(markers_map)}")
@@ -719,12 +714,12 @@ def status(app: AppContext, verbose: bool):
         click.echo("")
         click.echo("Notes by commit:")
         for commit_sha, blob_sha in sorted(notes_map.items()):
-            content = get_note_content(repo, NOTES_REF, commit_sha)
+            content = get_note_content(app.repo, NOTES_REF, commit_sha)
             summary = format_note_summary(content)
 
             # Try to get commit info
             try:
-                commit = repo.commit(commit_sha)
+                commit = app.repo.commit(commit_sha)
                 commit_msg = commit.summary[:50]
                 if len(commit.summary) > 50:
                     commit_msg += "..."
@@ -737,7 +732,7 @@ def status(app: AppContext, verbose: bool):
     click.echo("")
 
     # Check for temp refs (leftover from failed merge)
-    has_temp = ref_exists(repo, f"refs/notes/{NOTES_REMOTE_TMP_REF}")
+    has_temp = ref_exists(app.repo, f"refs/notes/{NOTES_REMOTE_TMP_REF}")
     if has_temp:
         click.echo(
             click.style("Note: ", fg="yellow")

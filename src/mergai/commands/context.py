@@ -12,7 +12,7 @@ from typing import Optional
 
 from ..app import AppContext
 from .. import git_utils
-from ..util import BranchNameBuilder
+from ..utils.branch_name_builder import BranchNameBuilder
 
 
 CREATE_CONFLICT_CONTEXT_FLAGS = [

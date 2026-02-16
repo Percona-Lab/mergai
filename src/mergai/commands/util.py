@@ -1,8 +1,10 @@
 import click
 import json
+from git import Commit
+from .. import git_utils
 from .. import util
 from ..app import AppContext, convert_note
-from ..models import ConflictContext, MergeContext
+from ..models import ConflictContext
 
 
 @click.command()
@@ -93,7 +95,7 @@ def show(
     try:
         commit = "HEAD" if commit is None else commit
 
-        note = app.read_note(commit)
+        note = app.get_note_from_commit(commit)
         if not note:
             raise Exception(f"No note found for commit {commit}.")
         show_summary = (
@@ -161,10 +163,14 @@ def show(
                             output_str += f"## Solution {idx + 1}\n\n"
                         else:
                             output_str += f"=== Solution {idx + 1} ===\n"
-                    output_str += util.conflict_solution_to_str(solution, format, pretty=pretty)
+                    output_str += util.conflict_solution_to_str(
+                        solution, format, pretty=pretty
+                    )
             elif "solution" in note:
                 solution = note["solution"]
-                output_str += util.conflict_solution_to_str(solution, format, pretty=pretty)
+                output_str += util.conflict_solution_to_str(
+                    solution, format, pretty=pretty
+                )
             else:
                 raise Exception("No solution found in the note.")
 
@@ -192,7 +198,8 @@ def status(app: AppContext, format: str, pretty: bool):
             exit(0)
         note = app.state.load_note()
         util.print_or_page(
-            convert_note(note, format=format, repo=app.repo, pretty=pretty), format=format
+            convert_note(note, format=format, repo=app.repo, pretty=pretty),
+            format=format,
         )
     except Exception as e:
         click.echo(f"Error: {e}")
@@ -201,44 +208,45 @@ def status(app: AppContext, format: str, pretty: bool):
 
 @click.command()
 @click.pass_obj
-def log(app: AppContext):
-    try:
-        notes = app.get_notes()
+@click.argument("ref", type=str, required=False, default="HEAD")
+def log(app: AppContext, ref: str):
+    def format_commit(commit: Commit) -> str:
         output_str = ""
-        for idx, (commit, note) in enumerate(notes):
-            if note is not None:
-                output_str += util.commit_note_to_summary_str(
-                    commit, note, format="text"
-                )
-            else:
-                output_str += f"commit: {commit.hexsha}\n"
-                output_str += f"Author: {commit.author.name} <{commit.author.email}>\n"
-                output_str += f"Date:   {commit.authored_datetime}\n"
-                output_str += "Content:\n"
-                output_str += "  (no note)\n"
-                output_str += f"Message:\n    {commit.message.strip().replace('\n', '\n    ')}\n"
-                output_str += "\n"
+        output_str += f"commit: {commit.hexsha}\n"
+        output_str += f"Author: {commit.author.name} <{commit.author.email}>\n"
+        output_str += f"Date:   {commit.authored_datetime}\n"
+        output_str += "Content:\n"
+        output_str += "  (no note)\n"
+        output_str += (
+            f"Message:\n    {commit.message.strip().replace('\n', '\n    ')}\n"
+        )
+        return output_str
 
-        util.print_or_page(output_str, format="text")
+    output_str = ""
+    merge_commit = None
+    for commit in app.repo.iter_commits(ref):
+        note = app.try_get_note_from_commit(commit)
+        if not merge_commit and note and note.merge_info:
+            merge_commit = note.merge_info.merge_commit_sha
 
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)
+        if note:
+            output_str += util.commit_note_to_summary_str(
+                commit, note.to_dict(), format="text"
+            )
+        else:
+            output_str += format_commit(commit)
+
+        # Show log until the merge commit is reached
+        if git_utils.is_merge_commit_parent(commit, merge_commit):
+            break
+
+    util.print_or_page(output_str, format="text")
 
 
 @click.command()
 @click.pass_obj
-@click.option(
-    "--use-history/--no-history",
-    "use_history",
-    is_flag=True,
-    default=False,
-    help="Include commit history in the prompt.",
-)
-def prompt(app: AppContext, use_history: bool):
+def prompt(app: AppContext):
     try:
-        if use_history:
-            raise Exception("use-history option is not supported yet.")
         note = app.load_note()
         if note is None:
             click.echo("No note found. Please prepare the context first.")
@@ -247,8 +255,7 @@ def prompt(app: AppContext, use_history: bool):
                 "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
             )
             exit(1)
-        # TODO: implement use_history
-        prompt = app.build_resolve_prompt(note, use_history=False)
+        prompt = app.build_resolve_prompt(note)
         util.print_or_page(prompt, format="markdown")
     except Exception as e:
         click.echo(f"Error: {e}")
@@ -267,12 +274,12 @@ def merge_prompt(app: AppContext):
                 "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
             )
             exit(1)
-        # TODO: implement use_history
         prompt = app.build_describe_prompt(note)
         util.print_or_page(prompt, format="markdown")
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
+
 
 COMMENT_FILE_TEMPLATE = """\
 
@@ -355,8 +362,8 @@ def comment(app: AppContext, file: str, force: bool, body: str):
         exit(0)
 
     comment = {
-        "user": app.get_repo().git.config("user.name"),
-        "email": app.get_repo().git.config("user.email"),
+        "user": app.repo.git.config("user.name"),
+        "email": app.repo.git.config("user.email"),
         "date": now_utc_iso(),
         "body": stripped,
     }
