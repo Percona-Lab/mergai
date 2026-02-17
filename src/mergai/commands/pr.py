@@ -118,7 +118,7 @@ def _create_solution_pr(
     if not app.note.has_solutions or len(app.note.solutions) == 0:
         raise click.ClickException("No solutions found. Run 'mergai resolve' first.")
 
-    if app.note.has_uncommitted_solutions:
+    if app.note.get_uncommitted_solution() is not None:
         raise click.ClickException(
             "You have uncommitted solution(s). Run 'mergai commit solution' first."
         )
