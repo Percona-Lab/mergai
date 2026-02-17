@@ -20,12 +20,20 @@ class ConflictResult(MergePickStrategyResult):
     conflicting_files: List[str] = field(default_factory=list)
 
     def format_short(self) -> str:
-        """Return a short description of the conflict match."""
-        if len(self.conflicting_files) == 1:
-            return f"conflicts in {self.conflicting_files[0]}"
-        if len(self.conflicting_files) > 1:
-            return f"conflicts in {len(self.conflicting_files)} files"
-        return "would cause conflicts"
+        """Return a short description of the conflict match.
+
+        Shows file names for 1-3 files, otherwise shows count.
+        Includes 'first conflict' prefix to indicate this strategy
+        only marks the first conflicting commit.
+        """
+        count = len(self.conflicting_files)
+        if count == 0:
+            return "first conflict"
+        if count == 1:
+            return f"first conflict in {self.conflicting_files[0]}"
+        if count <= 3:
+            return f"first conflict in {', '.join(self.conflicting_files)}"
+        return f"first conflict in {count} files"
 
 
 @dataclass
@@ -52,10 +60,17 @@ class ConflictStrategyConfig:
 class ConflictStrategy(MergePickStrategy):
     """Strategy that prioritizes commits that would cause merge conflicts.
 
-    NOTE: Not yet fully implemented. Currently returns None for all commits.
+    Checks if merging the commit into the fork branch would cause conflicts
+    using git merge-tree (read-only operation that doesn't modify working tree).
 
-    When implemented, this will check if cherry-picking or merging the
-    commit would cause conflicts with the current fork state.
+    This strategy is stateful: it only marks the FIRST commit that would
+    introduce a conflict. Once a conflict is found, subsequent calls return
+    None immediately (O(1)) since later commits would also conflict with
+    the same files. This optimization is critical for performance when
+    checking many commits.
+
+    Since commits are evaluated in chronological order (oldest first), this
+    ensures we identify the earliest commit that introduces the conflict.
     """
 
     def __init__(self, config: ConflictStrategyConfig):
@@ -65,6 +80,7 @@ class ConflictStrategy(MergePickStrategy):
             config: ConflictStrategyConfig instance.
         """
         self.config = config
+        self._conflict_found = False
 
     @property
     def name(self) -> str:
@@ -76,20 +92,36 @@ class ConflictStrategy(MergePickStrategy):
     ) -> Optional[ConflictResult]:
         """Check if commit would cause merge conflicts.
 
+        Uses git merge-tree to perform a read-only merge simulation.
+        This does not modify the working tree or index.
+
+        Once a conflict is found, subsequent calls return None immediately
+        to avoid expensive merge-tree operations for every remaining commit.
+
         Args:
             repo: GitPython Repo object.
             commit: The commit to check.
             context: Strategy context with fork_ref.
 
         Returns:
-            ConflictResult if the commit would conflict, None otherwise.
-
-        NOTE: Not yet implemented - always returns None.
+            ConflictResult if this is the first commit that would conflict,
+            None otherwise (including if a conflict was already found).
         """
-        # TODO: Implement conflict detection
-        # This would check if cherry-picking/merging this commit would cause conflicts
-        # Possible implementation:
-        # if git_utils.commit_would_conflict(repo, commit, context.fork_ref):
-        #     conflicting_files = git_utils.get_conflicting_files(repo, commit, context.fork_ref)
-        #     return ConflictResult(conflicting_files=conflicting_files)
+        # Skip expensive check if we already found a conflict
+        if self._conflict_found:
+            return None
+
+        from ..utils import git_utils
+
+        if not context.fork_ref:
+            return None
+
+        has_conflict, conflicting_files = git_utils.commit_would_conflict(
+            repo, commit, context.fork_ref
+        )
+
+        if has_conflict:
+            self._conflict_found = True
+            return ConflictResult(conflicting_files=conflicting_files)
+
         return None

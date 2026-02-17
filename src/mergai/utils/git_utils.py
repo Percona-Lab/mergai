@@ -398,6 +398,95 @@ def merge_has_conflicts(repo: Repo, parent1: Commit, parent2: Commit) -> bool:
         return True
 
 
+def commit_would_conflict(
+    repo: Repo, commit: Commit, target_ref: str
+) -> Tuple[bool, List[str]]:
+    """Check if merging a commit would cause conflicts without modifying working tree.
+
+    Uses `git merge-tree --write-tree` which performs a merge simulation without
+    touching the index or working tree. This is a read-only operation.
+
+    Args:
+        repo: GitPython Repo instance.
+        commit: The commit to check for conflicts.
+        target_ref: The target reference to merge into (e.g., "HEAD", branch name).
+
+    Returns:
+        Tuple of (has_conflicts, conflicting_files).
+        has_conflicts is True if the merge would have conflicts.
+        conflicting_files is a list of file paths that would conflict.
+    """
+    from git.exc import GitCommandError
+
+    try:
+        # git merge-tree --write-tree --name-only target_ref commit
+        # Exit code 0 = clean merge, exit code 1 = conflicts
+        # --name-only makes conflicting file info easier to parse
+        repo.git.merge_tree("--write-tree", "--name-only", target_ref, commit.hexsha)
+        # If we get here, no conflicts (exit code 0)
+        return (False, [])
+    except GitCommandError as e:
+        # Exit code 1 means conflicts - parse the output from stdout
+        # The output format with --name-only and conflicts is:
+        # <tree-oid>
+        # <conflicting-file1>
+        # <conflicting-file2>
+        # <empty line>
+        # Auto-merging <file>
+        # CONFLICT (content): Merge conflict in <file>
+        # ...
+
+        # Get stdout from the exception - it contains the merge-tree output
+        # GitCommandError.stdout contains the formatted output string
+        output = e.stdout if hasattr(e, "stdout") and e.stdout else str(e)
+
+        conflicting_files = []
+        lines = output.split("\n")
+
+        # Parse: skip tree OID, collect file names until empty line or info messages
+        in_file_section = False
+        for line in lines:
+            # Don't strip - preserve original but remove leading "  stdout: '" if present
+            line = line.strip()
+
+            # Skip empty lines - they mark end of file section
+            if not line:
+                if in_file_section:
+                    break  # Empty line after files means end of file list
+                continue
+
+            # Skip GitPython error prefix lines
+            if line.startswith("Cmd(") or line.startswith("cmdline:") or line.startswith("stdout:"):
+                # Handle "  stdout: '<tree-oid>" format
+                if "stdout:" in line and "'" in line:
+                    # Extract the actual content after stdout: '
+                    idx = line.find("'")
+                    if idx != -1:
+                        line = line[idx + 1 :].rstrip("'")
+                    else:
+                        continue
+                else:
+                    continue
+
+            # Tree OID is 40 hex chars - marks start of file section
+            if len(line) == 40 and all(c in "0123456789abcdef" for c in line):
+                in_file_section = True
+                continue
+
+            # Stop at informational messages
+            if line.startswith("Auto-merging") or line.startswith("CONFLICT"):
+                break
+
+            # Collect file paths
+            if in_file_section and line:
+                conflicting_files.append(line)
+
+        return (True, conflicting_files)
+    except Exception:
+        # Other errors (not exit code 1) - assume no conflict info available
+        return (True, [])
+
+
 def get_note_from_commit(repo: Repo, ref: str, commit: str) -> Optional[str]:
     try:
         note = repo.git.notes("--ref", ref, "show", repo.commit(commit).hexsha)

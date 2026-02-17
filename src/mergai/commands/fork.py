@@ -458,7 +458,7 @@ def merge_pick(
     - huge_commit: Commits with many changed files/lines
     - important_files: Commits touching specific important files
     - branching_point: Commits that are branching points (multiple children)
-    - conflict: (not yet implemented) Commits that would cause merge conflicts
+    - conflict: Commits that would cause merge conflicts
 
     Use --next/-n to get just the hash of the recommended next commit.
     Use --list/-l to show all unmerged commits with picks marked.

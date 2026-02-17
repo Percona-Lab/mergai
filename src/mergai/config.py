@@ -339,7 +339,7 @@ class MergePicksConfig:
             - num_of_dirs: Number of unique directories modified
         - important_files: Prioritize commits touching specific files
         - branching_point: Prioritize commits that are branching points
-        - conflict: Prioritize commits that would cause merge conflicts (not yet implemented)
+        - conflict: Prioritize commits that would cause merge conflicts
 
     Attributes:
         strategies: Ordered list of merge-pick strategies to evaluate.
