@@ -82,6 +82,22 @@ def merge(app: AppContext, no_context: bool, force: bool):
         click.echo("Error: merge_commit not found in merge_info.")
         raise SystemExit(EXIT_ERROR)
 
+    # Pre-merge validation: check if contexts exist when force is not set
+    # This prevents leaving the repo in a merging state if context creation would fail
+    if not no_context and not force:
+        if app.note.has_merge_context:
+            click.echo(
+                "Error: merge_context already exists. "
+                "Use -f/--force to overwrite or --no-context to skip context creation."
+            )
+            raise SystemExit(EXIT_ERROR)
+        if app.note.has_conflict_context:
+            click.echo(
+                "Error: conflict_context already exists. "
+                "Use -f/--force to overwrite or --no-context to skip context creation."
+            )
+            raise SystemExit(EXIT_ERROR)
+
     # Execute git merge --no-commit --no-ff <sha>
     try:
         output = app.repo.git.merge("--no-commit", "--no-ff", merge_commit_sha)
