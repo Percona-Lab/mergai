@@ -643,6 +643,7 @@ class CommitStats:
         lines_deleted: Number of lines deleted.
         total_lines: Total lines changed (added + deleted).
         files_modified: List of file paths modified by this commit.
+        num_of_dirs: Number of unique directories containing modified files.
     """
 
     files_changed: int
@@ -650,6 +651,7 @@ class CommitStats:
     lines_deleted: int
     total_lines: int
     files_modified: List[str]
+    num_of_dirs: int
 
 
 def get_commit_stats(repo: Repo, commit: Commit) -> CommitStats:
@@ -697,12 +699,21 @@ def get_commit_stats(repo: Repo, commit: Commit) -> CommitStats:
     except Exception as e:
         log.warning(f"Failed to get numstat for commit {commit.hexsha}: {e}")
 
+    # Calculate unique directories from file paths
+    unique_dirs = set()
+    for file_path in files_modified:
+        # Get parent directory (or '.' for root-level files)
+        parent = str(Path(file_path).parent)
+        if parent != ".":
+            unique_dirs.add(parent)
+
     return CommitStats(
         files_changed=len(files_modified),
         lines_added=lines_added,
         lines_deleted=lines_deleted,
         total_lines=lines_added + lines_deleted,
         files_modified=files_modified,
+        num_of_dirs=len(unique_dirs),
     )
 
 

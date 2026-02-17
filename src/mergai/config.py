@@ -320,9 +320,7 @@ class MergePicksConfig:
 
     Example YAML config:
         merge_picks:
-          - huge_commit:
-              min_changed_files: 100
-              min_changed_lines: 1000
+          - huge_commit: "num_of_files >= 100 or num_of_lines >= 1000"
           - important_files:
               - BUILD.bazel
               - SConstruct
@@ -330,7 +328,13 @@ class MergePicksConfig:
           - conflict: true
 
     Available strategies:
-        - huge_commit: Prioritize commits with many changed files/lines
+        - huge_commit: Prioritize commits based on expression evaluation.
+            Uses simpleeval expressions with variables:
+            - num_of_files: Number of files changed
+            - num_of_lines: Total lines changed (added + deleted)
+            - lines_added: Lines added
+            - lines_deleted: Lines deleted
+            - num_of_dirs: Number of unique directories modified
         - important_files: Prioritize commits touching specific files
         - branching_point: Prioritize commits that are branching points
         - conflict: Prioritize commits that would cause merge conflicts (not yet implemented)
@@ -348,7 +352,7 @@ class MergePicksConfig:
         Args:
             data: List of strategy definitions from YAML, e.g.:
                 [
-                    {"huge_commit": {"min_changed_files": 100}},
+                    {"huge_commit": "num_of_files > 100 or num_of_lines > 1000"},
                     {"important_files": ["BUILD.bazel"]},
                     {"branching_point": True},
                 ]

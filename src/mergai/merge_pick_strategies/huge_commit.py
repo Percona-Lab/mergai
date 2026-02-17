@@ -1,7 +1,9 @@
-"""Huge commit strategy - prioritizes commits with many changed files/lines."""
+"""Huge commit strategy - prioritizes commits based on expression evaluation."""
 
-from dataclasses import dataclass
-from typing import Optional, TYPE_CHECKING
+from dataclasses import dataclass, field
+from typing import Optional, Dict, Any, TYPE_CHECKING
+
+from simpleeval import simple_eval, InvalidExpression
 
 from .base import MergePickStrategy, MergePickStrategyResult, MergePickStrategyContext
 
@@ -14,16 +16,17 @@ class HugeCommitResult(MergePickStrategyResult):
     """Result for huge commit strategy match.
 
     Attributes:
-        files_changed: Number of files changed in the commit.
-        lines_changed: Total lines changed (added + deleted).
+        expression: The expression that was evaluated.
+        evaluated_vars: Dictionary of variable names to their values.
     """
 
-    files_changed: int
-    lines_changed: int
+    expression: str
+    evaluated_vars: Dict[str, Any]
 
     def format_short(self) -> str:
-        """Return a short description of the huge commit match."""
-        return f"{self.files_changed} files, {self.lines_changed} lines"
+        """Return a short description showing the evaluated variables."""
+        vars_str = ", ".join(f"{k}={v}" for k, v in self.evaluated_vars.items())
+        return f"({vars_str}) matched"
 
 
 @dataclass
@@ -31,37 +34,55 @@ class HugeCommitStrategyConfig:
     """Configuration for huge commit strategy.
 
     Attributes:
-        min_changed_files: Minimum number of changed files to consider huge.
-        min_changed_lines: Minimum number of changed lines to consider huge.
+        expression: A simpleeval expression to evaluate against commit stats.
+            Available variables:
+            - num_of_files: Number of files changed
+            - num_of_lines: Total lines changed (added + deleted)
+            - lines_added: Lines added
+            - lines_deleted: Lines deleted
+            - num_of_dirs: Number of unique directories modified
     """
 
-    min_changed_files: int = 100
-    min_changed_lines: int = 1000
+    expression: str = ""
 
     @classmethod
     def from_dict(cls, data) -> "HugeCommitStrategyConfig":
-        """Create config from dictionary.
+        """Create config from expression string.
 
         Args:
-            data: Configuration dict or True for defaults.
+            data: Expression string for evaluation.
 
         Returns:
             HugeCommitStrategyConfig instance.
+
+        Raises:
+            ValueError: If data is not a valid expression string.
         """
-        if isinstance(data, dict):
-            return cls(
-                min_changed_files=data.get("min_changed_files", 100),
-                min_changed_lines=data.get("min_changed_lines", 1000),
-            )
-        # Allow `huge_commit: true` to use defaults
-        return cls()
+        if isinstance(data, str) and data.strip():
+            return cls(expression=data.strip())
+        raise ValueError(
+            "huge_commit strategy requires an expression string. "
+            "Example: 'num_of_files > 100 or num_of_lines > 1000'"
+        )
 
 
 class HugeCommitStrategy(MergePickStrategy):
-    """Strategy that prioritizes commits with many changed files/lines.
+    """Strategy that prioritizes commits based on expression evaluation.
 
-    A commit matches if it changes at least min_changed_files files
-    OR at least min_changed_lines lines.
+    A commit matches if the configured expression evaluates to True.
+    The expression can use commit statistics as variables.
+
+    Available variables:
+        - num_of_files: Number of files changed
+        - num_of_lines: Total lines changed (added + deleted)
+        - lines_added: Lines added
+        - lines_deleted: Lines deleted
+        - num_of_dirs: Number of unique directories modified
+
+    Example expressions:
+        - "num_of_files > 100"
+        - "num_of_files > 100 or num_of_lines > 1000"
+        - "(num_of_files > 1000 or num_of_dirs > 20) and num_of_lines > 500"
     """
 
     def __init__(self, config: HugeCommitStrategyConfig):
@@ -80,7 +101,7 @@ class HugeCommitStrategy(MergePickStrategy):
     def check(
         self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
     ) -> Optional[HugeCommitResult]:
-        """Check if commit is a huge commit.
+        """Check if commit matches the expression.
 
         Args:
             repo: GitPython Repo object.
@@ -88,17 +109,35 @@ class HugeCommitStrategy(MergePickStrategy):
             context: Strategy context (not used by this strategy).
 
         Returns:
-            HugeCommitResult if the commit is huge, None otherwise.
+            HugeCommitResult if the expression evaluates to True, None otherwise.
         """
         from ..utils import git_utils
 
         stats = git_utils.get_commit_stats(repo, commit)
-        if (
-            stats.files_changed >= self.config.min_changed_files
-            or stats.total_lines >= self.config.min_changed_lines
-        ):
+
+        # Build variable dictionary for expression evaluation
+        variables = {
+            "num_of_files": stats.files_changed,
+            "num_of_lines": stats.total_lines,
+            "lines_added": stats.lines_added,
+            "lines_deleted": stats.lines_deleted,
+            "num_of_dirs": stats.num_of_dirs,
+        }
+
+        try:
+            result = simple_eval(self.config.expression, names=variables)
+        except InvalidExpression as e:
+            raise ValueError(
+                f"Invalid huge_commit expression '{self.config.expression}': {e}"
+            )
+        except Exception as e:
+            raise ValueError(
+                f"Error evaluating huge_commit expression '{self.config.expression}': {e}"
+            )
+
+        if result:
             return HugeCommitResult(
-                files_changed=stats.files_changed,
-                lines_changed=stats.total_lines,
+                expression=self.config.expression,
+                evaluated_vars=variables,
             )
         return None

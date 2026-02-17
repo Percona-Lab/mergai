@@ -10,8 +10,8 @@ Example usage:
         create_strategy,
     )
 
-    # Create a strategy from config
-    strategy = create_strategy("huge_commit", {"min_changed_files": 50})
+    # Create a strategy from config (expression string)
+    strategy = create_strategy("huge_commit", "num_of_files > 100 or num_of_lines > 1000")
 
     # Check a commit
     context = MergePickStrategyContext(upstream_ref="origin/master")

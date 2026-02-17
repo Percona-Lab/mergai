@@ -16,6 +16,7 @@ dependencies = [
     "tiktoken==0.7.0",
     "rich==14.2.0",
     "pygithub==2.8.1",
+    "simpleeval==1.0.3",
 ]
 
 [project.scripts]
