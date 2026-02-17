@@ -126,6 +126,42 @@ class BranchConfig:
         )
 
 
+DEFAULT_COMMIT_FOOTER = "Note: commit created by mergai"
+
+
+@dataclass
+class CommitConfig:
+    """Configuration for commit message generation.
+
+    Controls how commit messages are formatted when MergAI creates commits
+    for conflict resolution, merge commits, etc.
+
+    Attributes:
+        footer: Footer text appended to all MergAI-generated commit messages.
+            Set to empty string to disable the footer.
+
+    Example YAML config:
+        commit:
+          footer: "Note: commit created by mergai"
+    """
+
+    footer: str = DEFAULT_COMMIT_FOOTER
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CommitConfig":
+        """Create a CommitConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            CommitConfig instance with values from data.
+        """
+        return cls(
+            footer=data.get("footer", cls.footer),
+        )
+
+
 @dataclass
 class PromptConfig:
     """Configuration for prompt generation.
@@ -266,6 +302,7 @@ class MergaiConfig:
         resolve: Configuration for the resolve command.
         branch: Configuration for branch naming.
         prompt: Configuration for prompt generation.
+        commit: Configuration for commit message generation.
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
 
@@ -273,6 +310,7 @@ class MergaiConfig:
     resolve: ResolveConfig = field(default_factory=ResolveConfig)
     branch: BranchConfig = field(default_factory=BranchConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
+    commit: CommitConfig = field(default_factory=CommitConfig)
     _raw: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -333,11 +371,18 @@ class MergaiConfig:
             PromptConfig.from_dict(prompt_data) if prompt_data else PromptConfig()
         )
 
+        # Parse commit section if present
+        commit_data = data.get("commit", {})
+        commit_config = (
+            CommitConfig.from_dict(commit_data) if commit_data else CommitConfig()
+        )
+
         return cls(
             fork=fork_config,
             resolve=resolve_config,
             branch=branch_config,
             prompt=prompt_config,
+            commit=commit_config,
             _raw=data,
         )
 

@@ -25,9 +25,6 @@ from .agent_executor import AgentExecutor, AgentExecutionError
 
 log = logging.getLogger(__name__)
 
-# TODO: Make this configurable via settings/config file
-MERGAI_COMMIT_FOOTER = "Note: commit created by mergai"
-
 
 class AppContext:
     def __init__(self, config: MergaiConfig = None):
@@ -126,6 +123,15 @@ class AppContext:
                 f"  - Either %(target_branch_sha) or %(target_branch_short_sha)\n\n"
                 f"Current format: {self.config.branch.name_format}"
             )
+
+    @property
+    def commit_footer(self) -> str:
+        """Get the commit footer from config.
+
+        Returns:
+            The footer text to append to MergAI-generated commits.
+        """
+        return self.config.commit.footer
 
     def get_note_from_commit(self, commit: str) -> Optional[dict]:
         try:
@@ -453,7 +459,7 @@ class AppContext:
             message += "\n"
 
         # Add MergAI footer
-        message += MERGAI_COMMIT_FOOTER
+        message += self.commit_footer
 
         self.repo.index.commit(message)
 
@@ -488,7 +494,7 @@ class AppContext:
         message += "Note: This commit contains unresolved conflict markers.\n\n"
 
         # Add MergAI footer
-        message += MERGAI_COMMIT_FOOTER
+        message += self.commit_footer
 
         for path in files:
             self.repo.git.add(path)
@@ -515,7 +521,7 @@ class AppContext:
         message = f"Merge commit '{git_utils.short_sha(self.note.merge_info.merge_commit_sha)}'\n\n"
 
         # Add MergAI footer
-        message += MERGAI_COMMIT_FOOTER
+        message += self.commit_footer
 
         self.repo.git.commit("-m", message)
 
@@ -641,7 +647,7 @@ class AppContext:
         message += "\n"
 
         # Add MergAI footer
-        message += MERGAI_COMMIT_FOOTER
+        message += self.commit_footer
 
         return message
 
