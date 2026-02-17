@@ -790,89 +790,6 @@ class AppContext:
         commits_with_notes.reverse()
         return commits_with_notes
 
-    def _build_combined_note(
-        self,
-        commits_with_notes: List[Tuple[git.Commit, Optional[dict]]],
-        new_commit_sha: str,
-    ) -> dict:
-        """Build a combined note from multiple commit notes.
-
-        Merges all note data from the provided commits into a single note:
-        - merge_info: taken from the first commit that has it
-        - conflict_context: taken from the first commit that has it
-        - merge_context: taken from the first commit that has it
-        - solutions: all solutions combined into a single array
-        - merge_description: taken from the first commit that has it
-        - pr_comments: taken from the first commit that has it
-        - user_comment: taken from the first commit that has it
-        - note_index: rebuilt to reference the new squashed commit
-
-        Args:
-            commits_with_notes: List of (commit, note) tuples from _collect_commits_for_squash.
-            new_commit_sha: The SHA of the new squashed commit for note_index.
-
-        Returns:
-            The combined note dict.
-        """
-        combined = {}
-        all_fields = []
-
-        for commit, git_note in commits_with_notes:
-            if git_note is None:
-                continue
-
-            # merge_info - take from first commit that has it
-            if "merge_info" in git_note and "merge_info" not in combined:
-                combined["merge_info"] = git_note["merge_info"]
-
-            # conflict_context - take from first commit that has it
-            if "conflict_context" in git_note and "conflict_context" not in combined:
-                combined["conflict_context"] = git_note["conflict_context"]
-                all_fields.append("conflict_context")
-
-            # merge_context - take from first commit that has it
-            if "merge_context" in git_note and "merge_context" not in combined:
-                combined["merge_context"] = git_note["merge_context"]
-                all_fields.append("merge_context")
-
-            # solutions - combine all into array
-            # Handle both "solution" (singular in git note) and "solutions" (array)
-            if "solution" in git_note:
-                if "solutions" not in combined:
-                    combined["solutions"] = []
-                idx = len(combined["solutions"])
-                combined["solutions"].append(git_note["solution"])
-                all_fields.append(f"solutions[{idx}]")
-
-            if "solutions" in git_note:
-                if "solutions" not in combined:
-                    combined["solutions"] = []
-                for solution in git_note["solutions"]:
-                    idx = len(combined["solutions"])
-                    combined["solutions"].append(solution)
-                    all_fields.append(f"solutions[{idx}]")
-
-            # merge_description - take from first commit that has it
-            if "merge_description" in git_note and "merge_description" not in combined:
-                combined["merge_description"] = git_note["merge_description"]
-                all_fields.append("merge_description")
-
-            # pr_comments - take from first commit that has it
-            if "pr_comments" in git_note and "pr_comments" not in combined:
-                combined["pr_comments"] = git_note["pr_comments"]
-                all_fields.append("pr_comments")
-
-            # user_comment - take from first commit that has it
-            if "user_comment" in git_note and "user_comment" not in combined:
-                combined["user_comment"] = git_note["user_comment"]
-                all_fields.append("user_comment")
-
-        # Build note_index pointing to the new squashed commit
-        if all_fields:
-            combined["note_index"] = [{"sha": new_commit_sha, "fields": all_fields}]
-
-        return combined
-
     def _build_squash_commit_message(
         self,
         merge_info: dict,
@@ -1018,15 +935,17 @@ class AppContext:
         # First, write the current index as a tree
         tree_sha = self.repo.git.write_tree()
 
-        # Build combined note dict (we'll use a placeholder SHA for now, update after commit)
-        combined_note_dict = self._build_combined_note(
-            commits_with_notes, "PLACEHOLDER"
-        )
+        # Build combined note from all commits
+        combined_note = MergaiNote.combine_from_dicts(commits_with_notes, self.repo)
+
+        # Ensure merge_info is present (in case git notes didn't have it)
+        if combined_note.merge_info is None:
+            combined_note.merge_info = self.note.merge_info
 
         # Build commit message
-        merge_info_dict = self.note.merge_info.to_dict()
+        merge_info_dict = combined_note.merge_info.to_dict()
         message = self._build_squash_commit_message(
-            merge_info_dict, commits_with_notes, combined_note_dict
+            merge_info_dict, commits_with_notes, combined_note.to_dict()
         )
 
         # Create commit with two parents: target_branch_sha (first parent) and merge_commit_sha (second parent)
@@ -1038,17 +957,10 @@ class AppContext:
         # Update HEAD to point to the new commit
         self.repo.git.reset("--hard", new_commit_sha)
 
-        # Rebuild combined note with correct SHA
-        combined_note_dict = self._build_combined_note(
-            commits_with_notes, new_commit_sha
-        )
+        # Set note_index to reference all fields to the new squashed commit
+        combined_note.set_note_index_for_all_fields(new_commit_sha)
 
-        # Also include merge_info from our local note (in case git notes didn't have it)
-        if "merge_info" not in combined_note_dict:
-            combined_note_dict["merge_info"] = merge_info_dict
-
-        # Save combined note to local state (convert dict to MergaiNote)
-        combined_note = MergaiNote.from_dict(combined_note_dict, self.repo)
+        # Save combined note to local state
         self.save_note(combined_note)
 
         # Attach note to the new commit

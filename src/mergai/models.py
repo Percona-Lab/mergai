@@ -28,9 +28,11 @@ Example usage:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, TYPE_CHECKING, Union, Tuple
+from typing import Optional, List, Dict, Any, TYPE_CHECKING, Union, Tuple, TypeVar
 from enum import Enum
 import re
+
+T = TypeVar("T", bound="MergaiNote")
 
 if TYPE_CHECKING:
     from git import Repo, Commit
@@ -879,6 +881,79 @@ class MergaiNote:
         """
         return cls(merge_info=merge_info, _repo=repo)
 
+    @classmethod
+    def combine_from_dicts(
+        cls: type[T],
+        commits_with_notes: List[Tuple[Any, Optional[dict]]],
+        repo: "Repo" = None,
+    ) -> T:
+        """Build a combined note from multiple commit notes.
+
+        Merges all note data from the provided commits into a single note:
+        - merge_info: taken from the first commit that has it
+        - conflict_context: taken from the first commit that has it
+        - merge_context: taken from the first commit that has it
+        - solutions: all solutions combined into a single array
+        - merge_description: taken from the first commit that has it
+        - pr_comments: taken from the first commit that has it
+        - user_comment: taken from the first commit that has it
+
+        Note: note_index is NOT set by this method. Use set_note_index_for_all_fields()
+        after combining to assign all fields to a specific commit.
+
+        Args:
+            commits_with_notes: List of (commit, note_dict) tuples. The commit
+                can be any object (typically git.Commit); only the note dict is used.
+            repo: Optional GitPython Repo for resolving commits.
+
+        Returns:
+            A new MergaiNote instance with combined data.
+        """
+        combined: Dict[str, Any] = {}
+
+        for _, git_note in commits_with_notes:
+            if git_note is None:
+                continue
+
+            # merge_info - take from first commit that has it
+            if "merge_info" in git_note and "merge_info" not in combined:
+                combined["merge_info"] = git_note["merge_info"]
+
+            # conflict_context - take from first commit that has it
+            if "conflict_context" in git_note and "conflict_context" not in combined:
+                combined["conflict_context"] = git_note["conflict_context"]
+
+            # merge_context - take from first commit that has it
+            if "merge_context" in git_note and "merge_context" not in combined:
+                combined["merge_context"] = git_note["merge_context"]
+
+            # solutions - combine all into array
+            # Handle both "solution" (singular in git note) and "solutions" (array)
+            if "solution" in git_note:
+                if "solutions" not in combined:
+                    combined["solutions"] = []
+                combined["solutions"].append(git_note["solution"])
+
+            if "solutions" in git_note:
+                if "solutions" not in combined:
+                    combined["solutions"] = []
+                for solution in git_note["solutions"]:
+                    combined["solutions"].append(solution)
+
+            # merge_description - take from first commit that has it
+            if "merge_description" in git_note and "merge_description" not in combined:
+                combined["merge_description"] = git_note["merge_description"]
+
+            # pr_comments - take from first commit that has it
+            if "pr_comments" in git_note and "pr_comments" not in combined:
+                combined["pr_comments"] = git_note["pr_comments"]
+
+            # user_comment - take from first commit that has it
+            if "user_comment" in git_note and "user_comment" not in combined:
+                combined["user_comment"] = git_note["user_comment"]
+
+        return cls.from_dict(combined, repo)
+
     # --- has_* Properties ---
 
     @property
@@ -1064,6 +1139,49 @@ class MergaiNote:
             Self for method chaining.
         """
         self.note_index = None
+        return self
+
+    def set_note_index_for_all_fields(self, commit_sha: str) -> "MergaiNote":
+        """Set note_index to reference all present fields to a single commit.
+
+        This is useful after combining multiple notes into one, where all
+        fields should be attributed to a single squashed commit.
+
+        Inspects which fields are present on the note and builds a note_index
+        entry that references all of them to the given commit SHA.
+
+        Args:
+            commit_sha: The commit SHA to associate all fields with.
+
+        Returns:
+            Self for method chaining.
+        """
+        all_fields = []
+
+        if self.has_conflict_context:
+            all_fields.append("conflict_context")
+
+        if self.has_merge_context:
+            all_fields.append("merge_context")
+
+        if self.has_solutions:
+            for idx in range(len(self.solutions)):
+                all_fields.append(f"solutions[{idx}]")
+
+        if self.has_merge_description:
+            all_fields.append("merge_description")
+
+        if self.has_pr_comments:
+            all_fields.append("pr_comments")
+
+        if self.has_user_comment:
+            all_fields.append("user_comment")
+
+        if all_fields:
+            self.note_index = [{"sha": commit_sha, "fields": all_fields}]
+        else:
+            self.note_index = None
+
         return self
 
     # --- Drop Methods ---
