@@ -75,7 +75,7 @@ class BranchingPointStrategy(MergePickStrategy):
         Args:
             repo: GitPython Repo object.
             commit: The commit to check.
-            context: Strategy context with upstream_ref.
+            context: Strategy context with upstream_ref and optional branching_points_cache.
 
         Returns:
             BranchingPointResult if the commit is a branching point, None otherwise.
@@ -85,6 +85,15 @@ class BranchingPointStrategy(MergePickStrategy):
         if not context.upstream_ref:
             return None
 
+        # Use cached branching points if available
+        if context.branching_points_cache:
+            # Cache only contains commits with >1 child
+            if commit.hexsha in context.branching_points_cache:
+                child_count = context.branching_points_cache[commit.hexsha]
+                return BranchingPointResult(child_count=child_count)
+            return None
+        
+        # Fallback to individual check if no cache
         is_bp, child_count = git_utils.is_branching_point(
             repo, commit, context.upstream_ref
         )

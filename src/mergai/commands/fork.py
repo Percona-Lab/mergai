@@ -51,14 +51,33 @@ def resolve_upstream_ref(
     return f"{remote_name}/{upstream_branch}"
 
 
+def _needs_commit_stats(config: MergePicksConfig) -> bool:
+    """Check if any strategy needs commit stats."""
+    for strategy in config.strategies:
+        if strategy.name in ("huge_commit", "important_files"):
+            return True
+    return False
+
+
+def _needs_branching_points(config: MergePicksConfig) -> bool:
+    """Check if any strategy needs branching point data."""
+    for strategy in config.strategies:
+        if strategy.name == "branching_point":
+            return True
+    return False
+
+
 def get_prioritized_commits(
     repo,
-    unmerged_commits: List[Commit],
+    unmerged_commit_shas: List[str],
     config: MergePicksConfig,
     context: MergePickStrategyContext,
     limit: Optional[int] = None,
 ) -> List[MergePickCommit]:
     """Evaluate unmerged commits and return those matching priority strategies.
+
+    This function uses batch operations to efficiently compute data needed
+    by strategies, avoiding per-commit git calls.
 
     Strategies are evaluated in the order they appear in the config.
     The first matching strategy for each commit determines its priority.
@@ -68,7 +87,7 @@ def get_prioritized_commits(
 
     Args:
         repo: GitPython Repo object.
-        unmerged_commits: List of unmerged commits (in reverse chronological order).
+        unmerged_commit_shas: List of unmerged commit SHAs (newest first).
         config: MergePicksConfig with ordered priority strategies.
         context: Strategy context with upstream_ref, fork_ref, etc.
         limit: Optional maximum number of matches to return. If specified,
@@ -78,10 +97,41 @@ def get_prioritized_commits(
         List of MergePickCommit objects for commits that matched strategies,
         in chronological order (oldest first).
     """
+    if not unmerged_commit_shas:
+        return []
+
+    # Pre-populate batch caches for performance
+    # This avoids per-commit git calls in the strategy loop
+    if _needs_commit_stats(config):
+        log.debug(f"Batch loading commit stats for {len(unmerged_commit_shas)} commits")
+        context.commit_stats_cache = git_utils.get_batch_commit_stats(repo, unmerged_commit_shas)
+        log.debug(f"Loaded stats for {len(context.commit_stats_cache)} commits")
+
+    if _needs_branching_points(config) and context.upstream_ref:
+        # Get the oldest commit SHA (last in list since list is newest-first)
+        oldest_sha = unmerged_commit_shas[-1]
+        # Get the parent of oldest commit as the base for branching point detection
+        try:
+            oldest_commit = repo.commit(oldest_sha)
+            if oldest_commit.parents:
+                base_sha = oldest_commit.parents[0].hexsha
+            else:
+                base_sha = oldest_sha
+        except Exception:
+            base_sha = oldest_sha
+        
+        log.debug(f"Batch loading branching points from {base_sha[:11]} to {context.upstream_ref}")
+        context.branching_points_cache = git_utils.get_batch_branching_points(
+            repo, base_sha, context.upstream_ref
+        )
+        log.debug(f"Found {len(context.branching_points_cache)} branching points")
+
     prioritized = []
 
     # Process in chronological order (oldest first)
-    for commit in reversed(unmerged_commits):
+    # Commits are stored newest-first, so we reverse
+    for sha in reversed(unmerged_commit_shas):
+        commit = repo.commit(sha)
         for strategy in config.strategies:
             result = strategy.check(repo, commit, context)
             if result is not None:
@@ -97,11 +147,11 @@ def get_prioritized_commits(
                 break  # First matching strategy wins
 
     # Fallback to most recent commit if enabled and no matches found
-    if not prioritized and config.most_recent_fallback and unmerged_commits:
+    if not prioritized and config.most_recent_fallback and unmerged_commit_shas:
         from ..merge_pick_strategies.most_recent import MostRecentResult
 
-        # Most recent = first in unmerged_commits (reverse chronological order)
-        most_recent_commit = unmerged_commits[0]
+        # Most recent = first in unmerged_commit_shas (newest first)
+        most_recent_commit = repo.commit(unmerged_commit_shas[0])
         prioritized.append(
             MergePickCommit(
                 commit=most_recent_commit,
@@ -370,7 +420,7 @@ def status(
         log.info(f"getting prioritized commits for merge picks")
         prioritized = get_prioritized_commits(
             app.repo,
-            fork_status.unmerged_commits,
+            fork_status.unmerged_commit_shas,
             merge_picks_config,
             context,
         )
@@ -501,7 +551,7 @@ def merge_pick(
     # Get prioritized commits
     prioritized = get_prioritized_commits(
         app.repo,
-        fork_status.unmerged_commits,
+        fork_status.unmerged_commit_shas,
         merge_picks_config,
         context,
         limit=1 if next_only else None,

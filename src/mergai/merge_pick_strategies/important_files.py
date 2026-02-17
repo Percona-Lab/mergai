@@ -79,7 +79,7 @@ class ImportantFilesStrategy(MergePickStrategy):
         Args:
             repo: GitPython Repo object.
             commit: The commit to check.
-            context: Strategy context (not used by this strategy).
+            context: Strategy context with optional commit_stats_cache.
 
         Returns:
             ImportantFilesResult if important files are modified, None otherwise.
@@ -89,7 +89,12 @@ class ImportantFilesStrategy(MergePickStrategy):
         if not self.config.files:
             return None
 
-        modified = git_utils.get_commit_modified_files(repo, commit)
+        # Use cached stats if available (which includes files_modified)
+        if context.commit_stats_cache and commit.hexsha in context.commit_stats_cache:
+            modified = context.commit_stats_cache[commit.hexsha].files_modified
+        else:
+            modified = git_utils.get_commit_modified_files(repo, commit)
+        
         matches = sorted(set(modified) & set(self.config.files))
         if matches:
             return ImportantFilesResult(matched_files=matches)

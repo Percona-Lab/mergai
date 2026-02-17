@@ -106,14 +106,18 @@ class HugeCommitStrategy(MergePickStrategy):
         Args:
             repo: GitPython Repo object.
             commit: The commit to check.
-            context: Strategy context (not used by this strategy).
+            context: Strategy context with optional commit_stats_cache.
 
         Returns:
             HugeCommitResult if the expression evaluates to True, None otherwise.
         """
         from ..utils import git_utils
 
-        stats = git_utils.get_commit_stats(repo, commit)
+        # Use cached stats if available, otherwise compute individually
+        if context.commit_stats_cache and commit.hexsha in context.commit_stats_cache:
+            stats = context.commit_stats_cache[commit.hexsha]
+        else:
+            stats = git_utils.get_commit_stats(repo, commit)
 
         # Build variable dictionary for expression evaluation
         variables = {

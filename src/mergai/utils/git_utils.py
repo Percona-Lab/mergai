@@ -658,29 +658,75 @@ def parse_git_merge_output(output: str, repo: Optional[Repo] = None) -> GitMerge
     )
 
 
-@dataclass
 class ForkStatus:
-    """Status information about a fork compared to its upstream base."""
+    """Status information about a fork compared to its upstream base.
+    
+    This class uses lazy loading for commits - commit SHAs are stored
+    and full Commit objects are only created when needed. This significantly
+    improves performance when there are many unmerged commits.
+    """
 
-    fork_ref: str
-    upstream_ref: str
+    def __init__(
+        self,
+        repo: Repo,
+        fork_ref: str,
+        upstream_ref: str,
+        commits_behind: int,
+        last_merged_commit: Optional[Commit],
+        first_unmerged_commit: Optional[Commit],
+        last_unmerged_commit: Optional[Commit],
+        merge_base_commit: Optional[Commit],
+        unmerged_commit_shas: List[str],
+        files_affected: int,
+        total_additions: int,
+        total_deletions: int,
+    ):
+        self._repo = repo
+        self.fork_ref = fork_ref
+        self.upstream_ref = upstream_ref
+        self.commits_behind = commits_behind
+        self.last_merged_commit = last_merged_commit
+        self.first_unmerged_commit = first_unmerged_commit
+        self.last_unmerged_commit = last_unmerged_commit
+        self.merge_base_commit = merge_base_commit
+        self._unmerged_commit_shas = unmerged_commit_shas
+        self._unmerged_commits_cache: Optional[List[Commit]] = None
+        self.files_affected = files_affected
+        self.total_additions = total_additions
+        self.total_deletions = total_deletions
 
-    # Commit count
-    commits_behind: int
+    @property
+    def unmerged_commit_shas(self) -> List[str]:
+        """Get the list of unmerged commit SHAs (newest first).
+        
+        This is efficient as it doesn't require loading full Commit objects.
+        """
+        return self._unmerged_commit_shas
 
-    # Key commits
-    last_merged_commit: Optional[Commit]
-    first_unmerged_commit: Optional[Commit]
-    last_unmerged_commit: Optional[Commit]
-    merge_base_commit: Optional[Commit]
+    @property
+    def unmerged_commits(self) -> List[Commit]:
+        """Get the list of unmerged commits (newest first).
+        
+        Note: This loads all Commit objects on first access. For better
+        performance when only needing SHAs or a subset of commits, use
+        unmerged_commit_shas or get_commit() instead.
+        """
+        if self._unmerged_commits_cache is None:
+            self._unmerged_commits_cache = [
+                self._repo.commit(sha) for sha in self._unmerged_commit_shas
+            ]
+        return self._unmerged_commits_cache
 
-    # List of unmerged commits (for optional listing)
-    unmerged_commits: List[Commit]
-
-    # Divergence stats
-    files_affected: int
-    total_additions: int
-    total_deletions: int
+    def get_commit(self, sha: str) -> Commit:
+        """Get a single commit by SHA.
+        
+        Args:
+            sha: The commit SHA to retrieve.
+            
+        Returns:
+            The Commit object.
+        """
+        return self._repo.commit(sha)
 
     @property
     def is_up_to_date(self) -> bool:
@@ -741,6 +787,97 @@ class CommitStats:
     total_lines: int
     files_modified: List[str]
     num_of_dirs: int
+
+
+def get_batch_commit_stats(repo: Repo, commit_shas: List[str]) -> dict[str, CommitStats]:
+    """Batch calculate stats for multiple commits in a single git call.
+
+    This is much more efficient than calling get_commit_stats() for each commit
+    individually, as it uses a single `git log --numstat` command.
+
+    Args:
+        repo: GitPython Repo object.
+        commit_shas: List of commit SHA strings to analyze.
+
+    Returns:
+        Dictionary mapping commit SHA to CommitStats.
+    """
+    if not commit_shas:
+        return {}
+
+    result = {}
+
+    try:
+        # Use git log with custom format to get all stats in one call
+        # Format: SHA, then numstat output, separated by a marker
+        # We use --stdin to pass the list of commits
+        output = repo.git.log(
+            "--numstat",
+            "--format=COMMIT_START %H",
+            "--no-walk",
+            *commit_shas
+        )
+
+        current_sha = None
+        current_files = []
+        current_additions = 0
+        current_deletions = 0
+        current_dirs = set()
+
+        for line in output.split("\n"):
+            line = line.strip()
+            if not line:
+                continue
+
+            if line.startswith("COMMIT_START "):
+                # Save previous commit if exists
+                if current_sha is not None:
+                    result[current_sha] = CommitStats(
+                        files_changed=len(current_files),
+                        lines_added=current_additions,
+                        lines_deleted=current_deletions,
+                        total_lines=current_additions + current_deletions,
+                        files_modified=current_files,
+                        num_of_dirs=len(current_dirs),
+                    )
+                # Start new commit
+                current_sha = line.split()[1]
+                current_files = []
+                current_additions = 0
+                current_deletions = 0
+                current_dirs = set()
+            else:
+                # Parse numstat line: additions<tab>deletions<tab>filename
+                parts = line.split("\t")
+                if len(parts) >= 3:
+                    file_path = parts[2]
+                    current_files.append(file_path)
+                    # Handle binary files which show as '-'
+                    if parts[0] != "-":
+                        current_additions += int(parts[0])
+                    if parts[1] != "-":
+                        current_deletions += int(parts[1])
+                    # Calculate directory
+                    parent = str(Path(file_path).parent)
+                    if parent != ".":
+                        current_dirs.add(parent)
+
+        # Save last commit
+        if current_sha is not None:
+            result[current_sha] = CommitStats(
+                files_changed=len(current_files),
+                lines_added=current_additions,
+                lines_deleted=current_deletions,
+                total_lines=current_additions + current_deletions,
+                files_modified=current_files,
+                num_of_dirs=len(current_dirs),
+            )
+
+    except Exception as e:
+        log.warning(f"Failed to batch get commit stats: {e}")
+        # Return empty dict, caller can fall back to individual calls
+
+    return result
 
 
 def get_commit_stats(repo: Repo, commit: Commit) -> CommitStats:
@@ -871,6 +1008,51 @@ def get_merged_commits(
     return [commit.hexsha for commit in commits]
 
 
+def get_batch_branching_points(
+    repo: Repo, base_sha: str, upstream_ref: str
+) -> dict[str, int]:
+    """Batch detect all branching points in a commit range.
+
+    A branching point is a commit with multiple children. This function
+    efficiently detects all branching points in a single git command.
+
+    Args:
+        repo: GitPython Repo object.
+        base_sha: The base commit SHA (oldest commit in range, exclusive).
+        upstream_ref: The upstream reference (newest commit in range).
+
+    Returns:
+        Dictionary mapping commit SHA to child count for commits with >1 child.
+        Only commits with multiple children are included in the result.
+    """
+    result = {}
+
+    try:
+        # git rev-list --children base..upstream gives:
+        # <commit_sha> <child1> <child2> ...
+        # for each commit in the range
+        children_output = repo.git.rev_list(
+            "--children", f"{base_sha}..{upstream_ref}"
+        ).strip()
+
+        if not children_output:
+            return result
+
+        for line in children_output.split("\n"):
+            if not line:
+                continue
+            parts = line.split()
+            if len(parts) > 2:  # More than 1 child
+                commit_sha = parts[0]
+                child_count = len(parts) - 1
+                result[commit_sha] = child_count
+
+    except Exception as e:
+        log.warning(f"Failed to batch detect branching points: {e}")
+
+    return result
+
+
 def is_branching_point(
     repo: Repo, commit: Commit, upstream_ref: str
 ) -> Tuple[bool, int]:
@@ -921,6 +1103,10 @@ def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
     """
     Get comprehensive status about how a fork diverges from its upstream base.
 
+    Uses lazy loading for commits - only commit SHAs are stored initially,
+    and full Commit objects are created only when needed. This significantly
+    improves performance when there are many unmerged commits.
+
     Args:
         repo: GitPython Repo object
         upstream_ref: The upstream/base branch/ref to compare against
@@ -940,30 +1126,30 @@ def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
     # Get commits behind (in upstream but not in fork)
     # These are commits we need to merge from upstream
     # git rev-list fork_ref..upstream_ref = commits in upstream not in fork
+    # NOTE: We only store SHAs here for lazy loading - full Commit objects
+    # are loaded on-demand via ForkStatus.unmerged_commits property
     try:
         behind_output = repo.git.rev_list(f"{fork_ref}..{upstream_ref}").strip()
-        behind_shas = behind_output.split("\n") if behind_output else []
-        unmerged_commits = [repo.commit(sha) for sha in behind_shas if sha]
+        unmerged_commit_shas = [sha for sha in behind_output.split("\n") if sha] if behind_output else []
     except Exception:
-        unmerged_commits = []
+        unmerged_commit_shas = []
 
     # Find last merged commit (most recent commit in upstream that's also in fork)
     # This is essentially the merge base
     last_merged_commit = merge_base_commit
 
-    # First unmerged commit (oldest commit in upstream not in fork)
-    # unmerged_commits are in reverse chronological order (newest first)
-    first_unmerged_commit = unmerged_commits[-1] if unmerged_commits else None
-
-    # Last unmerged commit (most recent commit in upstream not in fork)
-    last_unmerged_commit = unmerged_commits[0] if unmerged_commits else None
+    # First and last unmerged commits - these we load eagerly since they're
+    # needed for the status summary display
+    # unmerged_commit_shas are in reverse chronological order (newest first)
+    first_unmerged_commit = repo.commit(unmerged_commit_shas[-1]) if unmerged_commit_shas else None
+    last_unmerged_commit = repo.commit(unmerged_commit_shas[0]) if unmerged_commit_shas else None
 
     # Get divergence stats using git diff --stat
     files_affected = 0
     total_additions = 0
     total_deletions = 0
 
-    if unmerged_commits:
+    if unmerged_commit_shas:
         numstat = None
         # Try three-dot diff first (uses merge base)
         # Fall back to two-dot diff if no merge base exists
@@ -992,14 +1178,15 @@ def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
                         total_deletions += int(parts[1])
 
     return ForkStatus(
+        repo=repo,
         fork_ref=fork_ref,
         upstream_ref=upstream_ref,
-        commits_behind=len(unmerged_commits),
+        commits_behind=len(unmerged_commit_shas),
         last_merged_commit=last_merged_commit,
         first_unmerged_commit=first_unmerged_commit,
         last_unmerged_commit=last_unmerged_commit,
         merge_base_commit=merge_base_commit,
-        unmerged_commits=unmerged_commits,
+        unmerged_commit_shas=unmerged_commit_shas,
         files_affected=files_affected,
         total_additions=total_additions,
         total_deletions=total_deletions,

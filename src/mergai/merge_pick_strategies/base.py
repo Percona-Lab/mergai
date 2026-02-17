@@ -1,12 +1,13 @@
 """Base classes for merge-pick strategies."""
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from git import Commit
-from typing import Optional, TYPE_CHECKING
+from typing import Optional, Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from git import Repo, Commit
+    from ..utils.git_utils import CommitStats
 
 
 @dataclass
@@ -19,10 +20,18 @@ class MergePickStrategyContext:
     Attributes:
         upstream_ref: The upstream reference (e.g., "origin/master").
         fork_ref: The fork reference (e.g., "HEAD").
+        commit_stats_cache: Pre-computed commit stats (sha -> CommitStats).
+            Used by huge_commit and important_files strategies.
+        branching_points_cache: Pre-computed branching points (sha -> child_count).
+            Only commits with >1 child are included.
     """
 
     upstream_ref: Optional[str] = None
     fork_ref: Optional[str] = None
+    
+    # Batch data caches for performance optimization
+    commit_stats_cache: Dict[str, "CommitStats"] = field(default_factory=dict)
+    branching_points_cache: Dict[str, int] = field(default_factory=dict)
 
 
 class MergePickStrategyResult(ABC):
