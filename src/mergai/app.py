@@ -19,6 +19,7 @@ from typing import Optional, Tuple, List
 import tempfile
 from .agents.base import Agent
 from .utils.branch_name_builder import BranchNameBuilder
+from .utils.pr_title_builder import PRTitleBuilder
 from .prompt_builder import PromptBuilder
 from .context_builder import ContextBuilder
 from .agent_executor import AgentExecutor, AgentExecutionError
@@ -132,6 +133,18 @@ class AppContext:
             The footer text to append to MergAI-generated commits.
         """
         return self.config.commit.footer
+
+    @property
+    def pr_titles(self) -> PRTitleBuilder:
+        """Get a PRTitleBuilder instance for generating PR titles.
+
+        Returns:
+            PRTitleBuilder configured with current config and merge_info.
+
+        Raises:
+            click.ClickException: If no note found.
+        """
+        return PRTitleBuilder.from_config(self.config.pr, self.note.merge_info)
 
     def get_note_from_commit(self, commit: str) -> Optional[dict]:
         try:

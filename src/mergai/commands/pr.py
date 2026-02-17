@@ -112,9 +112,6 @@ def _create_solution_pr(
 ) -> None:
     """Create a PR from the current branch (with existing solution commits) to the conflict branch."""
 
-    merge_info = app.note.merge_info
-    branches = app.branches
-
     if not app.note.has_solutions or len(app.note.solutions) == 0:
         raise click.ClickException("No solutions found. Run 'mergai resolve' first.")
 
@@ -123,9 +120,7 @@ def _create_solution_pr(
             "You have uncommitted solution(s). Run 'mergai commit solution' first."
         )
 
-    merge_commit_short = git_utils.short_sha(merge_info.merge_commit_sha)
-    # TODO: title format from config
-    title = f"Resolve conflicts for merge {merge_commit_short} into {app.branches.target_branch}"
+    title = app.pr_titles.solution_title
 
     body = "" if skip_body else _build_solutions_pr_body(app)
 
@@ -133,8 +128,8 @@ def _create_solution_pr(
         app,
         title,
         body,
-        branches.solution_branch,
-        branches.conflict_branch,
+        app.branches.solution_branch,
+        app.branches.conflict_branch,
         dry_run=dry_run,
         url_only=url_only,
     )
@@ -171,9 +166,7 @@ def _create_main_pr(
 ) -> None:
     """Create a PR from the main branch to target_branch (merge or conflict resolution)."""
 
-    merge_commit_short = git_utils.short_sha(app.note.merge_info.merge_commit_sha)
-    # TODO: title format from config
-    title = f"Merge {merge_commit_short} into {app.branches.target_branch}"
+    title = app.pr_titles.main_title
 
     body = "" if skip_body else _build_main_pr_body(app)
 

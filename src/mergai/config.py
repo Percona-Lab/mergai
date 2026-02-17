@@ -130,6 +130,97 @@ DEFAULT_COMMIT_FOOTER = "Note: commit created by mergai"
 
 
 @dataclass
+class PRTypeConfig:
+    """Configuration for a specific PR type (main or solution).
+
+    The format string uses %(token) syntax for substitution.
+
+    Attributes:
+        title_format: Format string for PR titles.
+
+        Available tokens:
+        - %(target_branch) - The target branch name
+        - %(merge_commit_sha) - Full SHA of the merge commit (40 chars)
+        - %(merge_commit_short_sha) - Short SHA of the merge commit (11 chars)
+    """
+
+    title_format: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict, default_title_format: str = "") -> "PRTypeConfig":
+        """Create a PRTypeConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+            default_title_format: Default title format if not specified.
+
+        Returns:
+            PRTypeConfig instance with values from data.
+        """
+        return cls(
+            title_format=data.get("title_format", default_title_format),
+        )
+
+
+# Default title formats
+DEFAULT_MAIN_PR_TITLE_FORMAT = "Merge %(merge_commit_short_sha) into %(target_branch)"
+DEFAULT_SOLUTION_PR_TITLE_FORMAT = (
+    "Resolve conflicts for merge %(merge_commit_short_sha) into %(target_branch)"
+)
+
+
+@dataclass
+class PRConfig:
+    """Configuration for pull requests.
+
+    Contains separate configuration for main and solution PRs.
+
+    Attributes:
+        main: Configuration for main PRs (from main branch to target_branch).
+        solution: Configuration for solution PRs (from solution branch to conflict branch).
+
+    Example YAML config:
+        pr:
+          main:
+            title_format: "[MERGE] %(merge_commit_short_sha) -> %(target_branch)"
+          solution:
+            title_format: "[RESOLVE] Conflicts for %(merge_commit_short_sha) into %(target_branch)"
+    """
+
+    main: PRTypeConfig = field(
+        default_factory=lambda: PRTypeConfig(title_format=DEFAULT_MAIN_PR_TITLE_FORMAT)
+    )
+    solution: PRTypeConfig = field(
+        default_factory=lambda: PRTypeConfig(
+            title_format=DEFAULT_SOLUTION_PR_TITLE_FORMAT
+        )
+    )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "PRConfig":
+        """Create a PRConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            PRConfig instance with values from data.
+        """
+        main_data = data.get("main", {})
+        main_config = PRTypeConfig.from_dict(main_data, DEFAULT_MAIN_PR_TITLE_FORMAT)
+
+        solution_data = data.get("solution", {})
+        solution_config = PRTypeConfig.from_dict(
+            solution_data, DEFAULT_SOLUTION_PR_TITLE_FORMAT
+        )
+
+        return cls(
+            main=main_config,
+            solution=solution_config,
+        )
+
+
+@dataclass
 class CommitConfig:
     """Configuration for commit message generation.
 
@@ -303,6 +394,7 @@ class MergaiConfig:
         branch: Configuration for branch naming.
         prompt: Configuration for prompt generation.
         commit: Configuration for commit message generation.
+        pr: Configuration for pull request titles.
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
 
@@ -311,6 +403,7 @@ class MergaiConfig:
     branch: BranchConfig = field(default_factory=BranchConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     commit: CommitConfig = field(default_factory=CommitConfig)
+    pr: PRConfig = field(default_factory=PRConfig)
     _raw: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -377,12 +470,17 @@ class MergaiConfig:
             CommitConfig.from_dict(commit_data) if commit_data else CommitConfig()
         )
 
+        # Parse pr section if present
+        pr_data = data.get("pr", {})
+        pr_config = PRConfig.from_dict(pr_data) if pr_data else PRConfig()
+
         return cls(
             fork=fork_config,
             resolve=resolve_config,
             branch=branch_config,
             prompt=prompt_config,
             commit=commit_config,
+            pr=pr_config,
             _raw=data,
         )
 
