@@ -175,7 +175,12 @@ class GeminiCLIAgent(CliAgent):
             raise ValueError("Prompt cannot be empty")
 
         click.echo(f"Running Gemini CLI agent with prompt:\n{prompt}")
-        response = self.run_prompt(prompt)
+
+        try:
+            response = self.run_prompt(prompt)
+        except AgentError as e:
+            click.echo(f"Agent execution error: {e}")
+            return AgentResult(error=e)
 
         try:
             result = fix_response_json(response)
@@ -193,3 +198,21 @@ class GeminiCLIAgent(CliAgent):
         }
 
         return AgentResult(result=result)
+
+    def get_session_data(self) -> Optional[dict]:
+        """Get session data from the last Gemini CLI run.
+
+        Returns:
+            Dict containing session data, or None if no session available.
+        """
+        if self.session_id is None:
+            return None
+        return self.read_session(self.session_id)
+
+    def get_session_id(self) -> Optional[str]:
+        """Get session ID from the last Gemini CLI run.
+
+        Returns:
+            Session ID string, or None if no session available.
+        """
+        return self.session_id

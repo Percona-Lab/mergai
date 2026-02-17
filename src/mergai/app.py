@@ -17,11 +17,11 @@ from github import Repository as GithubRepository
 import json
 from typing import Optional, Tuple, List
 import tempfile
-from pathlib import Path
 from .agents.base import Agent
 from .utils.branch_name_builder import BranchNameBuilder
 from .prompt_builder import PromptBuilder
 from .context_builder import ContextBuilder
+from .agent_executor import AgentExecutor, AgentExecutionError
 
 log = logging.getLogger(__name__)
 
@@ -198,23 +198,6 @@ class AppContext:
 
         return create_agent(agent_type, model, yolo=yolo)
 
-    def check_solution_files_dirty(self, solution: dict) -> Optional[str]:
-        not_dirty_files = []
-        modified_files = [item.a_path for item in self.repo.index.diff(None)]
-        for path in solution["response"]["resolved"].keys():
-            click.echo(
-                f"Checking file '{path}': {'dirty' if path in modified_files else 'not dirty'}"
-            )
-            if path not in modified_files:
-                not_dirty_files.append(path)
-        if len(not_dirty_files):
-            message = "The following files in the solution have no unstaged changes: "
-            message += ", ".join(not_dirty_files)
-
-            return message
-
-        return None
-
     def resolve(self, force: bool, yolo: bool):
         """Run the AI agent to resolve conflicts.
 
@@ -236,57 +219,22 @@ class AppContext:
         # Otherwise, we'll append a new solution
 
         prompt = self.prompt_builder.build_resolve_prompt()
-
         agent = self.get_agent(yolo=yolo)
 
-        tmp = tempfile.NamedTemporaryFile(dir=Path.cwd(), mode="w", delete=False)
-        tmp.write(prompt)
-        tmp.flush()
-        tmp.close()
-        prompt_path = Path(tmp.name)
+        executor = AgentExecutor(
+            agent=agent,
+            state_dir=self.state.path,
+            max_attempts=self.config.resolve.max_attempts,
+            repo=self.repo,
+        )
 
-        prompt = f"See @{prompt_path} make sure the output is in specified format"
-
-        error = None
-        solution = None
-        # TODO: refactor retry logic
-        max_attempts = self.config.resolve.max_attempts
-        for attempt in range(max_attempts):
-            if error is not None:
-                click.echo(
-                    f"Attempt {attempt + 1} failed with error: {error}. Retrying..."
-                )
-
-            if attempt == max_attempts - 1:
-                click.echo("Max attempts reached. Failed to obtain a valid solution.")
-                solution = None
-                break
-
-            result = agent.run(prompt)
-            if not result.success():
-                click.echo(f"Agent execution failed: {result.error()}")
-                prompt = PromptBuilder.error_to_prompt(str(result.error()))
-                continue
-
-            click.echo("Agent execution succeeded. Checking result...")
-            solution = result.result()
-
-            failed_files = self.check_solution_files_dirty(solution)
-            if failed_files is not None:
-                click.echo(
-                    f"Checking resolved files from solution failed: {failed_files}"
-                )
-                prompt = PromptBuilder.error_to_prompt(failed_files)
-                continue
-
-            click.echo("Solution verified.")
-            break
-
-        if tmp is not None:
-            prompt_path.unlink()
-
-        if solution is None:
-            raise Exception("Failed to obtain a valid solution from the agent.")
+        try:
+            solution = executor.run_with_retry(
+                prompt=prompt,
+                validator=executor.validate_solution_files,
+            )
+        except AgentExecutionError as e:
+            raise Exception(str(e))
 
         # Add solution to solutions array
         if uncommitted is not None and force:
@@ -298,25 +246,6 @@ class AppContext:
             self.note.add_solution(solution)
 
         self.save_note(self.note)
-
-    def check_describe_response_format(self, response: dict) -> Optional[str]:
-        """Check if the describe response has the correct format.
-
-        Args:
-            response: The response dict from the agent.
-
-        Returns:
-            None if valid, or an error message string if invalid.
-        """
-        required_fields = ["summary", "auto_merged", "review_notes"]
-        missing_fields = [f for f in required_fields if f not in response]
-        if missing_fields:
-            return f"Missing required fields: {', '.join(missing_fields)}"
-
-        if not isinstance(response.get("auto_merged"), dict):
-            return "'auto_merged' field must be a dictionary"
-
-        return None
 
     def describe(self, force: bool, max_attempts: int = None):
         """Generate a description of the merge using an AI agent.
@@ -352,71 +281,20 @@ class AppContext:
         # Check repo state before running agent
         was_dirty_before = self.repo.is_dirty(untracked_files=True)
 
-        tmp = tempfile.NamedTemporaryFile(dir=Path.cwd(), mode="w", delete=False)
-        tmp.write(prompt)
-        tmp.flush()
-        tmp.close()
-        prompt_path = Path(tmp.name)
+        executor = AgentExecutor(
+            agent=agent,
+            state_dir=self.state.path,
+            max_attempts=max_attempts,
+            repo=self.repo,
+        )
 
-        prompt = f"See @{prompt_path} make sure the output is in specified format"
-
-        error = None
-        description = None
-        for attempt in range(max_attempts):
-            if error is not None:
-                click.echo(
-                    f"Attempt {attempt + 1} failed with error: {error}. Retrying..."
-                )
-
-            if attempt == max_attempts - 1:
-                click.echo(
-                    "Max attempts reached. Failed to obtain a valid description."
-                )
-                description = None
-                break
-
-            result = agent.run(prompt)
-            if not result.success():
-                click.echo(f"Agent execution failed: {result.error()}")
-                prompt = PromptBuilder.error_to_prompt(str(result.error()))
-                continue
-
-            click.echo("Agent execution succeeded. Checking result...")
-            description = result.result()
-
-            # Validate response format
-            format_error = self.check_describe_response_format(description["response"])
-            if format_error is not None:
-                click.echo(f"Response format validation failed: {format_error}")
-                prompt = PromptBuilder.error_to_prompt(format_error)
-                error = format_error
-                continue
-
-            # Check that no files were modified
-            is_dirty_after = self.repo.is_dirty(untracked_files=True)
-            if is_dirty_after and not was_dirty_before:
-                error_msg = "Files were modified during describe operation. No file modifications are allowed."
-                click.echo(f"Validation failed: {error_msg}")
-                prompt = PromptBuilder.error_to_prompt(error_msg)
-                error = error_msg
-                continue
-            elif is_dirty_after and was_dirty_before:
-                # Check if new files were modified (compare dirty files)
-                # For simplicity, we'll just warn but allow it if repo was already dirty
-                click.echo(
-                    "Warning: Repository was already dirty before describe. "
-                    "Cannot verify if new modifications were made."
-                )
-
-            click.echo("Description verified.")
-            error = None
-            break
-
-        if tmp is not None:
-            prompt_path.unlink()
-
-        if description is None:
-            raise Exception("Failed to obtain a valid description from the agent.")
+        try:
+            description = executor.run_with_retry(
+                prompt=prompt,
+                validator=executor.create_describe_validator(was_dirty_before),
+            )
+        except AgentExecutionError as e:
+            raise Exception(str(e))
 
         self.note.set_merge_description(description)
         self.save_note(self.note)
