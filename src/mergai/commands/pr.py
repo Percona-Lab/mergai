@@ -8,6 +8,8 @@ from ..utils import util
 from typing import Optional, List
 from urllib.parse import urlencode, quote
 
+from mergai import app
+
 
 def _build_pr_url(repo_str: str, title: str, body: str, head: str, base: str) -> str:
     """Build a GitHub URL for creating a PR with pre-filled information.
@@ -113,13 +115,13 @@ def _create_solution_pr(
     merge_info = app.note.merge_info
     branches = app.branches
 
-    if not app.check_all_solutions_committed():
+    if not app.note.has_solutions or len(app.note.solutions) == 0:
+        raise click.ClickException("No solutions found. Run 'mergai resolve' first.")
+
+    if app.note.has_uncommitted_solutions:
         raise click.ClickException(
             "You have uncommitted solution(s). Run 'mergai commit solution' first."
         )
-
-    if not app.note.has_solutions or len(app.note.solutions) == 0:
-        raise click.ClickException("No solutions found. Run 'mergai resolve' first.")
 
     merge_commit_short = git_utils.short_sha(merge_info.merge_commit_sha)
     # TODO: title format from config

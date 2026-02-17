@@ -4,16 +4,13 @@ import logging
 import textwrap
 from .utils import git_utils
 from .utils import util
-from . import prompts
 from .agents.factory import create_agent
 from .utils.state_store import StateStore
 from .config import MergaiConfig
 from .models import (
     ConflictContext,
     MergeContext,
-    MergeInfo,
     MergaiNote,
-    ContextSerializationConfig,
 )
 import github
 from github import Repository as GithubRepository
@@ -23,6 +20,7 @@ import tempfile
 from pathlib import Path
 from .agents.base import Agent
 from .utils.branch_name_builder import BranchNameBuilder
+from .prompt_builder import PromptBuilder
 
 log = logging.getLogger(__name__)
 
@@ -101,13 +99,6 @@ class AppContext:
         # Update cached note
         self._note = note
 
-    def check_all_solutions_committed(self) -> bool:
-        """Check if all solutions have been committed."""
-        if not self.note.has_solutions:
-            return True
-        committed = self.note._get_committed_solution_indices()
-        return all(i in committed for i in range(len(self.note.solutions)))
-
     @property
     def gh_repo(self) -> GithubRepository.Repository:
         if self.gh is None:
@@ -152,107 +143,18 @@ class AppContext:
         except Exception as e:
             return None
 
-    def build_resolve_prompt(self) -> str:
-        """Build the prompt for conflict resolution.
+    
+    @property
+    def prompt_builder(self) -> PromptBuilder:
+        """Get a PromptBuilder instance for the current note.
 
         Returns:
-            The complete prompt string for the AI agent.
+            PromptBuilder configured with current note and prompt config.
 
         Raises:
-            Exception: If solutions already exist in the note.
+            click.ClickException: If no note found.
         """
-        if self.note.has_solutions:
-            raise Exception(
-                "Current note already has solutions. Cannot build resolve prompt for an existing solution. Please drop existing solutions first."
-            )
-
-        system_prompt_resolve = prompts.load_system_prompt_resolve()
-        project_invariants = util.load_if_exists(".mergai/invariants.md")
-
-        prompt = system_prompt_resolve + "\n\n"
-        if project_invariants:
-            prompt += project_invariants + "\n\n"
-
-        if self.note.has_conflict_context:
-            prompt += prompts.load_conflict_context_prompt() + "\n\n"
-
-        if self.note.has_pr_comments:
-            prompt += prompts.load_pr_comments_prompt() + "\n\n"
-
-        if self.note.has_user_comment:
-            prompt += prompts.load_user_comment_prompt() + "\n\n"
-
-        # Prepare note data for prompt serialization
-        # Hydrate conflict_context with configurable commit fields
-        note_for_prompt = self._prepare_note_for_prompt(self.note)
-
-        prompt += "## Note Data\n\n"
-        prompt += "```json\n"
-        prompt += json.dumps(note_for_prompt, indent=2)
-        prompt += "\n```\n"
-
-        return prompt
-
-    def _prepare_note_for_prompt(self, note: MergaiNote) -> dict:
-        """Prepare a note for prompt serialization.
-
-        Hydrates context fields (conflict_context, merge_context) using the
-        configurable prompt serialization settings from config.
-
-        Args:
-            note: The MergaiNote instance.
-
-        Returns:
-            A dict with context fields hydrated for prompt use.
-        """
-        prompt_config = self.config.prompt.to_prompt_serialization_config()
-
-        result = {"merge_info": note.merge_info.to_dict()}
-
-        if note.has_conflict_context:
-            result["conflict_context"] = note.conflict_context.to_dict(prompt_config)
-
-        if note.has_merge_context:
-            result["merge_context"] = note.merge_context.to_dict(prompt_config)
-
-        if note.has_pr_comments:
-            result["pr_comments"] = note.pr_comments
-
-        if note.has_user_comment:
-            result["user_comment"] = note.user_comment
-
-        return result
-
-    def build_describe_prompt(self) -> str:
-        """Build the prompt for merge description.
-
-        Returns:
-            The complete prompt string for the AI agent.
-
-        Raises:
-            Exception: If solutions already exist in the note.
-        """
-        if self.note.has_solutions:
-            raise Exception(
-                "Current note already has solutions. Cannot build describe prompt for an existing solution. Please drop existing solutions first."
-            )
-
-        system_prompt_describe = prompts.load_system_prompt_describe()
-        prompt = system_prompt_describe + "\n\n"
-
-        project_invariants = util.load_if_exists(".mergai/invariants.md")
-        if project_invariants:
-            prompt += project_invariants + "\n\n"
-
-        # Prepare note data for prompt serialization
-        note_for_prompt = self._prepare_note_for_prompt(self.note)
-
-        prompt += "## Note Data\n\n"
-        prompt += "```json\n"
-        prompt += json.dumps(note_for_prompt, indent=2)
-        prompt += "\n```\n"
-
-        return prompt
+        return PromptBuilder(self.note, self.config.prompt)
 
     def drop_all(self):
         """Drop the entire note."""
@@ -354,7 +256,7 @@ class AppContext:
         log.info(f"found {len(merged_commits)} merged commits for merge context")
 
         # Get important files from config
-        important_files = self._get_important_files_from_config()
+        important_files = self.config.important_files
 
         # Find which important files were modified by any of the merged commits
         important_files_modified = []
@@ -385,24 +287,6 @@ class AppContext:
         self.save_note(self.note)
 
         return context
-
-    def _get_important_files_from_config(self) -> List[str]:
-        """Extract important files list from merge_picks config.
-
-        Looks for the important_files strategy in fork.merge_picks
-        and returns its file list.
-
-        Returns:
-            List of file paths, or empty list if not configured.
-        """
-        if not self.config.fork.merge_picks:
-            return []
-
-        for strategy in self.config.fork.merge_picks.strategies:
-            if strategy.name == "important_files":
-                return strategy.config.files
-
-        return []
 
     def get_agent(self, agent_desc: str = None, yolo: bool = False) -> "Agent":
         """Get an agent instance for conflict resolution.
@@ -441,9 +325,6 @@ class AppContext:
 
         return None
 
-    def error_to_prompt(self, error: str) -> str:
-        return f"An error occurred while trying to process the output: {error}"
-
     def resolve(self, force: bool, yolo: bool):
         """Run the AI agent to resolve conflicts.
 
@@ -464,7 +345,7 @@ class AppContext:
         # If force and there's an uncommitted solution, we'll replace it
         # Otherwise, we'll append a new solution
 
-        prompt = self.build_resolve_prompt()
+        prompt = self.prompt_builder.build_resolve_prompt()
 
         agent = self.get_agent(yolo=yolo)
 
@@ -494,7 +375,7 @@ class AppContext:
             result = agent.run(prompt)
             if not result.success():
                 click.echo(f"Agent execution failed: {result.error()}")
-                prompt = self.error_to_prompt(str(result.error()))
+                prompt = PromptBuilder.error_to_prompt(str(result.error()))
                 continue
 
             click.echo("Agent execution succeeded. Checking result...")
@@ -505,7 +386,7 @@ class AppContext:
                 click.echo(
                     f"Checking resolved files from solution failed: {failed_files}"
                 )
-                prompt = self.error_to_prompt(failed_files)
+                prompt = PromptBuilder.error_to_prompt(failed_files)
                 continue
 
             click.echo("Solution verified.")
@@ -573,7 +454,7 @@ class AppContext:
         if self.note.has_merge_description:
             self.note.drop_merge_description()
 
-        prompt = self.build_describe_prompt()
+        prompt = self.prompt_builder.build_describe_prompt()
 
         # No YOLO mode for describe - we don't want file modifications
         agent = self.get_agent(yolo=False)
@@ -607,7 +488,7 @@ class AppContext:
             result = agent.run(prompt)
             if not result.success():
                 click.echo(f"Agent execution failed: {result.error()}")
-                prompt = self.error_to_prompt(str(result.error()))
+                prompt = PromptBuilder.error_to_prompt(str(result.error()))
                 continue
 
             click.echo("Agent execution succeeded. Checking result...")
@@ -617,7 +498,7 @@ class AppContext:
             format_error = self.check_describe_response_format(description["response"])
             if format_error is not None:
                 click.echo(f"Response format validation failed: {format_error}")
-                prompt = self.error_to_prompt(format_error)
+                prompt = PromptBuilder.error_to_prompt(format_error)
                 error = format_error
                 continue
 
@@ -626,7 +507,7 @@ class AppContext:
             if is_dirty_after and not was_dirty_before:
                 error_msg = "Files were modified during describe operation. No file modifications are allowed."
                 click.echo(f"Validation failed: {error_msg}")
-                prompt = self.error_to_prompt(error_msg)
+                prompt = PromptBuilder.error_to_prompt(error_msg)
                 error = error_msg
                 continue
             elif is_dirty_after and was_dirty_before:

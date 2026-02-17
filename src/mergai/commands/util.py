@@ -299,7 +299,7 @@ def prompt(app: AppContext):
                 "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
             )
             exit(1)
-        prompt_text = app.build_resolve_prompt()
+        prompt_text = app.prompt_builder.build_resolve_prompt()
         util.print_or_page(prompt_text, format="markdown")
     except Exception as e:
         click.echo(f"Error: {e}")
@@ -317,7 +317,7 @@ def merge_prompt(app: AppContext):
                 "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
             )
             exit(1)
-        prompt_text = app.build_describe_prompt()
+        prompt_text = app.prompt_builder.build_describe_prompt()
         util.print_or_page(prompt_text, format="markdown")
     except Exception as e:
         click.echo(f"Error: {e}")

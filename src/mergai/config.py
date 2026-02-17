@@ -275,6 +275,15 @@ class MergaiConfig:
     prompt: PromptConfig = field(default_factory=PromptConfig)
     _raw: Dict[str, Any] = field(default_factory=dict)
 
+    @property
+    def important_files(self) -> List[str]:
+        """Get the list of important files from the merge_picks config, if set."""
+        if self.fork and self.fork.merge_picks:
+            for strategy in self.fork.merge_picks.strategies:
+                if isinstance(strategy, MergePickStrategy.ImportantFiles):
+                    return strategy.important_files
+        return []
+
     def get_section(self, name: str) -> Dict[str, Any]:
         """Get a configuration section by name.
 
