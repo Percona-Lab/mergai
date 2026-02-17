@@ -40,6 +40,7 @@ from .branching_point import (
     BranchingPointResult,
 )
 from .conflict import ConflictStrategy, ConflictStrategyConfig, ConflictResult
+from .most_recent import MostRecentStrategy, MostRecentStrategyConfig, MostRecentResult
 from .registry import STRATEGY_REGISTRY, create_strategy
 
 __all__ = [
@@ -64,6 +65,10 @@ __all__ = [
     "ConflictStrategy",
     "ConflictStrategyConfig",
     "ConflictResult",
+    # Most recent fallback strategy
+    "MostRecentStrategy",
+    "MostRecentStrategyConfig",
+    "MostRecentResult",
     # Registry
     "STRATEGY_REGISTRY",
     "create_strategy",

@@ -320,12 +320,14 @@ class MergePicksConfig:
 
     Example YAML config:
         merge_picks:
-          - huge_commit: "num_of_files >= 100 or num_of_lines >= 1000"
-          - important_files:
-              - BUILD.bazel
-              - SConstruct
-          - branching_point: true
-          - conflict: true
+          most_recent_fallback: true  # Optional: fallback to most recent if no match
+          strategies:
+            - huge_commit: "num_of_files >= 100 or num_of_lines >= 1000"
+            - important_files:
+                - BUILD.bazel
+                - SConstruct
+            - branching_point: true
+            - conflict: true
 
     Available strategies:
         - huge_commit: Prioritize commits based on expression evaluation.
@@ -341,16 +343,28 @@ class MergePicksConfig:
 
     Attributes:
         strategies: Ordered list of merge-pick strategies to evaluate.
+        most_recent_fallback: If True, select the most recent unmerged commit
+            when no other strategy finds a match.
     """
 
     strategies: List[MergePickStrategy] = field(default_factory=list)
+    most_recent_fallback: bool = False
 
     @classmethod
     def from_dict(cls, data) -> "MergePicksConfig":
         """Parse merge_picks config into strategy instances.
 
         Args:
-            data: List of strategy definitions from YAML, e.g.:
+            data: Dict or list of strategy definitions from YAML, e.g.:
+                {
+                    "most_recent_fallback": True,
+                    "strategies": [
+                        {"huge_commit": "num_of_files > 100 or num_of_lines > 1000"},
+                        {"important_files": ["BUILD.bazel"]},
+                        {"branching_point": True},
+                    ]
+                }
+                Or legacy list format (strategies only):
                 [
                     {"huge_commit": "num_of_files > 100 or num_of_lines > 1000"},
                     {"important_files": ["BUILD.bazel"]},
@@ -362,11 +376,19 @@ class MergePicksConfig:
         """
         from .merge_pick_strategies import create_strategy
 
-        if not isinstance(data, list):
+        # Handle both dict format (new) and list format (legacy)
+        if isinstance(data, dict):
+            strategies_data = data.get("strategies", [])
+            most_recent_fallback = bool(data.get("most_recent_fallback", False))
+        elif isinstance(data, list):
+            # Legacy format: list of strategies directly
+            strategies_data = data
+            most_recent_fallback = False
+        else:
             return cls()
 
         strategies = []
-        for item in data:
+        for item in strategies_data:
             if not isinstance(item, dict) or len(item) != 1:
                 continue
 
@@ -383,7 +405,7 @@ class MergePicksConfig:
                 "No commits will be prioritized."
             )
 
-        return cls(strategies=strategies)
+        return cls(strategies=strategies, most_recent_fallback=most_recent_fallback)
 
 
 @dataclass

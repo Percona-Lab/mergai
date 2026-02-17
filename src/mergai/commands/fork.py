@@ -63,6 +63,9 @@ def get_prioritized_commits(
     Strategies are evaluated in the order they appear in the config.
     The first matching strategy for each commit determines its priority.
 
+    If most_recent_fallback is enabled and no strategies match any commits,
+    the most recent unmerged commit is returned as a fallback.
+
     Args:
         repo: GitPython Repo object.
         unmerged_commits: List of unmerged commits (in reverse chronological order).
@@ -92,6 +95,20 @@ def get_prioritized_commits(
                 if limit is not None and len(prioritized) >= limit:
                     return prioritized  # Early return when limit reached
                 break  # First matching strategy wins
+
+    # Fallback to most recent commit if enabled and no matches found
+    if not prioritized and config.most_recent_fallback and unmerged_commits:
+        from ..merge_pick_strategies.most_recent import MostRecentResult
+
+        # Most recent = first in unmerged_commits (reverse chronological order)
+        most_recent_commit = unmerged_commits[0]
+        prioritized.append(
+            MergePickCommit(
+                commit=most_recent_commit,
+                strategy_name="most_recent",
+                result=MostRecentResult(),
+            )
+        )
 
     return prioritized
 

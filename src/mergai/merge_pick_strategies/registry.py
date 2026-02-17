@@ -12,6 +12,7 @@ from .huge_commit import HugeCommitStrategyConfig, HugeCommitStrategy
 from .important_files import ImportantFilesStrategyConfig, ImportantFilesStrategy
 from .branching_point import BranchingPointStrategyConfig, BranchingPointStrategy
 from .conflict import ConflictStrategyConfig, ConflictStrategy
+from .most_recent import MostRecentStrategyConfig, MostRecentStrategy
 
 log = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Type, Type[MergePickStrategy]]] = {
     "important_files": (ImportantFilesStrategyConfig, ImportantFilesStrategy),
     "branching_point": (BranchingPointStrategyConfig, BranchingPointStrategy),
     "conflict": (ConflictStrategyConfig, ConflictStrategy),
+    "most_recent": (MostRecentStrategyConfig, MostRecentStrategy),
 }
 
 
