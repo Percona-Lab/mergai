@@ -21,6 +21,7 @@ from pathlib import Path
 from .agents.base import Agent
 from .utils.branch_name_builder import BranchNameBuilder
 from .prompt_builder import PromptBuilder
+from .context_builder import ContextBuilder
 
 log = logging.getLogger(__name__)
 
@@ -156,137 +157,26 @@ class AppContext:
         """
         return PromptBuilder(self.note, self.config.prompt)
 
+    @property
+    def context_builder(self) -> ContextBuilder:
+        """Get a ContextBuilder instance for creating contexts.
+
+        Returns:
+            ContextBuilder configured with repo, note's merge_info, and important_files.
+
+        Raises:
+            click.ClickException: If no note found.
+        """
+        return ContextBuilder(
+            repo=self.repo,
+            merge_info=self.note.merge_info,
+            important_files=self.config.important_files,
+        )
+
     def drop_all(self):
         """Drop the entire note."""
         self.state.remove_note()
         self._note = None
-
-    def create_conflict_context(
-        self,
-        use_diffs: bool,
-        diff_lines_of_context: int,
-        use_compressed_diffs: bool,
-        use_their_commits: bool,
-        force: bool,
-    ) -> ConflictContext:
-        """Create conflict context from current merge state.
-
-        Args:
-            use_diffs: Include diffs in the context.
-            diff_lines_of_context: Number of context lines in diffs.
-            use_compressed_diffs: Use compressed diffs.
-            use_their_commits: Include their commits in context.
-            force: Overwrite existing conflict_context.
-
-        Returns:
-            The created ConflictContext.
-
-        Raises:
-            Exception: If no merge in progress or conflict_context exists (without force).
-        """
-        context_dict = git_utils.get_conflict_context(
-            self.repo,
-            use_diffs=use_diffs,
-            lines_of_context=diff_lines_of_context,
-            use_compressed_diffs=use_compressed_diffs,
-            use_their_commits=use_their_commits,
-        )
-        if context_dict is None:
-            raise Exception("No merge in progress")
-
-        if self.note.has_conflict_context and not force:
-            raise Exception(
-                "Conflict context already exists in the note. Use -f/--force to overwrite."
-            )
-
-        context = ConflictContext.from_dict(context_dict, self.repo)
-        self.note.set_conflict_context(context)
-
-        self.save_note(self.note)
-
-        return context
-
-    def create_merge_context(
-        self,
-        force: bool = False,
-        auto_merged_files: Optional[List[str]] = None,
-        merge_strategy: Optional[str] = None,
-    ) -> MergeContext:
-        """Create merge context from merge_info.
-
-        Calculates the list of commits being merged by finding the
-        merge base between target_branch and merge_commit, then
-        listing all commits from base..merge_commit. Also identifies
-        which important files (from config) were modified.
-
-        Args:
-            force: If True, overwrite existing merge_context.
-            auto_merged_files: List of files that were auto-merged by git.
-            merge_strategy: The merge strategy used (e.g., 'ort', 'recursive').
-
-        Returns:
-            The created MergeContext.
-
-        Raises:
-            Exception: If merge_context already exists (without force).
-        """
-        # Check for existing merge_context
-        if self.note.has_merge_context and not force:
-            raise Exception(
-                "merge_context already exists. Use -f/--force to overwrite."
-            )
-
-        merge_info = self.note.merge_info
-        target_branch = merge_info.target_branch
-        merge_commit_sha = merge_info.merge_commit_sha
-
-        # Resolve merge commit
-        merge_commit = self.repo.commit(merge_commit_sha)
-        merge_commit_hexsha = merge_commit.hexsha
-
-        log.info(
-            f"getting merged commits for merge context: target_branch={target_branch}, merge_commit={merge_commit_sha}"
-        )
-        # Get the list of merged commits
-        merged_commits = git_utils.get_merged_commits(
-            self.repo,
-            target_branch,
-            merge_commit_sha,
-        )
-        log.info(f"found {len(merged_commits)} merged commits for merge context")
-
-        # Get important files from config
-        important_files = self.config.important_files
-
-        # Find which important files were modified by any of the merged commits
-        important_files_modified = []
-        if important_files:
-            all_modified_files = set()
-            for commit_sha in merged_commits:
-                commit = self.repo.commit(commit_sha)
-                modified = git_utils.get_commit_modified_files(self.repo, commit)
-                all_modified_files.update(modified)
-
-            important_files_modified = sorted(set(important_files) & all_modified_files)
-
-        context_dict = {
-            "merge_commit": merge_commit_hexsha,
-            "merged_commits": merged_commits,
-            "important_files_modified": important_files_modified,
-        }
-
-        # Add auto_merged info if provided
-        if auto_merged_files is not None or merge_strategy is not None:
-            context_dict["auto_merged"] = {
-                "strategy": merge_strategy,
-                "files": auto_merged_files or [],
-            }
-
-        context = MergeContext.from_dict(context_dict, self.repo)
-        self.note.set_merge_context(context)
-        self.save_note(self.note)
-
-        return context
 
     def get_agent(self, agent_desc: str = None, yolo: bool = False) -> "Agent":
         """Get an agent instance for conflict resolution.

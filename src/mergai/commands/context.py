@@ -287,13 +287,19 @@ def create_conflict(
                 "or locally in the repository with:\n"
                 "  git config merge.conflictstyle diff3"
             )
-        app.create_conflict_context(
+        if app.note.has_conflict_context and not force:
+            raise Exception(
+                "Conflict context already exists in the note. Use -f/--force to overwrite."
+            )
+
+        context = app.context_builder.create_conflict_context(
             use_diffs,
             diff_lines_of_context,
             use_compressed_diffs,
             use_their_commits,
-            force,
         )
+        app.note.set_conflict_context(context)
+        app.save_note(app.note)
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
@@ -356,22 +362,29 @@ def create_merge(app: AppContext, force: bool, from_stdin: bool, strategy: str):
             merge_strategy = parsed.strategy
 
     try:
-        context = app.create_merge_context(
-            force=force,
+        if app.note.has_merge_context and not force:
+            raise Exception(
+                "merge_context already exists. Use -f/--force to overwrite."
+            )
+
+        context = app.context_builder.create_merge_context(
             auto_merged_files=auto_merged_files,
             merge_strategy=merge_strategy,
         )
+        app.note.set_merge_context(context)
+        app.save_note(app.note)
+
         click.echo("Created merge context:")
-        click.echo(f"  merge_commit: {context['merge_commit']}")
-        click.echo(f"  merged_commits: {len(context['merged_commits'])} commits")
-        if context["important_files_modified"]:
+        click.echo(f"  merge_commit: {context.merge_commit_sha}")
+        click.echo(f"  merged_commits: {len(context.merged_commits_shas)} commits")
+        if context.important_files_modified:
             click.echo(
-                f"  important_files_modified: {', '.join(context['important_files_modified'])}"
+                f"  important_files_modified: {', '.join(context.important_files_modified)}"
             )
         else:
             click.echo("  important_files_modified: (none)")
-        if "auto_merged" in context:
-            auto_merged = context["auto_merged"]
+        if context.auto_merged:
+            auto_merged = context.auto_merged
             if auto_merged.get("strategy"):
                 click.echo(f"  auto_merged.strategy: {auto_merged['strategy']}")
             if auto_merged.get("files"):

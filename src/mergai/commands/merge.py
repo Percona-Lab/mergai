@@ -116,16 +116,18 @@ def merge(app: AppContext, no_context: bool, force: bool):
 
         if not no_context:
             try:
-                app.create_merge_context(
-                    force=force,
-                    auto_merged_files=parsed.auto_merged_files,
-                    merge_strategy=parsed.strategy,
-                )
-                click.echo("Created merge_context.")
-                if parsed.strategy:
-                    click.echo(f"  strategy: {parsed.strategy}")
-                if parsed.auto_merged_files:
-                    click.echo(f"  auto_merged: {len(parsed.auto_merged_files)} files")
+                if not app.note.has_merge_context or force:
+                    context = app.context_builder.create_merge_context(
+                        auto_merged_files=parsed.auto_merged_files,
+                        merge_strategy=parsed.strategy,
+                    )
+                    app.note.set_merge_context(context)
+                    app.save_note(app.note)
+                    click.echo("Created merge_context.")
+                    if parsed.strategy:
+                        click.echo(f"  strategy: {parsed.strategy}")
+                    if parsed.auto_merged_files:
+                        click.echo(f"  auto_merged: {len(parsed.auto_merged_files)} files")
             except Exception as e:
                 click.echo(f"Warning: Failed to create merge_context: {e}")
 
@@ -168,16 +170,18 @@ def merge(app: AppContext, no_context: bool, force: bool):
             if not no_context:
                 # Create merge context with auto-merged files
                 try:
-                    app.create_merge_context(
-                        force=force,
-                        auto_merged_files=parsed.auto_merged_files,
-                        merge_strategy=parsed.strategy,
-                    )
-                    click.echo("Created merge_context.")
-                    if parsed.strategy:
-                        click.echo(f"  strategy: {parsed.strategy}")
-                    if parsed.auto_merged_files:
-                        click.echo(f"  auto_merged: {len(parsed.auto_merged_files)} files")
+                    if not app.note.has_merge_context or force:
+                        context = app.context_builder.create_merge_context(
+                            auto_merged_files=parsed.auto_merged_files,
+                            merge_strategy=parsed.strategy,
+                        )
+                        app.note.set_merge_context(context)
+                        app.save_note(app.note)
+                        click.echo("Created merge_context.")
+                        if parsed.strategy:
+                            click.echo(f"  strategy: {parsed.strategy}")
+                        if parsed.auto_merged_files:
+                            click.echo(f"  auto_merged: {len(parsed.auto_merged_files)} files")
                 except Exception as ctx_err:
                     click.echo(f"Warning: Failed to create merge_context: {ctx_err}")
 
@@ -188,14 +192,16 @@ def merge(app: AppContext, no_context: bool, force: bool):
                             "Warning: Git is not configured to use diff3 for merges. "
                             "Consider setting 'merge.conflictstyle' to 'diff3'."
                         )
-                    app.create_conflict_context(
-                        use_diffs=True,
-                        diff_lines_of_context=0,
-                        use_compressed_diffs=True,
-                        use_their_commits=True,
-                        force=force,
-                    )
-                    click.echo("Created conflict_context.")
+                    if not app.note.has_conflict_context or force:
+                        context = app.context_builder.create_conflict_context(
+                            use_diffs=True,
+                            diff_lines_of_context=0,
+                            use_compressed_diffs=True,
+                            use_their_commits=True,
+                        )
+                        app.note.set_conflict_context(context)
+                        app.save_note(app.note)
+                        click.echo("Created conflict_context.")
                 except Exception as ctx_err:
                     click.echo(f"Warning: Failed to create conflict_context: {ctx_err}")
 

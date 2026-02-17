@@ -10,7 +10,7 @@ import logging
 import yaml
 
 from .models import CommitSerializationConfig, ContextSerializationConfig
-from .merge_pick_strategies import MergePickStrategy
+from .merge_pick_strategies import MergePickStrategy, ImportantFilesStrategy
 
 log = logging.getLogger(__name__)
 
@@ -280,8 +280,8 @@ class MergaiConfig:
         """Get the list of important files from the merge_picks config, if set."""
         if self.fork and self.fork.merge_picks:
             for strategy in self.fork.merge_picks.strategies:
-                if isinstance(strategy, MergePickStrategy.ImportantFiles):
-                    return strategy.important_files
+                if isinstance(strategy, ImportantFilesStrategy):
+                    return strategy.config.files
         return []
 
     def get_section(self, name: str) -> Dict[str, Any]:
