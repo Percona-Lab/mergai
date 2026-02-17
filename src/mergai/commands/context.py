@@ -12,7 +12,7 @@ from typing import Optional
 
 from ..app import AppContext
 from ..utils import git_utils
-from ..utils.branch_name_builder import BranchNameBuilder
+from ..utils.branch_name_builder import BranchNameBuilder, ParsedBranchName
 
 
 CREATE_CONFLICT_CONTEXT_FLAGS = [
@@ -49,6 +49,129 @@ def conflict_context_flags(func):
     for option in reversed(CREATE_CONFLICT_CONTEXT_FLAGS):
         func = option(func)
     return func
+
+
+# --- Helper functions for init command ---
+
+
+def _display_note_summary(note, header: str) -> None:
+    """Display a summary of the note's contents.
+
+    Args:
+        note: The MergaiNote to display.
+        header: Header message to display before the summary.
+    """
+    merge_info = note.merge_info
+    click.echo(header)
+    click.echo(f"  target_branch: {merge_info.target_branch}")
+    click.echo(f"  target_branch_sha: {merge_info.target_branch_sha}")
+    click.echo(f"  merge_commit: {merge_info.merge_commit_sha}")
+    if note.has_solutions:
+        committed = len(note._get_committed_solution_indices())
+        total = len(note.solutions)
+        click.echo(f"  solutions: {total} ({committed} committed)")
+    if note.has_conflict_context:
+        click.echo("  conflict_context: present")
+    if note.has_merge_context:
+        click.echo("  merge_context: present")
+
+
+def _display_merge_info_summary(
+    target_branch: str,
+    target_branch_sha: str,
+    merge_commit_sha: str,
+    header: str,
+) -> None:
+    """Display basic merge info summary.
+
+    Args:
+        target_branch: Target branch name.
+        target_branch_sha: Target branch SHA.
+        merge_commit_sha: Merge commit SHA.
+        header: Header message to display before the summary.
+    """
+    click.echo(header)
+    click.echo(f"  target_branch: {target_branch}")
+    click.echo(f"  target_branch_sha: {target_branch_sha}")
+    click.echo(f"  merge_commit: {merge_commit_sha}")
+
+
+def _try_rebuild_note_from_commits(app: AppContext, header: str) -> bool:
+    """Try to rebuild note from commits and display summary.
+
+    Args:
+        app: Application context.
+        header: Header message to display if successful.
+
+    Returns:
+        True if rebuild was successful, False otherwise.
+    """
+    try:
+        note = app.rebuild_note_from_commits()
+        app.save_note(note)
+        _display_note_summary(note, header)
+        return True
+    except click.ClickException:
+        return False
+
+
+def _resolve_merge_commit_sha(
+    app: AppContext,
+    commit: Optional[str],
+    parsed: Optional[ParsedBranchName],
+) -> str:
+    """Resolve the merge commit SHA from various sources.
+
+    Args:
+        app: Application context with repo.
+        commit: Commit argument from command line (may be None).
+        parsed: Parsed branch name info (may be None).
+
+    Returns:
+        Full SHA of the merge commit.
+
+    Raises:
+        click.ClickException: If commit cannot be resolved.
+    """
+    if commit is not None:
+        try:
+            resolved = app.repo.commit(commit)
+            return resolved.hexsha
+        except Exception as e:
+            raise click.ClickException(f"Invalid commit reference '{commit}': {e}")
+    elif parsed is not None:
+        try:
+            resolved = app.repo.commit(parsed.merge_commit_sha)
+            return resolved.hexsha
+        except Exception as e:
+            raise click.ClickException(
+                f"Cannot resolve commit from branch name '{parsed.merge_commit_sha}': {e}"
+            )
+    else:
+        raise click.ClickException("COMMIT is required when not on a mergai branch.")
+
+
+def _resolve_target_branch(
+    target: Optional[str],
+    parsed: Optional[ParsedBranchName],
+    current_branch: str,
+) -> str:
+    """Determine target branch from various sources.
+
+    Args:
+        target: Target branch argument from command line (may be None).
+        parsed: Parsed branch name info (may be None).
+        current_branch: Current git branch name.
+
+    Returns:
+        The resolved target branch name.
+    """
+    if target is not None:
+        return target
+    elif parsed is not None:
+        return parsed.target_branch
+    else:
+        return current_branch
 
 
 @click.group()
@@ -118,89 +241,32 @@ def init(
         current_branch, app.config.branch
     )
 
-    # If no commit argument provided and no target, try to rebuild from commits
+    # If no commit or target provided, try to rebuild from commits
     if commit is None and target is None:
-        if parsed is not None:
-            # On a mergai branch - can use branch info or rebuild
-            # Try to rebuild from commits first
-            try:
-                note = app.rebuild_note_from_commits()
-                app.save_note(note)
-
-                merge_info = note.merge_info
-                click.echo("Context created from commit notes:")
-                click.echo(f"  target_branch: {merge_info.target_branch}")
-                click.echo(f"  target_branch_sha: {merge_info.target_branch_sha}")
-                click.echo(f"  merge_commit: {merge_info.merge_commit_sha}")
-                if note.has_solutions:
-                    committed = len(note._get_committed_solution_indices())
-                    total = len(note.solutions)
-                    click.echo(f"  solutions: {total} ({committed} committed)")
-                if note.has_conflict_context:
-                    click.echo("  conflict_context: present")
-                if note.has_merge_context:
-                    click.echo("  merge_context: present")
-                return
-            except click.ClickException:
-                # Fall back to using branch info
-                pass
-        else:
-            # Not on a mergai branch, try to rebuild from commits
-            try:
-                note = app.rebuild_note_from_commits()
-                app.save_note(note)
-
-                merge_info = note.merge_info
-                click.echo("Rebuilt note.json from commit notes:")
-                click.echo(f"  target_branch: {merge_info.target_branch}")
-                click.echo(f"  target_branch_sha: {merge_info.target_branch_sha}")
-                click.echo(f"  merge_commit: {merge_info.merge_commit_sha}")
-                if note.has_solutions:
-                    committed = len(note._get_committed_solution_indices())
-                    total = len(note.solutions)
-                    click.echo(f"  solutions: {total} ({committed} committed)")
-                if note.has_conflict_context:
-                    click.echo("  conflict_context: present")
-                if note.has_merge_context:
-                    click.echo("  merge_context: present")
-                return
-            except click.ClickException as e:
-                raise click.ClickException(
-                    f"Cannot rebuild context from commits: {e.message}\n\n"
-                    "COMMIT is required when not on a mergai branch and no commit notes exist."
-                )
-
-    # Resolve commit to full SHA
-    if commit is not None:
-        try:
-            resolved = app.repo.commit(commit)
-            merge_commit_sha = resolved.hexsha
-        except Exception as e:
-            raise click.ClickException(f"Invalid commit reference '{commit}': {e}")
-    elif parsed is not None:
-        # Resolve the SHA from branch name to full SHA
-        try:
-            resolved = app.repo.commit(parsed.merge_commit_sha)
-            merge_commit_sha = resolved.hexsha
-        except Exception as e:
-            raise click.ClickException(
-                f"Cannot resolve commit from branch name '{parsed.merge_commit_sha}': {e}"
-            )
-    else:
-        raise click.ClickException(
-            "COMMIT is required when not on a mergai branch."
+        on_mergai_branch = parsed is not None
+        header = (
+            "Context created from commit notes:"
+            if on_mergai_branch
+            else "Rebuilt note.json from commit notes:"
         )
 
-    # Resolve target branch
-    if target is not None:
-        target_branch = target
-    elif parsed is not None:
-        target_branch = parsed.target_branch
-    else:
-        target_branch = current_branch
+        if _try_rebuild_note_from_commits(app, header):
+            return
 
-    # Resolve target branch SHA
-    # Uses fallback to origin/ for remote-only branches (common in CI)
+        if not on_mergai_branch:
+            raise click.ClickException(
+                "Cannot rebuild context from commits.\n\n"
+                "COMMIT is required when not on a mergai branch and no commit notes exist."
+            )
+        # Fall through to use branch info if on mergai branch
+
+    # Resolve commit SHA
+    merge_commit_sha = _resolve_merge_commit_sha(app, commit, parsed)
+
+    # Resolve target branch
+    target_branch = _resolve_target_branch(target, parsed, current_branch)
+
+    # Resolve target branch SHA (uses fallback to origin/ for remote-only branches)
     try:
         target_branch_sha = git_utils.resolve_ref_sha(app.repo, target_branch)
     except ValueError as e:
@@ -212,7 +278,7 @@ def init(
             "merge_info already exists in the note. Use -f/--force to overwrite."
         )
 
-    # Import MergeInfo and MergaiNote
+    # Create and save the note
     from ..models import MergeInfo, MergaiNote
 
     merge_info = MergeInfo(
@@ -225,10 +291,9 @@ def init(
     note = MergaiNote.create(merge_info, app.repo)
     app.save_note(note)
 
-    click.echo("Initialized merge context:")
-    click.echo(f"  target_branch: {target_branch}")
-    click.echo(f"  target_branch_sha: {target_branch_sha}")
-    click.echo(f"  merge_commit: {merge_commit_sha}")
+    _display_merge_info_summary(
+        target_branch, target_branch_sha, merge_commit_sha, "Initialized merge context:"
+    )
 
 
 @context.group()
