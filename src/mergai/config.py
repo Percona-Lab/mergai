@@ -137,14 +137,16 @@ class PRTypeConfig:
 
     Attributes:
         title_format: Format string for PR titles.
+        labels: List of labels to apply to the PR when created.
 
-        Available tokens:
+        Available tokens for title_format:
         - %(target_branch) - The target branch name
         - %(merge_commit_sha) - Full SHA of the merge commit (40 chars)
         - %(merge_commit_short_sha) - Short SHA of the merge commit (11 chars)
     """
 
     title_format: str = ""
+    labels: List[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict, default_title_format: str = "") -> "PRTypeConfig":
@@ -159,6 +161,7 @@ class PRTypeConfig:
         """
         return cls(
             title_format=data.get("title_format", default_title_format),
+            labels=data.get("labels", []),
         )
 
 

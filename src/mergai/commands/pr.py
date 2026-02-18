@@ -11,7 +11,60 @@ from urllib.parse import urlencode, quote
 from mergai import app
 
 
-def _build_pr_url(repo_str: str, title: str, body: str, head: str, base: str) -> str:
+def _parse_labels_option(labels_arg: Optional[str], config_labels: List[str]) -> List[str]:
+    """Parse the --labels argument and combine with config labels.
+
+    Behavior:
+    - None (not specified): Return config_labels as-is
+    - "label1,label2" (no +/- prefix): Override - return only these labels
+    - "+label1,-label2,label3": Modify config_labels
+        - +label1: Add label1 to config_labels
+        - -label2: Remove label2 from config_labels
+        - label3 (no prefix in modifier mode): Treat as +label3
+
+    Args:
+        labels_arg: The --labels argument value, or None if not specified.
+        config_labels: Labels from the config file.
+
+    Returns:
+        Final list of labels to apply.
+    """
+    if labels_arg is None:
+        return list(config_labels)
+
+    parts = [p.strip() for p in labels_arg.split(",") if p.strip()]
+
+    if not parts:
+        return list(config_labels)
+
+    # Check if any part has +/- prefix (modifier mode)
+    has_modifiers = any(p.startswith("+") or p.startswith("-") for p in parts)
+
+    if not has_modifiers:
+        # Override mode: return exactly what was specified
+        return parts
+
+    # Modifier mode: start with config labels and modify
+    result = set(config_labels)
+    for part in parts:
+        if part.startswith("-"):
+            result.discard(part[1:])  # Remove (if exists)
+        elif part.startswith("+"):
+            result.add(part[1:])  # Add
+        else:
+            result.add(part)  # No prefix in modifier mode = add
+
+    return list(result)
+
+
+def _build_pr_url(
+    repo_str: str,
+    title: str,
+    body: str,
+    head: str,
+    base: str,
+    labels: Optional[List[str]] = None,
+) -> str:
     """Build a GitHub URL for creating a PR with pre-filled information.
 
     Args:
@@ -20,18 +73,21 @@ def _build_pr_url(repo_str: str, title: str, body: str, head: str, base: str) ->
         body: PR body/description.
         head: Source branch name.
         base: Target branch name.
+        labels: Optional list of labels to apply to the PR.
 
     Returns:
         GitHub compare URL with query parameters for PR creation.
     """
     # GitHub compare URL format: https://github.com/{owner}/{repo}/compare/{base}...{head}
-    # Query params: expand=1 (opens PR form), title, body
+    # Query params: expand=1 (opens PR form), title, body, labels
     base_url = f"https://github.com/{repo_str}/compare/{quote(base, safe='')}...{quote(head, safe='')}"
     params = {
         "expand": "1",  # Automatically expand the PR creation form
         "title": title,
         "body": body,
     }
+    if labels:
+        params["labels"] = ",".join(labels)
     return f"{base_url}?{urlencode(params)}"
 
 
@@ -43,19 +99,22 @@ def _create_pr(
     base: str,
     dry_run: bool = False,
     url_only: bool = False,
+    labels: Optional[List[str]] = None,
 ):
 
     if url_only:
-        url = _build_pr_url(app.gh_repo.full_name, title, body, head, base)
+        url = _build_pr_url(app.gh_repo.full_name, title, body, head, base, labels)
         click.echo(f"Open this URL to create the PR:\n\n{url}")
         return None
 
+    labels_str = ", ".join(labels) if labels else "(none)"
     click.echo(
         f"Creating PR:\n"
         f"    repo: {app.gh_repo.full_name}\n"
         f"    from: {head}\n"
         f"      to: {base}\n"
-        f"   title: {title}"
+        f"   title: {title}\n"
+        f"  labels: {labels_str}"
     )
 
     if dry_run:
@@ -66,6 +125,8 @@ def _create_pr(
 
     try:
         pr = app.gh_repo.create_pull(title=title, body=body, head=head, base=base)
+        if labels:
+            pr.add_to_labels(*labels)
         click.echo(f"PR created: {pr.html_url}")
         return pr
     except GithubException as e:
@@ -108,7 +169,11 @@ def _build_merge_pr_body(app: AppContext) -> str:
 
 
 def _create_solution_pr(
-    app: AppContext, dry_run: bool, url_only: bool = False, skip_body: bool = False
+    app: AppContext,
+    dry_run: bool,
+    url_only: bool = False,
+    skip_body: bool = False,
+    labels: Optional[List[str]] = None,
 ) -> None:
     """Create a PR from the current branch (with existing solution commits) to the conflict branch."""
 
@@ -132,6 +197,7 @@ def _create_solution_pr(
         app.branches.conflict_branch,
         dry_run=dry_run,
         url_only=url_only,
+        labels=labels,
     )
 
 
@@ -162,7 +228,11 @@ def _build_main_pr_body(app: AppContext) -> str:
 
 
 def _create_main_pr(
-    app: AppContext, dry_run: bool, url_only: bool = False, skip_body: bool = False
+    app: AppContext,
+    dry_run: bool,
+    url_only: bool = False,
+    skip_body: bool = False,
+    labels: Optional[List[str]] = None,
 ) -> None:
     """Create a PR from the main branch to target_branch (merge or conflict resolution)."""
 
@@ -178,6 +248,7 @@ def _create_main_pr(
         app.branches.target_branch,
         dry_run=dry_run,
         url_only=url_only,
+        labels=labels,
     )
 
 
@@ -216,11 +287,34 @@ def pr(app: AppContext, repo: Optional[str]):
     default=False,
     help="Skip creating a body for the PR (create with empty body).",
 )
+@click.option(
+    "--labels",
+    "labels_arg",
+    type=str,
+    default=None,
+    help=(
+        "Labels to apply to the PR. Overrides config labels by default. "
+        "Use +label to add to config labels, -label to remove from config labels. "
+        "Examples: --labels=urgent,review (override), --labels=+urgent,-automated (modify)."
+    ),
+)
+@click.option(
+    "--no-labels",
+    is_flag=True,
+    default=False,
+    help="Skip applying any labels (ignores config labels).",
+)
 @click.argument(
     "pr_type", type=click.Choice(["main", "solution"], case_sensitive=False)
 )
 def create(
-    app: AppContext, pr_type: str, dry_run: bool, url_only: bool, skip_body: bool
+    app: AppContext,
+    pr_type: str,
+    dry_run: bool,
+    url_only: bool,
+    skip_body: bool,
+    labels_arg: Optional[str],
+    no_labels: bool,
 ):
     """Create a pull request.
 
@@ -252,6 +346,10 @@ def create(
                     fields pre-filled (title, body, branches). You can review
                     and edit everything before submitting.
         --skip-body Skip creating a body for the PR (create with empty body).
+        --labels    Labels to apply to the PR. By default, uses labels from config.
+                    Specifying labels without +/- prefix overrides config labels.
+                    Use +label to add, -label to remove from config labels.
+        --no-labels Skip applying any labels (ignores config labels).
 
     \b
     Examples:
@@ -259,14 +357,32 @@ def create(
         mergai pr create solution        # Create PR from solution branch to conflict branch
         mergai pr create main --url-only # Get URL to create PR manually on GitHub
         mergai pr create main --skip-body # Create PR with empty body
+        mergai pr create main --labels=urgent,review  # Override config labels
+        mergai pr create main --labels=+urgent,-auto  # Add/remove from config labels
+        mergai pr create main --no-labels             # Create PR without any labels
     """
     if dry_run and url_only:
         raise click.ClickException("Cannot use --dry-run and --url-only together.")
 
+    if no_labels and labels_arg is not None:
+        raise click.ClickException("Cannot use --no-labels and --labels together.")
+
+    # Get config labels based on PR type
     if pr_type.lower() == "solution":
-        _create_solution_pr(app, dry_run, url_only, skip_body)
+        config_labels = app.config.pr.solution.labels
     else:
-        _create_main_pr(app, dry_run, url_only, skip_body)
+        config_labels = app.config.pr.main.labels
+
+    # Compute final labels
+    if no_labels:
+        final_labels: List[str] = []
+    else:
+        final_labels = _parse_labels_option(labels_arg, config_labels)
+
+    if pr_type.lower() == "solution":
+        _create_solution_pr(app, dry_run, url_only, skip_body, final_labels)
+    else:
+        _create_main_pr(app, dry_run, url_only, skip_body, final_labels)
 
 
 def get_prs_for_current_branch(app: AppContext) -> List[GithubPullRequest.PullRequest]:
