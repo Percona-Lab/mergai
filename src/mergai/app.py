@@ -1107,3 +1107,211 @@ class AppContext:
 
         # Convert to MergaiNote
         return MergaiNote.from_dict(note_dict, self.repo)
+
+    def get_unsynced_commits(
+        self, force: bool = False
+    ) -> List[Tuple[git.Commit, bool]]:
+        """Get commits that need syncing (don't have solutions attached).
+
+        Iterates from HEAD backwards to target_branch_sha and identifies
+        commits that:
+        1. Don't have a mergai git note with a solution, OR
+        2. Have a note but force=True (for re-syncing)
+
+        Skips:
+        - Commits that already have solutions (unless force=True)
+        - Commits with conflict_context or merge_context (mergai-managed commits)
+        - Merge commits with no file changes (PR merge commits)
+
+        Args:
+            force: If True, include commits that already have notes.
+
+        Returns:
+            List of (commit, has_existing_note) tuples, ordered oldest to newest.
+        """
+        target_branch_sha = self.note.merge_info.target_branch_sha
+        target_sha_full = self.repo.commit(target_branch_sha).hexsha
+
+        commits_to_sync = []
+
+        for commit in self.repo.iter_commits():
+            if commit.hexsha == target_sha_full:
+                break
+
+            # Check if this commit has a mergai note
+            git_note = self.get_note_from_commit(commit.hexsha)
+            
+            # Check if commit already has a solution
+            has_solution = git_note is not None and (
+                "solution" in git_note or "solutions" in git_note
+            )
+
+            # Check if commit has conflict_context or merge_context - these are
+            # mergai-managed commits (from 'mergai commit conflict' or 'mergai commit merge'),
+            # not human fixes
+            has_context = git_note is not None and (
+                "conflict_context" in git_note or "merge_context" in git_note
+            )
+
+            # Skip merge commits that have no file changes (GitHub PR merge commits)
+            if len(commit.parents) > 1:
+                modified_files = git_utils.get_commit_modified_files(self.repo, commit)
+                if not modified_files:
+                    continue
+
+            # Skip mergai-managed commits (conflict/merge context) - these should never be synced
+            if has_context:
+                continue
+
+            if has_solution and not force:
+                # Skip - already has a solution
+                continue
+
+            commits_to_sync.append((commit, git_note is not None))
+
+        # Reverse to get oldest-first order
+        commits_to_sync.reverse()
+        return commits_to_sync
+
+    def create_human_solution_from_commit(self, commit: git.Commit) -> dict:
+        """Build a solution dict from a human commit.
+
+        Creates a solution structure similar to AI solutions but with
+        author information instead of agent_info.
+
+        Args:
+            commit: The git commit to create a solution from.
+
+        Returns:
+            Solution dict with response, author, and commit_sha fields.
+        """
+        # Get files modified by this commit
+        modified_files = git_utils.get_commit_modified_files(self.repo, commit)
+
+        # Determine which files were previously unresolved
+        previously_unresolved = set()
+        if self.note.has_solutions:
+            for solution in self.note.solutions:
+                unresolved = solution.get("response", {}).get("unresolved", {})
+                previously_unresolved.update(unresolved.keys())
+
+        # Also check conflict_context for original conflicting files
+        conflict_files = set()
+        if self.note.has_conflict_context:
+            conflict_files = set(self.note.conflict_context.files)
+
+        # Categorize files as resolved or unresolved
+        resolved = {}
+        unresolved = {}
+
+        for file_path in modified_files:
+            # Check if file still has conflict markers
+            has_markers = git_utils.file_has_conflict_markers(
+                self.repo, commit.hexsha, file_path
+            )
+
+            if has_markers:
+                unresolved[file_path] = "Contains conflict markers"
+            else:
+                # Determine appropriate description
+                if file_path in previously_unresolved:
+                    resolved[file_path] = "Resolved by human (was previously unresolved)"
+                elif file_path in conflict_files:
+                    resolved[file_path] = "Resolved by human"
+                else:
+                    resolved[file_path] = "Modified by human"
+
+        # Parse commit message
+        message_lines = commit.message.strip().split("\n")
+        summary = message_lines[0] if message_lines else "Human changes"
+        review_notes = "\n".join(message_lines[1:]).strip() if len(message_lines) > 1 else ""
+
+        return {
+            "response": {
+                "summary": summary,
+                "resolved": resolved,
+                "unresolved": unresolved,
+                "review_notes": review_notes if review_notes else None,
+            },
+            "author": {
+                "name": commit.author.name,
+                "email": commit.author.email,
+                "type": "human",
+            },
+            "commit_sha": commit.hexsha,
+        }
+
+    def sync_human_commits(self, force: bool = False, dry_run: bool = False) -> int:
+        """Scan commits and create solutions for human-made changes.
+
+        Iterates through commits from HEAD to target_branch_sha and creates
+        solution entries for commits that don't have solutions attached.
+
+        Args:
+            force: If True, re-sync commits that already have notes.
+            dry_run: If True, only show what would be synced without making changes.
+
+        Returns:
+            Number of commits that were synced (or would be synced in dry_run mode).
+
+        Raises:
+            click.ClickException: If no note found or operation fails.
+        """
+        commits_to_sync = self.get_unsynced_commits(force=force)
+
+        if not commits_to_sync:
+            click.echo("No commits to sync.")
+            return 0
+
+        click.echo(f"Found {len(commits_to_sync)} commit(s) to sync.")
+
+        if dry_run:
+            click.echo("\nDry run - showing what would be synced:\n")
+            for commit, has_existing_note in commits_to_sync:
+                short_sha = git_utils.short_sha(commit.hexsha)
+                first_line = commit.message.split("\n")[0].strip()
+                status = " (has note, will overwrite)" if has_existing_note else ""
+                click.echo(f"  {short_sha} {first_line}{status}")
+
+                # Show what files would be in the solution
+                modified_files = git_utils.get_commit_modified_files(self.repo, commit)
+                for file_path in modified_files:
+                    has_markers = git_utils.file_has_conflict_markers(
+                        self.repo, commit.hexsha, file_path
+                    )
+                    status = " (UNRESOLVED - has conflict markers)" if has_markers else ""
+                    click.echo(f"    - {file_path}{status}")
+            return len(commits_to_sync)
+
+        # Perform the sync
+        synced_count = 0
+        for commit, has_existing_note in commits_to_sync:
+            short_sha = git_utils.short_sha(commit.hexsha)
+            first_line = commit.message.split("\n")[0].strip()
+
+            click.echo(f"Syncing {short_sha} {first_line}...")
+
+            # Create human solution from commit
+            solution = self.create_human_solution_from_commit(commit)
+
+            # Add to solutions array
+            solution_idx = self.note.add_solution(solution)
+
+            # Save note first (so note_index gets updated properly)
+            self.save_note(self.note)
+
+            # Attach git note to the commit
+            self.add_selective_note(commit.hexsha, [f"solutions[{solution_idx}]"])
+
+            synced_count += 1
+
+            # Show summary
+            resolved_count = len(solution["response"]["resolved"])
+            unresolved_count = len(solution["response"]["unresolved"])
+            click.echo(
+                f"  -> Added solution [{solution_idx}]: "
+                f"{resolved_count} resolved, {unresolved_count} unresolved"
+            )
+
+        click.echo(f"\nSuccessfully synced {synced_count} commit(s).")
+        return synced_count

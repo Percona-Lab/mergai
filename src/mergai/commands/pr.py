@@ -5,6 +5,7 @@ from github import PullRequest as GithubPullRequest
 from github import GithubException
 from ..utils import git_utils
 from ..utils import util
+from ..utils.branch_name_builder import BranchNameBuilder, BranchType
 from typing import Optional, List
 from urllib.parse import urlencode, quote
 
@@ -423,3 +424,133 @@ def show(app: AppContext):
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
+
+
+def _detect_pr_type_from_branch(app: AppContext) -> Optional[str]:
+    """Detect PR type from current branch name.
+
+    Parses the current branch name using the branch config format to determine
+    if it's a 'main' or 'solution' branch.
+
+    Args:
+        app: AppContext with config and repo.
+
+    Returns:
+        'main' or 'solution' if detected, None otherwise.
+    """
+    current_branch = git_utils.get_current_branch(app.repo)
+    parsed = BranchNameBuilder.parse_branch_name_with_config(
+        current_branch, app.config.branch
+    )
+
+    if parsed is None:
+        return None
+
+    if parsed.branch_type == BranchType.MAIN.value:
+        return "main"
+    elif parsed.branch_type == BranchType.SOLUTION.value:
+        return "solution"
+
+    return None
+
+
+def _find_pr_for_branch(
+    app: AppContext, head_branch: str, base_branch: str
+) -> Optional[GithubPullRequest.PullRequest]:
+    """Find an open PR from head_branch to base_branch.
+
+    Args:
+        app: AppContext with GitHub repo.
+        head_branch: Source branch name.
+        base_branch: Target branch name.
+
+    Returns:
+        PullRequest if found, None otherwise.
+    """
+    pulls = app.gh_repo.get_pulls(state="open", head=head_branch, base=base_branch)
+    for pr in pulls:
+        if pr.head.ref == head_branch and pr.base.ref == base_branch:
+            return pr
+    return None
+
+
+@pr.command()
+@click.pass_obj
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Show the new body without updating the PR.",
+)
+@click.argument(
+    "pr_type",
+    type=click.Choice(["main", "solution"], case_sensitive=False),
+    required=False,
+)
+def update(app: AppContext, pr_type: Optional[str], dry_run: bool):
+    """Update an existing pull request's body.
+
+    PR_TYPE specifies which PR to update. If not provided, it will be auto-detected
+    from the current branch name:
+    - If on a 'main' branch -> updates the main PR
+    - If on a 'solution' branch -> updates the solution PR
+
+    The PR body is rebuilt using the current note data, including any solutions
+    added after the PR was created (e.g., human solutions from 'mergai commit sync').
+
+    \b
+    Options:
+        --dry-run   Show the new body without updating the PR.
+
+    \b
+    Examples:
+        mergai pr --repo owner/name update           # Auto-detect PR type from branch
+        mergai pr --repo owner/name update main      # Update main PR body
+        mergai pr --repo owner/name update solution  # Update solution PR body
+        mergai pr --repo owner/name update --dry-run # Preview new body
+    """
+    # Auto-detect PR type if not provided
+    if pr_type is None:
+        pr_type = _detect_pr_type_from_branch(app)
+        if pr_type is None:
+            raise click.ClickException(
+                "Cannot auto-detect PR type from current branch. "
+                "Please specify 'main' or 'solution' explicitly."
+            )
+        click.echo(f"Auto-detected PR type: {pr_type}")
+
+    # Determine branches based on PR type
+    if pr_type.lower() == "solution":
+        head_branch = app.branches.solution_branch
+        base_branch = app.branches.conflict_branch
+        body = _build_solutions_pr_body(app)
+    else:  # main
+        head_branch = app.branches.main_branch
+        base_branch = app.branches.target_branch
+        body = _build_main_pr_body(app)
+
+    if dry_run:
+        click.echo(f"Would update PR from {head_branch} to {base_branch}")
+        click.echo("--- new body ---")
+        click.echo(body)
+        click.echo("--- end ---")
+        return
+
+    # Find the PR
+    pr = _find_pr_for_branch(app, head_branch, base_branch)
+    if pr is None:
+        raise click.ClickException(
+            f"No open PR found from '{head_branch}' to '{base_branch}'. "
+            f"Create one first with 'mergai pr create {pr_type}'."
+        )
+
+    click.echo(f"Updating PR #{pr.number}: {pr.title}")
+    click.echo(f"  from: {head_branch}")
+    click.echo(f"    to: {base_branch}")
+
+    try:
+        pr.edit(body=body)
+        click.echo(f"PR body updated: {pr.html_url}")
+    except GithubException as e:
+        msg = e.data.get("message", str(e)) if isinstance(e.data, dict) else str(e)
+        raise click.ClickException(f"GitHub API error: {msg}") from e

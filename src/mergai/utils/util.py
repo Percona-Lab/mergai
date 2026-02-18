@@ -412,14 +412,20 @@ def conflict_solution_to_markdown(solution: dict) -> str:
 
 SOLUTION_MARKDOWN_TEMPLATE = """\
 
-## Solution Summary
+### Summary
 
 {{ solution.response.summary }}
 
-## Resolved Files
+**By:** {{ format_solution_author(solution) }}
+
+### Resolved Files
 
 {%- if solution.response.resolved | length == 0 %}
 No files were resolved.
+{%- elif is_human_solution(solution) %}
+{%- for file_path in solution.response.resolved.keys() %}
+- `{{ file_path }}`
+{%- endfor %}
 {%- else %}
 | File Path | Resolution |
 |-----------|------------|
@@ -428,10 +434,14 @@ No files were resolved.
 {%- endfor %}
 {%- endif %}
 
-## Unresolved Files
+### Unresolved Files
 
 {%- if solution.response.unresolved | length == 0 %}
 All conflicts have been resolved.
+{%- elif is_human_solution(solution) %}
+{%- for file_path in solution.response.unresolved.keys() %}
+- `{{ file_path }}`
+{%- endfor %}
 {%- else %}
 | File Path | Issue |
 |-----------|-------|
@@ -440,9 +450,11 @@ All conflicts have been resolved.
 {%- endfor %}
 {%- endif %}
 
-## Review Notes
+### Review Notes
 
 {{ solution.response.review_notes if solution.response.review_notes else "No review notes provided." }}
+
+{%- if solution.stats or solution.agent_info %}
 
 <details>
 <summary>Agent Stats</summary>
@@ -462,7 +474,47 @@ All conflicts have been resolved.
 {%- endif %}
 
 </details>
+{%- endif %}
 """
+
+
+def format_solution_author(solution: dict) -> str:
+    """Format the author/agent attribution for a solution.
+
+    Args:
+        solution: Solution dict that may contain agent_info or author fields.
+
+    Returns:
+        Formatted author string for display in markdown.
+        - For AI: "Agent (gemini-cli v1.2.3)"
+        - For Human: "John Doe <john@example.com>"
+        - Fallback: "Unknown"
+    """
+    if "agent_info" in solution:
+        agent = solution["agent_info"]
+        agent_type = agent.get("agent_type", "unknown")
+        version = agent.get("version", "unknown")
+        return f"Agent ({agent_type} v{version})"
+    elif "author" in solution:
+        author = solution["author"]
+        name = author.get("name", "Unknown")
+        email = author.get("email", "")
+        if email:
+            return f"{name} <{email}>"
+        return name
+    return "Unknown"
+
+
+def is_human_solution(solution: dict) -> bool:
+    """Check if a solution was created by a human (not an agent).
+
+    Args:
+        solution: Solution dict that may contain agent_info or author fields.
+
+    Returns:
+        True if the solution has an author with type "human", False otherwise.
+    """
+    return "author" in solution and solution.get("author", {}).get("type") == "human"
 
 
 def solution_to_markdown(solution: dict) -> str:
@@ -470,31 +522,50 @@ def solution_to_markdown(solution: dict) -> str:
 
     This format is optimized for GitHub PR descriptions with:
     - Clear sections for summary, resolved files, and unresolved files
+    - Author/agent attribution
     - Review notes for developers
-    - Stats hidden in a collapsible section
+    - Stats hidden in a collapsible section (for AI solutions)
+    - Simple file lists for human solutions (no description column)
 
     Args:
-        solution: Solution dict with response, stats, and agent_info.
+        solution: Solution dict with response, stats/author, and agent_info/author.
 
     Returns:
         Markdown formatted string suitable for PR body.
     """
-    return render_from_template(SOLUTION_MARKDOWN_TEMPLATE, solution=solution)
+    return render_from_template(
+        SOLUTION_MARKDOWN_TEMPLATE,
+        solution=solution,
+        format_solution_author=format_solution_author,
+        is_human_solution=is_human_solution,
+    )
 
 
 SOLUTIONS_MARKDOWN_TEMPLATE = """\
-{%- for solution in solutions %}
-## Solution {{ loop.index }}{% if loop.length == 1 %}{% endif %}
+{% for solution in solutions %}
+
+## Solution {{ loop.index }}
 {{ solution_to_markdown(solution) }}
-{%- endfor %}
+{% endfor %}
 """
 
 
 def solutions_to_markdown(solutions: list) -> str:
-    md = "# Solution"
+    """Convert a list of solutions to markdown.
+
+    Handles both AI solutions (with agent_info) and human solutions (with author).
+
+    Args:
+        solutions: List of solution dicts.
+
+    Returns:
+        Markdown formatted string with all solutions.
+    """
+    md = "# Solutions"
     md += "\n"
 
     if len(solutions) == 1:
+        md += "\n## Solution 1\n"
         md += solution_to_markdown(solutions[0])
     else:
         md += render_from_template(

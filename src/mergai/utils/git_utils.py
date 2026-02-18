@@ -972,6 +972,77 @@ def get_commit_modified_files(repo: Repo, commit: Commit) -> List[str]:
     return files_modified
 
 
+def get_file_content_at_commit(repo: Repo, commit_sha: str, file_path: str) -> Optional[str]:
+    """Get file content at a specific commit.
+
+    Args:
+        repo: GitPython Repo instance.
+        commit_sha: The commit SHA to get the file from.
+        file_path: Path to the file within the repository.
+
+    Returns:
+        File content as string, or None if file doesn't exist at that commit.
+    """
+    try:
+        commit = repo.commit(commit_sha)
+        blob = commit.tree / file_path
+        return blob.data_stream.read().decode("utf-8", errors="replace")
+    except (KeyError, Exception):
+        return None
+
+
+def file_has_conflict_markers(repo: Repo, commit_sha: str, file_path: str) -> bool:
+    """Check if a file at a specific commit contains unresolved conflict markers.
+
+    Scans the file content for standard git conflict marker patterns:
+    - <<<<<<< (start marker)
+    - ======= (middle marker)
+    - >>>>>>> (end marker)
+
+    Args:
+        repo: GitPython Repo instance.
+        commit_sha: The commit SHA to check the file at.
+        file_path: Path to the file within the repository.
+
+    Returns:
+        True if conflict markers are found, False otherwise.
+        Returns False if file doesn't exist at the commit.
+    """
+    content = get_file_content_at_commit(repo, commit_sha, file_path)
+    if content is None:
+        return False
+
+    # Check for conflict marker patterns at the start of lines
+    # We need at least one start marker and one end marker to consider it a conflict
+    has_start = bool(re.search(r"^<{7}", content, re.MULTILINE))
+    has_end = bool(re.search(r"^>{7}", content, re.MULTILINE))
+
+    return has_start and has_end
+
+
+def file_has_conflict_markers_in_workdir(file_path: str) -> bool:
+    """Check if a file in the working directory contains conflict markers.
+
+    Args:
+        file_path: Path to the file to check.
+
+    Returns:
+        True if conflict markers are found, False otherwise.
+        Returns False if file doesn't exist.
+    """
+    path = Path(file_path)
+    if not path.exists():
+        return False
+
+    try:
+        content = path.read_text()
+        has_start = bool(re.search(r"^<{7}", content, re.MULTILINE))
+        has_end = bool(re.search(r"^>{7}", content, re.MULTILINE))
+        return has_start and has_end
+    except Exception:
+        return False
+
+
 def get_merged_commits(
     repo: Repo,
     target_branch: str,
