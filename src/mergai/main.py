@@ -53,6 +53,9 @@ def register_commands(cli):
     from .commands.merge import merge
     cli.add_command(merge)
 
+    from .commands.finalize import finalize
+    cli.add_command(finalize)
+
 @click.group()
 @click.pass_obj
 @click.option(

@@ -758,6 +758,201 @@ class AppContext:
             f"Successfully squashed {len(commits_with_notes)} commit(s) into {git_utils.short_sha(new_commit_sha)}"
         )
 
+    def finalize(self, mode: str = None):
+        """Finalize the solution PR based on configured mode.
+
+        This method is typically called after a solution PR is merged into the
+        conflict branch. It handles post-merge processing according to the
+        configured finalize mode.
+
+        Args:
+            mode: Override mode from config. Options: 'squash', 'keep', 'fast-forward'.
+                  If None, uses config.finalize.mode.
+
+        Raises:
+            click.ClickException: If mode is invalid or operation fails.
+        """
+        effective_mode = mode or self.config.finalize.mode
+
+        if effective_mode == "squash":
+            self.squash_to_merge()
+        elif effective_mode == "keep":
+            self._finalize_keep()
+        elif effective_mode == "fast-forward":
+            self._finalize_fast_forward()
+        else:
+            raise click.ClickException(
+                f"Invalid finalize mode: '{effective_mode}'. "
+                "Valid options are 'squash', 'keep', or 'fast-forward'."
+            )
+
+    def _finalize_keep(self):
+        """Finalize in 'keep' mode - validate state and print summary.
+
+        This mode validates the repository state and prints a summary of
+        commits without modifying any commits. Useful when you want to
+        preserve the individual commit history from the solution PR.
+
+        Raises:
+            click.ClickException: If merge_info is incomplete or invalid.
+        """
+        # Validate merge_info exists
+        target_branch_sha = self.note.merge_info.target_branch_sha
+        merge_commit_sha = self.note.merge_info.merge_commit_sha
+
+        if not target_branch_sha or not merge_commit_sha:
+            raise click.ClickException(
+                "merge_info is incomplete (missing target_branch_sha or merge_commit). "
+                "Please reinitialize with 'mergai context init <commit>'."
+            )
+
+        # Check if HEAD is already at target_branch_sha (nothing to finalize)
+        head_sha = self.repo.head.commit.hexsha
+        target_sha_full = self.repo.commit(target_branch_sha).hexsha
+
+        if head_sha == target_sha_full:
+            raise click.ClickException(
+                "HEAD is already at target_branch_sha. No commits to finalize."
+            )
+
+        # Collect commits for summary
+        commits_with_notes = self._collect_commits_for_squash(target_branch_sha)
+
+        if not commits_with_notes:
+            raise click.ClickException("No commits found to finalize.")
+
+        # Print validation summary
+        click.echo(f"Finalize mode: keep (commits preserved)")
+        click.echo(
+            f"Commits from HEAD to {git_utils.short_sha(target_branch_sha)}:\n"
+        )
+        for commit, note in commits_with_notes:
+            short_sha = git_utils.short_sha(commit.hexsha)
+            first_line = commit.message.split("\n")[0].strip()
+            click.echo(f"  {short_sha} {first_line}")
+            if note:
+                fields = self._get_note_fields_summary(note)
+                click.echo(f"              note: {fields}")
+            else:
+                click.echo(f"              note: (none)")
+
+        click.echo(f"\nTotal: {len(commits_with_notes)} commit(s)")
+        click.echo("No changes made (keep mode).")
+
+    def _get_note_fields_summary(self, note: dict) -> str:
+        """Get a summary of fields present in a note dict.
+
+        Args:
+            note: The note dictionary from a git note.
+
+        Returns:
+            A comma-separated string of field names present in the note.
+            For solutions, shows count if multiple (e.g., "solutions(2)").
+        """
+        fields = []
+
+        # Check for each possible field
+        if "merge_info" in note:
+            fields.append("merge_info")
+        if "conflict_context" in note:
+            fields.append("conflict_context")
+        if "merge_context" in note:
+            fields.append("merge_context")
+        if "solution" in note:
+            # Single solution (from selective note)
+            fields.append("solution")
+        if "solutions" in note:
+            # Array of solutions
+            count = len(note["solutions"])
+            if count == 1:
+                fields.append("solution")
+            else:
+                fields.append(f"solutions({count})")
+        if "merge_description" in note:
+            fields.append("merge_description")
+        if "pr_comments" in note:
+            fields.append("pr_comments")
+        if "user_comment" in note:
+            fields.append("user_comment")
+
+        return ", ".join(fields) if fields else "(empty)"
+
+    def _finalize_fast_forward(self):
+        """Finalize in 'fast-forward' mode - remove PR merge commit.
+
+        This mode removes the GitHub PR merge commit to simulate a fast-forward
+        merge. It keeps the original solution commits with their mergai notes
+        intact.
+
+        GitHub PR merge commits have two parents:
+        - First parent: The base branch (conflict branch) HEAD before merge
+        - Second parent: The head branch (solution branch) with the actual commits
+
+        We want to reset to the second parent (solution branch), which contains
+        the linear history of conflict commit -> solution commit(s).
+
+        The operation only proceeds if:
+        1. Working directory is clean (no uncommitted changes)
+        2. HEAD is a merge commit (has 2 parents)
+        3. HEAD has no mergai note attached
+        4. The second parent of HEAD has a mergai note attached
+
+        If HEAD already has a note or is not a merge commit, the command
+        assumes the PR was merged with fast-forward and does nothing.
+
+        Raises:
+            click.ClickException: If working directory is dirty or validation fails.
+        """
+        # Check for uncommitted changes
+        if self.repo.is_dirty(untracked_files=False):
+            raise click.ClickException(
+                "Working directory has uncommitted changes. "
+                "Please commit or stash them before finalizing."
+            )
+
+        head_commit = self.repo.head.commit
+        head_sha = head_commit.hexsha
+        short_head_sha = git_utils.short_sha(head_sha)
+
+        # Check if HEAD has a mergai note
+        head_note = self.try_get_note_from_commit(head_sha)
+        if head_note is not None:
+            click.echo(f"HEAD ({short_head_sha}) already has a mergai note attached.")
+            click.echo("Assuming PR was merged with fast-forward. Nothing to do.")
+            return
+
+        # Check if HEAD is a merge commit (has 2 parents)
+        if len(head_commit.parents) < 2:
+            click.echo(f"HEAD ({short_head_sha}) is not a merge commit.")
+            click.echo("Assuming PR was merged with fast-forward. Nothing to do.")
+            return
+
+        # HEAD is a merge commit without a note - this is likely the GitHub PR merge commit
+        # Second parent is the solution branch (the one being merged in)
+        second_parent = head_commit.parents[1]
+        second_parent_sha = second_parent.hexsha
+        short_second_parent_sha = git_utils.short_sha(second_parent_sha)
+
+        # Check if the second parent has a mergai note
+        second_parent_note = self.try_get_note_from_commit(second_parent_sha)
+        if second_parent_note is None:
+            raise click.ClickException(
+                f"Second parent ({short_second_parent_sha}) has no mergai note attached.\n"
+                "Cannot safely remove the merge commit. Expected the solution branch "
+                "tip to have a note.\n\n"
+                "This might indicate an unexpected repository state. Please verify manually."
+            )
+
+        # All checks passed - reset to second parent (solution branch tip)
+        first_line = head_commit.message.split("\n")[0].strip()
+        click.echo(f"Removing PR merge commit: {short_head_sha} {first_line}")
+        click.echo(f"Resetting HEAD to: {short_second_parent_sha}")
+
+        self.repo.git.reset("--hard", second_parent_sha)
+
+        click.echo(f"\nSuccessfully removed merge commit.")
+        click.echo(f"HEAD is now at {short_second_parent_sha}")
+
     def rebuild_note_from_commits(self) -> MergaiNote:
         """Rebuild note.json from git commit notes.
 

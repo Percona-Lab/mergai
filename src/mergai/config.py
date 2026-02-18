@@ -254,6 +254,49 @@ class CommitConfig:
 
 
 @dataclass
+class FinalizeConfig:
+    """Configuration for the finalize command.
+
+    Controls how solution PRs are finalized after being merged into the
+    conflict branch.
+
+    Attributes:
+        mode: How to finalize the solution PR. Options:
+            - 'squash': Squash all commits into a merge commit with combined
+                       notes. This creates a clean history with a single merge
+                       commit. (Default)
+            - 'keep': Validate the repository state and print a summary without
+                     modifying any commits. Useful when you want to preserve
+                     the individual commit history from the solution PR.
+            - 'fast-forward': Remove the GitHub PR merge commit to simulate a
+                             fast-forward merge. Keeps the original solution
+                             commits with their notes intact. Only removes the
+                             merge commit if HEAD is a merge commit without a
+                             mergai note and its first parent has a note.
+
+    Example YAML config:
+        finalize:
+          mode: squash  # or 'keep' or 'fast-forward'
+    """
+
+    mode: str = "squash"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "FinalizeConfig":
+        """Create a FinalizeConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            FinalizeConfig instance with values from data.
+        """
+        return cls(
+            mode=data.get("mode", cls.mode),
+        )
+
+
+@dataclass
 class PromptConfig:
     """Configuration for prompt generation.
 
@@ -421,6 +464,7 @@ class MergaiConfig:
         prompt: Configuration for prompt generation.
         commit: Configuration for commit message generation.
         pr: Configuration for pull request titles.
+        finalize: Configuration for the finalize command.
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
 
@@ -430,6 +474,7 @@ class MergaiConfig:
     prompt: PromptConfig = field(default_factory=PromptConfig)
     commit: CommitConfig = field(default_factory=CommitConfig)
     pr: PRConfig = field(default_factory=PRConfig)
+    finalize: FinalizeConfig = field(default_factory=FinalizeConfig)
     _raw: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -500,6 +545,14 @@ class MergaiConfig:
         pr_data = data.get("pr", {})
         pr_config = PRConfig.from_dict(pr_data) if pr_data else PRConfig()
 
+        # Parse finalize section if present
+        finalize_data = data.get("finalize", {})
+        finalize_config = (
+            FinalizeConfig.from_dict(finalize_data)
+            if finalize_data
+            else FinalizeConfig()
+        )
+
         return cls(
             fork=fork_config,
             resolve=resolve_config,
@@ -507,6 +560,7 @@ class MergaiConfig:
             prompt=prompt_config,
             commit=commit_config,
             pr=pr_config,
+            finalize=finalize_config,
             _raw=data,
         )
 
