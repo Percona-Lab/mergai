@@ -1314,6 +1314,52 @@ class MergaiNote:
                 return (i, self.solutions[i])
         return None
 
+    def get_uncommitted_fields(self) -> List[str]:
+        """Get list of fields that are present in the note but not in note_index.
+
+        Returns:
+            List of field names that have data but are not tracked in note_index.
+        """
+        uncommitted = []
+
+        # Get all committed fields from note_index
+        committed_fields = set()
+        if self.has_note_index:
+            for entry in self.note_index:
+                committed_fields.update(entry.get("fields", []))
+
+        # Check each field
+        if self.has_conflict_context and "conflict_context" not in committed_fields:
+            uncommitted.append("conflict_context")
+
+        if self.has_merge_context and "merge_context" not in committed_fields:
+            uncommitted.append("merge_context")
+
+        if self.has_solutions:
+            committed_solution_indices = self._get_committed_solution_indices()
+            for idx in range(len(self.solutions)):
+                if idx not in committed_solution_indices:
+                    uncommitted.append(f"solutions[{idx}]")
+
+        if self.has_merge_description and "merge_description" not in committed_fields:
+            uncommitted.append("merge_description")
+
+        if self.has_pr_comments and "pr_comments" not in committed_fields:
+            uncommitted.append("pr_comments")
+
+        if self.has_user_comment and "user_comment" not in committed_fields:
+            uncommitted.append("user_comment")
+
+        return uncommitted
+
+    def is_fully_committed(self) -> bool:
+        """Check if all fields in the note are tracked in note_index.
+
+        Returns:
+            True if all present fields have been committed, False otherwise.
+        """
+        return len(self.get_uncommitted_fields()) == 0
+
     # --- Serialization ---
 
     def to_dict(self) -> dict:

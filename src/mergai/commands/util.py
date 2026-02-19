@@ -6,7 +6,7 @@ from ..utils import util
 from ..utils.output import OutputFormat, format_option
 from ..utils import formatters
 from ..app import AppContext
-from ..models import ConflictContext, MergeInfo, MergeContext
+from ..models import ConflictContext, MergeInfo, MergeContext, MergaiNote
 
 
 @click.command()
@@ -183,6 +183,7 @@ def convert_note_to_text_summary(note: dict) -> str:
 
     Shows what fields are present in note.json and their basic info,
     including the note_index which tracks which commits have which fields.
+    Also shows commit status - whether all fields are committed to git notes.
 
     Args:
         note: The note dict from note.json.
@@ -191,6 +192,7 @@ def convert_note_to_text_summary(note: dict) -> str:
         Text summary of the note contents.
     """
     output = []
+    
     output.append("Note Summary:")
     output.append("")
 
@@ -301,7 +303,11 @@ def convert_note_to_text_summary(note: dict) -> str:
             output.append(f"    Agent: {agent.get('agent_type', 'unknown')} v{agent.get('version', '?')}")
         output.append("")
 
-    # Note Index - tracks which commits have which fields
+    # Note Index and Commit Status - tracks which commits have which fields
+    # Check commit status using MergaiNote model
+    mergai_note = MergaiNote.from_dict(note)
+    uncommitted_fields = mergai_note.get_uncommitted_fields()
+    
     if "note_index" in note:
         ni = note["note_index"]
         output.append(f"  Note Index ({len(ni)} entries):")
@@ -309,6 +315,18 @@ def convert_note_to_text_summary(note: dict) -> str:
             sha = entry.get("sha", "unknown")[:11]
             fields = entry.get("fields", [])
             output.append(f"    {sha}: {', '.join(fields)}")
+        output.append("")
+    
+    # Show commit status
+    if uncommitted_fields:
+        output.append("  Uncommitted Changes:")
+        for field in uncommitted_fields:
+            output.append(f"    - {field}")
+        output.append("")
+        output.append("  Run 'mergai save' to commit these changes to git notes.")
+        output.append("")
+    else:
+        output.append("  Commit Status: All fields committed")
         output.append("")
 
     return "\n".join(output)
