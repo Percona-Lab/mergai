@@ -244,6 +244,7 @@ def convert_note_to_text_summary(note: dict) -> str:
             response = sol.get("response", {})
             resolved = len(response.get("resolved", {}))
             unresolved = len(response.get("unresolved", {}))
+            modified = len(response.get("modified", {}))
             total = resolved + unresolved
             
             # Author info
@@ -258,7 +259,13 @@ def convert_note_to_text_summary(note: dict) -> str:
                 author = "unknown"
             
             output.append(f"    [{idx}] By: {author}")
-            output.append(f"        Resolved: {resolved}/{total}, Unresolved: {unresolved}")
+            # Build stats line: "Resolved: X/Y" + optional ", Unresolved: Z" + optional ", Modified: M"
+            stats_line = f"        Resolved: {resolved}/{total}"
+            if unresolved > 0:
+                stats_line += f", Unresolved: {unresolved}"
+            if modified > 0:
+                stats_line += f", Modified: {modified}"
+            output.append(stats_line)
             if sol.get("commit_sha"):
                 output.append(f"        Commit: {sol['commit_sha'][:11]}")
         output.append("")

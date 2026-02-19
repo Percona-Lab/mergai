@@ -113,19 +113,23 @@ def get_comments_stats(comments: dict) -> dict:
 
 
 def get_solution_stats(solution: dict) -> dict:
-    """Get statistics about a solution's resolved/unresolved files.
+    """Get statistics about a solution's resolved/unresolved/modified files.
 
     Args:
-        solution: Solution dict with response containing resolved/unresolved.
+        solution: Solution dict with response containing resolved/unresolved/modified.
 
     Returns:
-        Dict with resolved_files, unresolved_files, and total_files counts.
+        Dict with resolved_files, unresolved_files, modified_files, and total_files counts.
+        Note: total_files is the count of conflict files (resolved + unresolved),
+        not including modified files which are additional changes.
     """
     stats = {}
     resolved_count = len(solution.get("response", {}).get("resolved", {}))
     unresolved_count = len(solution.get("response", {}).get("unresolved", {}))
+    modified_count = len(solution.get("response", {}).get("modified", {}))
     stats["resolved_files"] = resolved_count
     stats["unresolved_files"] = unresolved_count
+    stats["modified_files"] = modified_count
     stats["total_files"] = resolved_count + unresolved_count
     return stats
 

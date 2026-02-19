@@ -32,6 +32,14 @@ The JSON object MUST have the following format:
   "unresolved": {
     "file3": "reason for not changing the file3"
   },
+  "modified": {
+    "file4": "explanation of changes for file4"
+  },
   "review_notes": "additional notes for developers reviewing the changes"
 }
 ```
+
+Field descriptions:
+- `resolved`: Files from the conflict list that were successfully resolved.
+- `unresolved`: Files from the conflict list that could not be resolved (with reason).
+- `modified`: Files that were modified as part of the solution but were NOT in the original conflict list. Use this for any additional files you need to change to complete the resolution (e.g., fixing related code, updating imports, etc.).

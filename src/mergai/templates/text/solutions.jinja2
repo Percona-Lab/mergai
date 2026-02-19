@@ -9,4 +9,7 @@ Solutions ({{ solutions | length }}):
 {%- endif %}
     Resolved: {{ solution.response.resolved | length }} files
     Unresolved: {{ solution.response.unresolved | length }} files
+{%- if (solution.response.modified | default({})) | length > 0 %}
+    Modified: {{ solution.response.modified | length }} files
+{%- endif %}
 {% endfor %}

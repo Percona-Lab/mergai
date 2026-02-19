@@ -1237,9 +1237,10 @@ class AppContext:
         if self.note.has_conflict_context:
             conflict_files = set(self.note.conflict_context.files)
 
-        # Categorize files as resolved or unresolved
+        # Categorize files as resolved, unresolved, or modified
         resolved = {}
         unresolved = {}
+        modified = {}
 
         for file_path in modified_files:
             # Check if file still has conflict markers
@@ -1256,7 +1257,8 @@ class AppContext:
                 elif file_path in conflict_files:
                     resolved[file_path] = "Resolved by human"
                 else:
-                    resolved[file_path] = "Modified by human"
+                    # Files not in conflict list go to modified
+                    modified[file_path] = "Modified by human"
 
         # Parse commit message
         message_lines = commit.message.strip().split("\n")
@@ -1268,6 +1270,7 @@ class AppContext:
                 "summary": summary,
                 "resolved": resolved,
                 "unresolved": unresolved,
+                "modified": modified,
                 "review_notes": review_notes if review_notes else None,
             },
             "author": {
@@ -1345,9 +1348,15 @@ class AppContext:
             # Show summary
             resolved_count = len(solution["response"]["resolved"])
             unresolved_count = len(solution["response"]["unresolved"])
+            modified_count = len(solution["response"].get("modified", {}))
+            summary_parts = [f"{resolved_count} resolved"]
+            if unresolved_count > 0:
+                summary_parts.append(f"{unresolved_count} unresolved")
+            if modified_count > 0:
+                summary_parts.append(f"{modified_count} modified")
             click.echo(
                 f"  -> Added solution [{solution_idx}]: "
-                f"{resolved_count} resolved, {unresolved_count} unresolved"
+                f"{', '.join(summary_parts)}"
             )
 
         click.echo(f"\nSuccessfully synced {synced_count} commit(s).")

@@ -28,6 +28,18 @@ All conflicts have been resolved.
 {% endfor %}
 {% endif %}
 
+## Modified files
+{% if (solution.response.modified | default({})) | length == 0 %}
+No additional files were modified.
+{% else %}
+
+| File Path | Explanation |
+|-----------|-------------|
+{% for file_path, explanation in solution.response.modified.items() %}
+| `{{ file_path }}` | {{ explanation }} |
+{% endfor %}
+{% endif %}
+
 ## Review Notes
 
 {{ solution.response.review_notes if solution.response.review_notes else "No review notes provided." }}

@@ -36,6 +36,22 @@ All conflicts have been resolved.
 {% endfor %}
 {% endif %}
 
+### Modified Files
+{% if (solution.response.modified | default({})) | length == 0 %}
+No additional files were modified.
+{% elif is_human_solution(solution) %}
+{% for file_path in solution.response.modified.keys() %}
+- `{{ file_path }}`
+{% endfor %}
+{% else %}
+
+| File Path | Explanation |
+|-----------|-------------|
+{% for file_path, explanation in solution.response.modified.items() %}
+| `{{ file_path }}` | {{ explanation }} |
+{% endfor %}
+{% endif %}
+
 ### Review Notes
 
 {{ solution.response.review_notes if solution.response.review_notes else "No review notes provided." }}

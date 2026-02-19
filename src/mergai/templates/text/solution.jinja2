@@ -24,6 +24,15 @@ Conflict Solution:
 {%- endfor %}
 {%- endif %}
 
+  Modified Files ({{ (solution.response.modified | default({})) | length }}):
+{%- if (solution.response.modified | default({})) | length == 0 %}
+    (none)
+{%- else %}
+{%- for file_path, explanation in solution.response.modified.items() %}
+    - {{ file_path }}: {{ explanation }}
+{%- endfor %}
+{%- endif %}
+
   Review Notes:
     {{ solution.response.review_notes if solution.response.review_notes else "(none)" }}
 {% if solution.stats and solution.stats.models %}

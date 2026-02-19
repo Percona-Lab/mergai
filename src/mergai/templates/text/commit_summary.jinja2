@@ -32,7 +32,7 @@ Content:
 {%- if note.solutions is defined %}
   - Solutions ({{ note.solutions | length }})
 {%- for solution in note.solutions %}
-    [{{ loop.index0 }}] Resolved Files: {{ get_solution_stats(solution).resolved_files }}/{{ get_solution_stats(solution).total_files }}{% if get_solution_stats(solution).unresolved_files > 0 %}, Unresolved: {{ get_solution_stats(solution).unresolved_files }}{% endif %}
+    [{{ loop.index0 }}] Resolved Files: {{ get_solution_stats(solution).resolved_files }}/{{ get_solution_stats(solution).total_files }}{% if get_solution_stats(solution).unresolved_files > 0 %}, Unresolved: {{ get_solution_stats(solution).unresolved_files }}{% endif %}{% if get_solution_stats(solution).modified_files > 0 %}, Modified: {{ get_solution_stats(solution).modified_files }}{% endif %}
 
 {%- endfor %}
 {%- elif note.solution is defined %}
@@ -40,6 +40,9 @@ Content:
     - Resolved Files: {{ get_solution_stats(note.solution).resolved_files }}/{{ get_solution_stats(note.solution).total_files }}
 {%- if get_solution_stats(note.solution).unresolved_files > 0 %}
     - Unresolved Files: {{ get_solution_stats(note.solution).unresolved_files }}/{{ get_solution_stats(note.solution).total_files }}
+{%- endif %}
+{%- if get_solution_stats(note.solution).modified_files > 0 %}
+    - Modified Files: {{ get_solution_stats(note.solution).modified_files }}
 {%- endif %}
 {%- endif %}
 {%- if note.merge_description is defined %}
