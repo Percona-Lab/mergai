@@ -251,7 +251,9 @@ def convert_note_to_text_summary(note: dict) -> str:
                 agent = sol["agent_info"]
                 author = f"{agent.get('agent_type', 'unknown')} v{agent.get('version', '?')}"
             elif "author" in sol:
-                author = sol["author"].get("name", "unknown")
+                name = sol["author"].get("name", "unknown")
+                email = sol["author"].get("email", "")
+                author = f"{name} <{email}>" if email else name
             else:
                 author = "unknown"
             
