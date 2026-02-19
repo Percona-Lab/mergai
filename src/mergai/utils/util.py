@@ -9,27 +9,13 @@ import os
 import shutil
 import subprocess
 import sys
-import json
-import git
 
-from typing import Optional
 from . import git_utils
 from jinja2 import Template
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
 from datetime import datetime, timezone
-from ..models import (
-    MergeInfo,
-    MergeContext,
-    ConflictContext,
-    ContextSerializationConfig,
-    MarkdownConfig,
-    MarkdownFormat,
-    EnhancedCommit,
-)
-
-from ..config import BranchConfig
 
 
 def gh_auth_token() -> str:
@@ -172,47 +158,3 @@ def format_commit_info_oneline(commit) -> str:
 def format_number(n: int) -> str:
     """Format a number with thousand separators."""
     return f"{n:,}"
-
-
-# =============================================================================
-# Backward Compatibility Re-exports
-# =============================================================================
-# These are re-exported from formatters.py for backward compatibility.
-# New code should import directly from utils.formatters.
-
-from .formatters import (
-    # Helper functions
-    format_solution_author,
-    is_human_solution,
-    get_comments_stats,
-    get_solution_stats,
-    # MergeInfo formatters
-    merge_info_to_markdown,
-    merge_info_to_str,
-    # ConflictContext formatters
-    conflict_context_to_markdown,
-    conflict_context_to_str,
-    # MergeContext formatters
-    merge_context_to_markdown,
-    merge_context_to_str,
-    # Solution formatters
-    conflict_solution_to_markdown,
-    conflict_solution_to_str,
-    solution_to_markdown,
-    solutions_to_markdown,
-    # PR Comments formatters
-    pr_comments_to_markdown,
-    pr_comments_to_str,
-    # User Comment formatters
-    user_comment_to_markdown,
-    user_comment_to_str,
-    # Merge Description formatters
-    merge_description_to_markdown,
-    merge_description_to_str,
-    # Commit Summary formatters
-    commit_note_to_summary_markdown,
-    commit_note_to_summary_json,
-    commit_note_to_summary_text,
-    commit_note_to_summary_str,
-    commit_to_summary_str,
-)

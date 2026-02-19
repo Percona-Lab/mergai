@@ -4,7 +4,6 @@ from ..models import MarkdownConfig
 from github import PullRequest as GithubPullRequest
 from github import GithubException
 from ..utils import git_utils
-from ..utils import util
 from ..utils import formatters
 from ..utils.branch_name_builder import BranchNameBuilder, BranchType
 from typing import Optional, List
