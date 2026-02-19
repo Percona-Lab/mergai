@@ -399,21 +399,20 @@ def convert_note(
 
 @click.command()
 @click.pass_obj
-@click.option("--pretty", is_flag=True, help="Pretty-print the JSON output.")
 @format_option(default=OutputFormat.TEXT)
-def status(app: AppContext, format: str, pretty: bool):
+def status(app: AppContext, format: str):
     """Show current note status from the state store.
 
     Text format (default): Shows a summary of what's in note.json
     Markdown format: Shows full details of all note sections
-    JSON format: Shows raw note.json content
+    JSON format: Shows raw note.json content (pretty-printed)
     """
     if not app.has_note:
         click.echo("No note found in the state store.")
         exit(0)
     note_dict = app.note.to_dict()
     util.print_or_page(
-        convert_note(note_dict, format=format, repo=app.repo, pretty=pretty),
+        convert_note(note_dict, format=format, repo=app.repo, pretty=True),
         format=format,
     )
 
