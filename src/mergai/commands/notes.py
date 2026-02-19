@@ -741,3 +741,82 @@ def status(app: AppContext, verbose: bool):
         click.echo(
             f"Run 'git update-ref -d refs/notes/{NOTES_REMOTE_TMP_REF}' to clean up."
         )
+
+
+@notes.command()
+@click.pass_obj
+@click.argument("commit")
+@click.option(
+    "--marker/--no-marker",
+    "remove_marker",
+    default=True,
+    help="Also remove the marker note (default: yes)",
+)
+@click.option(
+    "-f",
+    "--force",
+    "force",
+    is_flag=True,
+    default=False,
+    help="Don't ask for confirmation",
+)
+def remove(app: AppContext, commit: str, remove_marker: bool, force: bool):
+    """Remove a note from a commit.
+
+    This removes the mergai note (and optionally the marker note) from
+    the specified commit. The commit itself is not modified.
+
+    \b
+    Examples:
+        mergai notes remove abc123        # Remove note from commit abc123
+        mergai notes remove HEAD          # Remove note from HEAD commit
+        mergai notes remove abc123 --no-marker  # Keep the marker note
+        mergai notes remove abc123 -f     # Don't ask for confirmation
+    """
+    # Resolve commit SHA
+    try:
+        resolved_commit = app.repo.commit(commit)
+        commit_sha = resolved_commit.hexsha
+    except Exception as e:
+        raise click.ClickException(f"Cannot resolve commit '{commit}': {e}")
+
+    # Check if note exists
+    note_content = get_note_content(app.repo, NOTES_REF, commit_sha)
+    if note_content is None:
+        click.echo(f"No mergai note found for commit {short_sha(commit_sha)}.")
+        return
+
+    # Show what will be removed
+    click.echo(f"Commit: {short_sha(commit_sha)}")
+    click.echo(f"  Message: {resolved_commit.summary}")
+    click.echo(f"  Note fields: {format_note_summary(note_content)}")
+
+    # Check for marker
+    has_marker = get_note_content(app.repo, NOTES_MARKER_REF, commit_sha) is not None
+
+    if remove_marker and has_marker:
+        click.echo(f"  Marker note: will be removed")
+    elif has_marker:
+        click.echo(f"  Marker note: will be kept (use --marker to remove)")
+
+    # Confirm
+    if not force:
+        click.echo("")
+        if not click.confirm("Remove this note?"):
+            click.echo("Aborted.")
+            return
+
+    # Remove the note
+    try:
+        app.repo.git.notes("--ref", NOTES_REF, "remove", commit_sha)
+        click.echo(f"Removed mergai note from {short_sha(commit_sha)}.")
+    except Exception as e:
+        raise click.ClickException(f"Failed to remove note: {e}")
+
+    # Remove marker if requested
+    if remove_marker and has_marker:
+        try:
+            app.repo.git.notes("--ref", NOTES_MARKER_REF, "remove", commit_sha)
+            click.echo(f"Removed marker note from {short_sha(commit_sha)}.")
+        except Exception as e:
+            click.echo(f"Warning: Failed to remove marker note: {e}", err=True)

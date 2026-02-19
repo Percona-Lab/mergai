@@ -1108,6 +1108,44 @@ class AppContext:
         # Convert to MergaiNote
         return MergaiNote.from_dict(note_dict, self.repo)
 
+    def _is_pr_merge_commit(self, commit: git.Commit) -> bool:
+        """Check if a commit is a GitHub PR merge commit.
+
+        A PR merge commit is identified by:
+        1. It's a merge commit (2 parents)
+        2. The first parent is on the conflict branch lineage (has conflict_context)
+        3. The second parent is on the solution branch (the branch being merged in)
+
+        This detects commits like "Merge pull request #123 from user/solution-branch"
+        which should not be treated as human solution commits.
+
+        Args:
+            commit: The commit to check.
+
+        Returns:
+            True if this is a PR merge commit, False otherwise.
+        """
+        if len(commit.parents) != 2:
+            return False
+
+        # First parent should be on the conflict branch - check if it has conflict_context
+        # or if it's an ancestor of the conflict branch tip
+        first_parent = commit.parents[0]
+        first_parent_note = self.get_note_from_commit(first_parent.hexsha)
+        
+        # If first parent has conflict_context, this is likely a PR merge into conflict branch
+        if first_parent_note is not None and "conflict_context" in first_parent_note:
+            return True
+
+        # Also check if first parent is a previous PR merge commit (chain of PR merges)
+        # by checking if it's a merge commit whose first parent has conflict_context
+        if len(first_parent.parents) == 2:
+            grandparent_note = self.get_note_from_commit(first_parent.parents[0].hexsha)
+            if grandparent_note is not None and "conflict_context" in grandparent_note:
+                return True
+
+        return False
+
     def get_unsynced_commits(
         self, force: bool = False
     ) -> List[Tuple[git.Commit, bool]]:
@@ -1121,7 +1159,7 @@ class AppContext:
         Skips:
         - Commits that already have solutions (unless force=True)
         - Commits with conflict_context or merge_context (mergai-managed commits)
-        - Merge commits with no file changes (PR merge commits)
+        - PR merge commits (merge commits that merge solution branch into conflict branch)
 
         Args:
             force: If True, include commits that already have notes.
@@ -1153,11 +1191,10 @@ class AppContext:
                 "conflict_context" in git_note or "merge_context" in git_note
             )
 
-            # Skip merge commits that have no file changes (GitHub PR merge commits)
-            if len(commit.parents) > 1:
-                modified_files = git_utils.get_commit_modified_files(self.repo, commit)
-                if not modified_files:
-                    continue
+            # Skip PR merge commits (merge commits that merge solution branch into conflict branch)
+            # These are GitHub-generated commits like "Merge pull request #123..."
+            if self._is_pr_merge_commit(commit):
+                continue
 
             # Skip mergai-managed commits (conflict/merge context) - these should never be synced
             if has_context:
