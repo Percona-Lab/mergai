@@ -52,15 +52,7 @@ class PromptBuilder:
 
         Returns:
             The complete prompt string for the AI agent.
-
-        Raises:
-            ValueError: If solutions already exist in the note.
         """
-        if self.note.has_solutions:
-            raise ValueError(
-                "Current note already has solutions. Cannot build resolve prompt "
-                "for an existing solution. Please drop existing solutions first."
-            )
 
         system_prompt_resolve = prompts.load_system_prompt_resolve()
         project_invariants = util.load_if_exists(".mergai/invariants.md")
@@ -99,15 +91,7 @@ class PromptBuilder:
 
         Returns:
             The complete prompt string for the AI agent.
-
-        Raises:
-            ValueError: If solutions already exist in the note.
         """
-        if self.note.has_solutions:
-            raise ValueError(
-                "Current note already has solutions. Cannot build describe prompt "
-                "for an existing solution. Please drop existing solutions first."
-            )
 
         system_prompt_describe = prompts.load_system_prompt_describe()
         prompt = system_prompt_describe + "\n\n"
