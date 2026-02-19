@@ -455,6 +455,159 @@ class MergePicksConfig:
 
 
 @dataclass
+class GitNotesConfig:
+    """Configuration for git notes in the config command.
+
+    Controls notes display in git log and marker text content.
+
+    Attributes:
+        display: Whether to configure notes.displayRef so mergai markers
+            appear in git log output. The ref is always refs/notes/mergai-marker.
+        marker_text: Text to display in git log for commits with mergai notes.
+            This is the content of the mergai-marker note.
+
+    Example YAML config:
+        config:
+          git:
+            notes:
+              display: true
+              marker_text: "mergai note available, use `mergai show <commit>` to view it."
+    """
+
+    display: bool = True
+    marker_text: str = "mergai note available, use `mergai show <commit>` to view it."
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "GitNotesConfig":
+        """Create a GitNotesConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            GitNotesConfig instance with values from data.
+        """
+        return cls(
+            display=data.get("display", cls.display),
+            marker_text=data.get("marker_text", cls.marker_text),
+        )
+
+
+@dataclass
+class GitInitConfig:
+    """Git configuration settings for the config command.
+
+    Controls what git config values are set when running 'mergai config'.
+
+    Attributes:
+        conflictstyle: Value for merge.conflictstyle (default: "diff3").
+            Using diff3 provides better conflict context by including the
+            base version in conflict markers.
+        notes: Configuration for git notes display and marker text.
+
+    Example YAML config:
+        config:
+          git:
+            conflictstyle: diff3
+            notes:
+              display: true
+              marker_text: "MergAI note available"
+    """
+
+    conflictstyle: str = "diff3"
+    notes: GitNotesConfig = field(default_factory=GitNotesConfig)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "GitInitConfig":
+        """Create a GitInitConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            GitInitConfig instance with values from data.
+        """
+        notes_data = data.get("notes", {})
+        return cls(
+            conflictstyle=data.get("conflictstyle", cls.conflictstyle),
+            notes=GitNotesConfig.from_dict(notes_data),
+        )
+
+
+@dataclass
+class CompletionInitConfig:
+    """Shell completion configuration for the config command.
+
+    Controls shell completion setup when running 'mergai config'.
+
+    Attributes:
+        shell: Shell type for completion (default: "bash").
+            Supported values: "bash", "zsh", "fish".
+
+    Example YAML config:
+        config:
+          completion:
+            shell: bash
+    """
+
+    shell: str = "bash"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CompletionInitConfig":
+        """Create a CompletionInitConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            CompletionInitConfig instance with values from data.
+        """
+        return cls(
+            shell=data.get("shell", cls.shell),
+        )
+
+
+@dataclass
+class InitConfig:
+    """Configuration for the config command.
+
+    Controls what gets configured when running 'mergai config'.
+
+    Attributes:
+        git: Git configuration settings to apply.
+        completion: Shell completion configuration.
+
+    Example YAML config:
+        config:
+          git:
+            conflictstyle: diff3
+            notes_display_ref: refs/notes/mergai-marker
+          completion:
+            shell: bash
+    """
+
+    git: GitInitConfig = field(default_factory=GitInitConfig)
+    completion: CompletionInitConfig = field(default_factory=CompletionInitConfig)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "InitConfig":
+        """Create an InitConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            InitConfig instance with values from data.
+        """
+        git_data = data.get("git", {})
+        completion_data = data.get("completion", {})
+        return cls(
+            git=GitInitConfig.from_dict(git_data),
+            completion=CompletionInitConfig.from_dict(completion_data),
+        )
+
+
+@dataclass
 class MergaiConfig:
     """Configuration settings for MergAI.
 
@@ -468,6 +621,7 @@ class MergaiConfig:
         commit: Configuration for commit message generation.
         pr: Configuration for pull request titles.
         finalize: Configuration for the finalize command.
+        config: Configuration for the 'mergai config' command.
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
 
@@ -478,6 +632,7 @@ class MergaiConfig:
     commit: CommitConfig = field(default_factory=CommitConfig)
     pr: PRConfig = field(default_factory=PRConfig)
     finalize: FinalizeConfig = field(default_factory=FinalizeConfig)
+    config: InitConfig = field(default_factory=InitConfig)
     _raw: Dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -556,6 +711,10 @@ class MergaiConfig:
             else FinalizeConfig()
         )
 
+        # Parse config section if present (for 'mergai config' command)
+        config_section_data = data.get("config", {})
+        config_config = InitConfig.from_dict(config_section_data) if config_section_data else InitConfig()
+
         return cls(
             fork=fork_config,
             resolve=resolve_config,
@@ -564,6 +723,7 @@ class MergaiConfig:
             commit=commit_config,
             pr=pr_config,
             finalize=finalize_config,
+            config=config_config,
             _raw=data,
         )
 

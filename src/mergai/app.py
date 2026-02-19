@@ -328,7 +328,7 @@ class AppContext:
             "add",
             "-f",
             "-m",
-            "MergaAI note available, use `mergai show <commit>` to view it.",
+            self.config.config.git.notes.marker_text,
             commit,
         )
 
@@ -387,7 +387,7 @@ class AppContext:
                 "add",
                 "-f",
                 "-m",
-                "MergaAI note available, use `mergai show <commit>` to view it.",
+                self.config.config.git.notes.marker_text,
                 commit,
             )
         finally:
