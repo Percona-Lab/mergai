@@ -582,14 +582,16 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
         output_str += f"  - Solutions ({len(note['solutions'])})\n"
         for idx, solution in enumerate(note["solutions"]):
             stats = get_solution_stats(solution)
-            output_str += f"    [{idx}] Resolved Files: {stats['resolved_files']}/{stats['total_files']}"
+            author = format_solution_author(solution)
+            output_str += f"    [{idx}] {author}: Resolved Files: {stats['resolved_files']}/{stats['total_files']}"
             if stats["unresolved_files"] > 0:
                 output_str += f", Unresolved: {stats['unresolved_files']}"
             output_str += "\n"
     elif "solution" in note:
         output_str += f"  - Solution\n"
         stats = get_solution_stats(note["solution"])
-        output_str += f"    - Resolved Files: {stats['resolved_files']}/{stats['total_files']}\n"
+        author = format_solution_author(note["solution"])
+        output_str += f"    - {author}: Resolved Files: {stats['resolved_files']}/{stats['total_files']}\n"
         if stats["unresolved_files"] > 0:
             output_str += f"    - Unresolved Files: {stats['unresolved_files']}/{stats['total_files']}\n"
 
@@ -643,8 +645,12 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
     if "solutions" in note:
         count = len(note["solutions"])
         output_str += f"  - Solutions ({count}) (use mergai show --solution to see the conflict solutions.)\n"
+        for idx, solution in enumerate(note["solutions"]):
+            author = format_solution_author(solution)
+            output_str += f"    [{idx}] {author}\n"
     elif "solution" in note:
-        output_str += f"  - Solution (use mergai show --solution to see the conflict solution.)\n"
+        author = format_solution_author(note["solution"])
+        output_str += f"  - Solution by {author} (use mergai show --solution to see the conflict solution.)\n"
 
     if "merge_description" in note:
         output_str += f"  - Merge Description (use mergai show --merge-description to see the merge description.)\n"
