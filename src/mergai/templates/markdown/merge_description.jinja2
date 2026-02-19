@@ -1,0 +1,41 @@
+# Merge Description
+
+## Summary
+
+{{ merge_description.response.summary }}
+
+## Auto-Merged Files
+{% if merge_description.response.auto_merged | length == 0 %}
+No files were auto-merged.
+{% else %}
+
+| File Path | Description |
+|-----------|-------------|
+{% for file_path, description in merge_description.response.auto_merged.items() %}
+| `{{ file_path }}` | {{ description }} |
+{% endfor %}
+{% endif %}
+
+## Review Notes
+
+{{ merge_description.response.review_notes if merge_description.response.review_notes else "No review notes provided." }}
+{% if merge_description.stats %}
+
+## Stats
+{% if merge_description.stats.models | length > 0 %}
+
+### Models
+
+| Model | Input tokens | Output tokens | Cached tokens | Thoughts tokens | Tool tokens | Total tokens |
+|-------|--------------|---------------|---------------|-----------------|-------------|--------------|
+{% for model, stat in merge_description.stats.models.items() %}
+| {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
+{% endfor %}
+{% endif %}
+{% endif %}
+{% if merge_description.agent_info %}
+
+## Agent Info
+
+Executed with '{{ merge_description.agent_info.agent_type }}' agent, version '{{ merge_description.agent_info.version }}'.
+{% endif %}

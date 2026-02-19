@@ -1,0 +1,12 @@
+Solutions ({{ solutions | length }}):
+{% for solution in solutions %}
+  Solution {{ loop.index }}:
+    Summary: {{ solution.response.summary }}
+{%- if solution.agent_info %}
+    Agent: {{ solution.agent_info.agent_type }} (version {{ solution.agent_info.version }})
+{%- elif solution.author %}
+    Author: {{ solution.author.name }}{% if solution.author.email %} <{{ solution.author.email }}>{% endif %}
+{%- endif %}
+    Resolved: {{ solution.response.resolved | length }} files
+    Unresolved: {{ solution.response.unresolved | length }} files
+{% endfor %}

@@ -1,0 +1,57 @@
+commit: {{ commit.hexsha }}
+Author: {{ commit.author.name }} <{{ commit.author.email }}>
+Date:   {{ commit.authored_datetime }}
+Content:
+{%- if note.merge_info is defined %}
+  - Merge Info
+    - Target Branch: {{ note.merge_info.target_branch | default('unknown') }}
+    - Merge Commit: {{ note.merge_info.merge_commit | default('unknown') }}
+{%- endif %}
+{%- if note.merge_context is defined %}
+  - Merge Context
+    - Merge Commit: {{ note.merge_context.merge_commit | default('unknown') }}
+    - Merged Commits: {{ note.merge_context.merged_commits | length | default(0) }}
+{%- if note.merge_context.important_files_modified %}
+    - Important Files Modified: {{ note.merge_context.important_files_modified | length }}
+{%- endif %}
+{%- endif %}
+{%- if note.conflict_context is defined %}
+  - Conflict Context
+    - Base Commit: {{ note.conflict_context.base_commit }}
+    - Ours Commit: {{ note.conflict_context.ours_commit }}
+    - Theirs Commit: {{ note.conflict_context.theirs_commit }}
+{%- endif %}
+{%- if note.pr_comments is defined %}
+  - PR Comments (total: {{ note.pr_comments | length }})
+{%- for user, count in get_comments_stats(note.pr_comments).items() %}
+{%- if user != 'total_comments' %}
+    - {{ user }}: {{ count }} comment(s)
+{%- endif %}
+{%- endfor %}
+{%- endif %}
+{%- if note.solutions is defined %}
+  - Solutions ({{ note.solutions | length }})
+{%- for solution in note.solutions %}
+    [{{ loop.index0 }}] Resolved Files: {{ get_solution_stats(solution).resolved_files }}/{{ get_solution_stats(solution).total_files }}{% if get_solution_stats(solution).unresolved_files > 0 %}, Unresolved: {{ get_solution_stats(solution).unresolved_files }}{% endif %}
+
+{%- endfor %}
+{%- elif note.solution is defined %}
+  - Solution
+    - Resolved Files: {{ get_solution_stats(note.solution).resolved_files }}/{{ get_solution_stats(note.solution).total_files }}
+{%- if get_solution_stats(note.solution).unresolved_files > 0 %}
+    - Unresolved Files: {{ get_solution_stats(note.solution).unresolved_files }}/{{ get_solution_stats(note.solution).total_files }}
+{%- endif %}
+{%- endif %}
+{%- if note.merge_description is defined %}
+  - Merge Description
+    - Auto-Merged Files: {{ note.merge_description.response.auto_merged | length | default(0) }}
+{%- endif %}
+{%- if note.user_comment is defined %}
+
+User Comment: {{ note.user_comment.user | default('unknown') }} <{{ note.user_comment.email | default('unknown') }}> at {{ note.user_comment.date | default('unknown') }}
+{{ note.user_comment.body | default('') }}
+
+{%- endif %}
+Message:
+    {{ commit.message.strip().replace('\n', '\n    ') }}
+

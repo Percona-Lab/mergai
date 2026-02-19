@@ -1,0 +1,24 @@
+Merge Description:
+  Summary: {{ merge_description.response.summary }}
+{% if merge_description.agent_info %}
+  Agent: {{ merge_description.agent_info.agent_type }} (version {{ merge_description.agent_info.version }})
+{%- endif %}
+
+  Auto-Merged Files ({{ merge_description.response.auto_merged | length }}):
+{%- if merge_description.response.auto_merged | length == 0 %}
+    (none)
+{%- else %}
+{%- for file_path, description in merge_description.response.auto_merged.items() %}
+    - {{ file_path }}: {{ description }}
+{%- endfor %}
+{%- endif %}
+
+  Review Notes:
+    {{ merge_description.response.review_notes if merge_description.response.review_notes else "(none)" }}
+{% if merge_description.stats and merge_description.stats.models %}
+  Token Usage:
+{%- for model, stat in merge_description.stats.models.items() %}
+    {{ model }}:
+      Input: {{ stat.tokens.input }}, Output: {{ stat.tokens.output }}, Total: {{ stat.tokens.total }}
+{%- endfor %}
+{%- endif %}

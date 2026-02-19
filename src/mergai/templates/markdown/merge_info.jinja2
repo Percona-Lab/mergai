@@ -1,0 +1,7 @@
+# Merge Info
+
+- **Target Branch:** `{{ merge_info.target_branch }}`
+{%- if merge_info.target_branch_sha %}
+- **Target Branch SHA:** {{ format_sha(merge_info.target_branch_sha) }}
+{%- endif %}
+- **Merge Commit:** {{ format_sha(merge_info.merge_commit_sha) }}

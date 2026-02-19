@@ -1,0 +1,10 @@
+# Pull Request Comments
+{% for comment_id, comment in comments.items() %}
+{% if comment.path %}
+- `{{ comment.created_at }}`: review comment from `{{ comment.user }}` at `{{ comment.path }}:{{ comment.line_str }}`:
+{% else %}
+- `{{ comment.created_at }}`: general comment from `{{ comment.user }}`:
+{% endif %}
+
+{{ comment.body }}
+{% endfor %}

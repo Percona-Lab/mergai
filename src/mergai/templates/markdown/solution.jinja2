@@ -1,0 +1,92 @@
+# Conflict Solution
+
+## Solution Summary
+
+{{ solution.response.summary }}
+
+## Resolved files
+{% if solution.response.resolved | length == 0 %}
+No files were resolved.
+{% else %}
+
+| File Path | Resolution |
+|-----------|------------|
+{% for file_path, resolution in solution.response.resolved.items() %}
+| `{{ file_path }}` | {{ resolution }} |
+{% endfor %}
+{% endif %}
+
+## Unresolved files
+{% if solution.response.unresolved | length == 0 %}
+All conflicts have been resolved.
+{% else %}
+
+| File Path | Issue |
+|-----------|------------|
+{% for file_path, issue in solution.response.unresolved.items() %}
+| `{{ file_path }}` | {{ issue }} |
+{% endfor %}
+{% endif %}
+
+## Review Notes
+
+{{ solution.response.review_notes if solution.response.review_notes else "No review notes provided." }}
+{% if solution.stats %}
+
+## Stats
+{% if solution.stats.models | length > 0 %}
+
+### Models
+
+| Model | Input tokens | Output tokens | Cached tokens | Thoughts tokens | Tool tokens | Total tokens |
+|-------|--------------|---------------|---------------|-----------------|-------------|--------------|
+{% for model, stat in solution.stats.models.items() %}
+| {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
+{% endfor %}
+{% endif %}
+{% endif %}
+{% if solution.agent_info %}
+
+## Agent Info
+
+Executed with '{{ solution.agent_info.agent_type }}' agent, version '{{ solution.agent_info.version }}'.
+{% endif %}
+{% if solution.session %}
+
+## Session
+
+- ID: `{{ solution.session.sessionId }}`
+{% if solution.session.projectHash %}
+- Project Hash: `{{ solution.session.projectHash }}`
+{% endif %}
+{% if solution.session.startTime %}
+- Started: {{ solution.session.startTime }}
+{% endif %}
+{% if solution.session.lastUpdated %}
+- Last Updated: {{ solution.session.lastUpdated }}
+{% endif %}
+{% if solution.session.messages and solution.session.messages | length > 0 %}
+
+### Messages
+{% for message in solution.session.messages %}
+
+- {{ message.timestamp or "unknown time" }} - {{ message.type|capitalize if message.type else "Message" }}{% if message.model %} ({{ message.model }}){% endif %}{% if message.id %} [`{{ message.id }}`]{% endif %}
+
+```text
+{{ (message.content if message.content else "No content provided.") | indent(4, first=True) }}
+```
+{% if message.thoughts %}
+{% for thought in message.thoughts %}
+    - Thought: **{{ thought.subject }}**{% if thought.timestamp %} ({{ thought.timestamp }}){% endif %}
+
+{{ (thought.description if thought.description else "") | indent(8, first=True) }}
+{% endfor %}
+{% endif %}
+{% if message.tokens %}
+    - Tokens: {% for key, value in message.tokens.items() %}{{ key }}={{ value }}{% if not loop.last %}, {% endif %}{% endfor %}
+{% endif %}
+{% endfor %}
+{% else %}
+No session messages available.
+{% endif %}
+{% endif %}

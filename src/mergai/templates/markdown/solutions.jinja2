@@ -1,0 +1,6 @@
+# Solutions
+{% for solution in solutions %}
+
+## Solution {{ loop.index }}
+{{ solution_to_markdown(solution) }}
+{% endfor %}

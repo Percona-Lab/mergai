@@ -1,0 +1,60 @@
+### Summary
+
+{{ solution.response.summary }}
+
+**By:** {{ format_solution_author(solution) }}
+
+### Resolved Files
+{% if solution.response.resolved | length == 0 %}
+No files were resolved.
+{% elif is_human_solution(solution) %}
+{% for file_path in solution.response.resolved.keys() %}
+- `{{ file_path }}`
+{% endfor %}
+{% else %}
+
+| File Path | Resolution |
+|-----------|------------|
+{% for file_path, resolution in solution.response.resolved.items() %}
+| `{{ file_path }}` | {{ resolution }} |
+{% endfor %}
+{% endif %}
+
+### Unresolved Files
+{% if solution.response.unresolved | length == 0 %}
+All conflicts have been resolved.
+{% elif is_human_solution(solution) %}
+{% for file_path in solution.response.unresolved.keys() %}
+- `{{ file_path }}`
+{% endfor %}
+{% else %}
+
+| File Path | Issue |
+|-----------|-------|
+{% for file_path, issue in solution.response.unresolved.items() %}
+| `{{ file_path }}` | {{ issue }} |
+{% endfor %}
+{% endif %}
+
+### Review Notes
+
+{{ solution.response.review_notes if solution.response.review_notes else "No review notes provided." }}
+{% if solution.stats or solution.agent_info %}
+
+<details>
+<summary>Agent Stats</summary>
+{% if solution.agent_info %}
+
+**Agent:** {{ solution.agent_info.agent_type }} (version {{ solution.agent_info.version }})
+{% endif %}
+{% if solution.stats and solution.stats.models | length > 0 %}
+
+| Model | Input | Output | Cached | Thoughts | Tool | Total |
+|-------|-------|--------|--------|----------|------|-------|
+{% for model, stat in solution.stats.models.items() %}
+| {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
+{% endfor %}
+{% endif %}
+
+</details>
+{% endif %}

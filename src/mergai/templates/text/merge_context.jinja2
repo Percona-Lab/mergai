@@ -1,0 +1,23 @@
+Merge Context:
+  Merged Commits: {{ merge_context.merged_commits | length }}
+  Auto-Merged Files: {{ merge_context.auto_merged.files | length if merge_context.auto_merged and merge_context.auto_merged.files else 0 }}
+{%- if merge_context.auto_merged and merge_context.auto_merged.strategy %}
+  Merge Strategy: {{ merge_context.auto_merged.strategy }}
+{%- endif %}
+{% if merge_context.important_files_modified | length > 0 %}
+  Important Files Modified:
+{%- for file_path in merge_context.important_files_modified %}
+    - {{ file_path }}
+{%- endfor %}
+{%- endif %}
+{% if merge_context.auto_merged and merge_context.auto_merged.files | length > 0 %}
+  Auto-Merged Files List:
+{%- for file_path in merge_context.auto_merged.files %}
+    - {{ file_path }}
+{%- endfor %}
+{%- endif %}
+
+  Commits:
+{%- for commit in merge_context.merged_commits %}
+    - {{ commit.hexsha | short_sha }}: {{ commit.summary }}
+{%- endfor %}

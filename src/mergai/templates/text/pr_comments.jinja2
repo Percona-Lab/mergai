@@ -1,0 +1,9 @@
+Pull Request Comments ({{ comments | length }}):
+{%- for comment_id, comment in comments.items() %}
+
+  [{{ comment.created_at }}] {{ comment.user }}:
+{%- if comment.path %}
+    Location: {{ comment.path }}:{{ comment.line_str }}
+{%- endif %}
+    {{ comment.body | indent(4) }}
+{%- endfor %}

@@ -1,0 +1,30 @@
+# Conflict Context
+
+- **Base Commit:** {{ format_sha(conflict_context.base_commit.hexsha) }}
+- **Ours Commit:** {{ format_sha(conflict_context.ours_commit.hexsha) }}
+- **Theirs Commit:** {{ format_sha(conflict_context.theirs_commit.hexsha) }}
+
+## Conflicted Files
+
+| Path | Conflict Type |
+|------|---------------|
+{% for path, conflict_type in conflict_context.conflict_types.items() %}
+| `{{ path }}` | {{ conflict_type }} |
+{% endfor %}
+{% if conflict_context.get('their_commits') %}
+
+<details>
+<summary>Conflict details</summary>
+
+## Their Commits
+
+| Path | Commit | Message |
+|------|--------|---------|
+{% for path, commits in conflict_context.their_commits.items() %}
+{% for commit in commits %}
+| `{{ path }}` | {{ format_sha(commit.hexsha) }} | {{ commit.message.split('\n')[0] }} |
+{% endfor %}
+{% endfor %}
+
+</details>
+{% endif %}

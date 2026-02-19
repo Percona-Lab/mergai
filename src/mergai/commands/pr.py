@@ -5,6 +5,7 @@ from github import PullRequest as GithubPullRequest
 from github import GithubException
 from ..utils import git_utils
 from ..utils import util
+from ..utils import formatters
 from ..utils.branch_name_builder import BranchNameBuilder, BranchType
 from typing import Optional, List
 from urllib.parse import urlencode, quote
@@ -146,13 +147,13 @@ def _create_pr(
 def _build_solutions_pr_body(app: AppContext) -> str:
     markdown_config = MarkdownConfig.for_pr(app.repo)
 
-    body = util.merge_info_to_markdown(app.note.merge_info, markdown_config)
+    body = formatters.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
-    body += util.merge_context_to_markdown(app.note.merge_context, markdown_config)
+    body += formatters.merge_context_to_markdown(app.note.merge_context, markdown_config)
     body += "\n\n"
-    body += util.conflict_context_to_markdown(app.note.conflict_context, markdown_config)
+    body += formatters.conflict_context_to_markdown(app.note.conflict_context, markdown_config)
     body += "\n\n"
-    body += util.solutions_to_markdown(app.note.solutions)
+    body += formatters.solutions_to_markdown(app.note.solutions)
     body += "\n\n"
 
     return body
@@ -161,9 +162,9 @@ def _build_solutions_pr_body(app: AppContext) -> str:
 def _build_merge_pr_body(app: AppContext) -> str:
     markdown_config = MarkdownConfig.for_pr(app.repo)
 
-    body = util.merge_info_to_markdown(app.note.merge_info, markdown_config)
+    body = formatters.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
-    body += util.merge_context_to_markdown(app.note.merge_context, markdown_config)
+    body += formatters.merge_context_to_markdown(app.note.merge_context, markdown_config)
     body += "\n\n"
 
     return body

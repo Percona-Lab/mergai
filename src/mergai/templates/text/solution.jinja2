@@ -1,0 +1,36 @@
+Conflict Solution:
+  Summary: {{ solution.response.summary }}
+{% if solution.agent_info %}
+  Agent: {{ solution.agent_info.agent_type }} (version {{ solution.agent_info.version }})
+{%- elif solution.author %}
+  Author: {{ solution.author.name }}{% if solution.author.email %} <{{ solution.author.email }}>{% endif %}
+{%- endif %}
+
+  Resolved Files ({{ solution.response.resolved | length }}):
+{%- if solution.response.resolved | length == 0 %}
+    (none)
+{%- else %}
+{%- for file_path, resolution in solution.response.resolved.items() %}
+    - {{ file_path }}: {{ resolution }}
+{%- endfor %}
+{%- endif %}
+
+  Unresolved Files ({{ solution.response.unresolved | length }}):
+{%- if solution.response.unresolved | length == 0 %}
+    (none - all conflicts resolved)
+{%- else %}
+{%- for file_path, issue in solution.response.unresolved.items() %}
+    - {{ file_path }}: {{ issue }}
+{%- endfor %}
+{%- endif %}
+
+  Review Notes:
+    {{ solution.response.review_notes if solution.response.review_notes else "(none)" }}
+{% if solution.stats and solution.stats.models %}
+  Token Usage:
+{%- for model, stat in solution.stats.models.items() %}
+    {{ model }}:
+      Input: {{ stat.tokens.input }}, Output: {{ stat.tokens.output }}, Cached: {{ stat.tokens.cached }}
+      Thoughts: {{ stat.tokens.thoughts }}, Tool: {{ stat.tokens.tool }}, Total: {{ stat.tokens.total }}
+{%- endfor %}
+{%- endif %}

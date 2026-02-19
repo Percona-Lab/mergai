@@ -1,0 +1,19 @@
+Conflict Context:
+  Base Commit: {{ conflict_context.base_commit.hexsha if conflict_context.base_commit.hexsha is defined else conflict_context.base_commit }}
+  Ours Commit: {{ conflict_context.ours_commit.hexsha if conflict_context.ours_commit.hexsha is defined else conflict_context.ours_commit }}
+  Theirs Commit: {{ conflict_context.theirs_commit.hexsha if conflict_context.theirs_commit.hexsha is defined else conflict_context.theirs_commit }}
+
+  Conflicted Files:
+{%- for path, conflict_type in conflict_context.conflict_types.items() %}
+    - {{ path }} ({{ conflict_type }})
+{%- endfor %}
+{% if conflict_context.their_commits is defined and conflict_context.their_commits %}
+
+  Their Commits:
+{%- for path, commits in conflict_context.their_commits.items() %}
+    {{ path }}:
+{%- for commit in commits %}
+      - {{ commit.hexsha if commit.hexsha is defined else commit }}: {{ commit.message.split('\n')[0] if commit.message is defined else '' }}
+{%- endfor %}
+{%- endfor %}
+{%- endif %}

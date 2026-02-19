@@ -1,0 +1,28 @@
+- Commit: `{{ commit.hexsha }}`
+- Author: {{ commit.author.name }} <{{ commit.author.email }}>
+- Date:   {{ commit.authored_datetime }}
+- Message:
+
+    {{ commit.message.strip().replace('\n', '\n    ') }}
+- Content:
+{%- if note.merge_info is defined %}
+  - Merge Info (use mergai show --merge-info to see the merge info.)
+{%- endif %}
+{%- if note.merge_context is defined %}
+  - Merge Context (use mergai show --merge-context to see the merge context.)
+{%- endif %}
+{%- if note.conflict_context is defined %}
+  - Conflict Context (use mergai show --context to see the conflict context.)
+{%- endif %}
+{%- if note.pr_comments is defined %}
+  - PR Comments (use mergai show --pr-comments to see the PR comments.)
+{%- endif %}
+{%- if note.solutions is defined %}
+  - Solutions ({{ note.solutions | length }}) (use mergai show --solution to see the conflict solutions.)
+{%- elif note.solution is defined %}
+  - Solution (use mergai show --solution to see the conflict solution.)
+{%- endif %}
+{%- if note.merge_description is defined %}
+  - Merge Description (use mergai show --merge-description to see the merge description.)
+{%- endif %}
+
