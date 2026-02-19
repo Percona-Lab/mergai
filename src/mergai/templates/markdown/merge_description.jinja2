@@ -11,9 +11,9 @@ No files were auto-merged.
 
 | File Path | Description |
 |-----------|-------------|
-{% for file_path, description in merge_description.response.auto_merged.items() %}
+{%- for file_path, description in merge_description.response.auto_merged.items() %}
 | `{{ file_path }}` | {{ description }} |
-{% endfor %}
+{%- endfor %}
 {% endif %}
 
 ## Review Notes
@@ -28,9 +28,9 @@ No files were auto-merged.
 
 | Model | Input tokens | Output tokens | Cached tokens | Thoughts tokens | Tool tokens | Total tokens |
 |-------|--------------|---------------|---------------|-----------------|-------------|--------------|
-{% for model, stat in merge_description.stats.models.items() %}
+{%- for model, stat in merge_description.stats.models.items() %}
 | {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
-{% endfor %}
+{%- endfor %}
 {% endif %}
 {% endif %}
 {% if merge_description.agent_info %}

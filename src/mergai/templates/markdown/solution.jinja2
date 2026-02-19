@@ -11,9 +11,9 @@ No files were resolved.
 
 | File Path | Resolution |
 |-----------|------------|
-{% for file_path, resolution in solution.response.resolved.items() %}
+{%- for file_path, resolution in solution.response.resolved.items() %}
 | `{{ file_path }}` | {{ resolution }} |
-{% endfor %}
+{%- endfor %}
 {% endif %}
 
 ## Unresolved files
@@ -23,9 +23,9 @@ All conflicts have been resolved.
 
 | File Path | Issue |
 |-----------|------------|
-{% for file_path, issue in solution.response.unresolved.items() %}
+{%- for file_path, issue in solution.response.unresolved.items() %}
 | `{{ file_path }}` | {{ issue }} |
-{% endfor %}
+{%- endfor %}
 {% endif %}
 
 ## Modified files
@@ -35,9 +35,9 @@ No additional files were modified.
 
 | File Path | Explanation |
 |-----------|-------------|
-{% for file_path, explanation in solution.response.modified.items() %}
+{%- for file_path, explanation in solution.response.modified.items() %}
 | `{{ file_path }}` | {{ explanation }} |
-{% endfor %}
+{%- endfor %}
 {% endif %}
 
 ## Review Notes
@@ -52,9 +52,9 @@ No additional files were modified.
 
 | Model | Input tokens | Output tokens | Cached tokens | Thoughts tokens | Tool tokens | Total tokens |
 |-------|--------------|---------------|---------------|-----------------|-------------|--------------|
-{% for model, stat in solution.stats.models.items() %}
+{%- for model, stat in solution.stats.models.items() %}
 | {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
-{% endfor %}
+{%- endfor %}
 {% endif %}
 {% endif %}
 {% if solution.agent_info %}

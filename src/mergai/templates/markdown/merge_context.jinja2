@@ -29,8 +29,8 @@ No files were auto-merged.
 
 | Commit | Summary |
 |------------|---------|
-{% for commit in merge_context.merged_commits %}
+{%- for commit in merge_context.merged_commits %}
 | {{ format_sha(commit.hexsha) }} | {{ commit.summary }} |
-{% endfor %}
+{%- endfor %}
 
 </details>
