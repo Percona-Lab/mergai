@@ -16,7 +16,6 @@ from ..models import ConflictContext, MergeInfo, MergeContext, MergaiNote
     "show_summary",
     is_flag=True,
     default=False,
-    show_default=False,
     help="Show summary information.",
 )
 @click.option(
@@ -24,31 +23,48 @@ from ..models import ConflictContext, MergeInfo, MergeContext, MergaiNote
     "show_raw",
     is_flag=True,
     default=False,
-    show_default=False,
-    help="Show raw note data.",
+    help="Show raw note data (JSON only).",
+)
+@click.option(
+    "--merge-info",
+    "show_merge_info",
+    is_flag=True,
+    default=False,
+    help="Show merge info (target branch, merge commit).",
+)
+@click.option(
+    "--merge-context",
+    "show_merge_context",
+    is_flag=True,
+    default=False,
+    help="Show merge context (merged commits, auto-merged files).",
+)
+@click.option(
+    "--conflict-context",
+    "show_conflict_context",
+    is_flag=True,
+    default=False,
+    help="Show conflict context (base/ours/theirs commits, conflicted files).",
 )
 @click.option(
     "--solution",
-    "show_solution",
-    is_flag=True,
-    default=False,
-    show_default=False,
-    help="Show the conflict solution.",
+    "solution_index",
+    type=int,
+    default=None,
+    help="Show a specific solution by index (0-based).",
 )
 @click.option(
-    "--context",
-    "show_context",
+    "--solutions",
+    "show_solutions",
     is_flag=True,
     default=False,
-    show_default=False,
-    help="Show the context.",
+    help="Show all solutions.",
 )
 @click.option(
     "--pr-comments",
     "show_pr_comments",
     is_flag=True,
     default=False,
-    show_default=False,
     help="Show the PR comments.",
 )
 @click.option(
@@ -56,18 +72,22 @@ from ..models import ConflictContext, MergeInfo, MergeContext, MergaiNote
     "show_user_comment",
     is_flag=True,
     default=False,
-    show_default=False,
     help="Show the user comment.",
+)
+@click.option(
+    "--merge-description",
+    "show_merge_description",
+    is_flag=True,
+    default=False,
+    help="Show the merge description.",
 )
 @click.option(
     "--prompt",
     "show_prompt",
     is_flag=True,
     default=False,
-    show_default=False,
     help="Show the prompt.",
 )
-@click.option("--pretty", is_flag=True, help="Pretty-print the JSON output.")
 @format_option(default=OutputFormat.TEXT)
 @click.argument(
     "commit",
@@ -78,97 +98,143 @@ from ..models import ConflictContext, MergeInfo, MergeContext, MergaiNote
 def show(
     app: AppContext,
     show_summary: bool,
-    show_solution: bool,
-    show_context: bool,
-    show_prompt: bool,
+    show_raw: bool,
+    show_merge_info: bool,
+    show_merge_context: bool,
+    show_conflict_context: bool,
+    solution_index: int,
+    show_solutions: bool,
     show_pr_comments: bool,
     show_user_comment: bool,
-    show_raw: bool,
-    pretty: bool,
+    show_merge_description: bool,
+    show_prompt: bool,
     format: str,
     commit: str,
 ):
+    """Show note data from a commit.
+
+    By default shows a summary. Use flags to show specific sections.
+
+    \b
+    Examples:
+        mergai show                      # Show summary from HEAD
+        mergai show abc123               # Show summary from specific commit
+        mergai show --merge-info         # Show merge info
+        mergai show --conflict-context   # Show conflict context
+        mergai show --solutions          # Show all solutions
+        mergai show --solution 0         # Show first solution
+        mergai show --solution 1 --md    # Show second solution in markdown
+    """
     try:
         commit = "HEAD" if commit is None else commit
 
         note = app.get_note_from_commit(commit)
         if not note:
             raise Exception(f"No note found for commit {commit}.")
-        show_summary = (
-            not (
-                show_solution
-                or show_context
-                or show_prompt
-                or show_pr_comments
-                or show_user_comment
-                or show_raw
-            )
-            or show_summary
+
+        # Determine if any specific section was requested
+        has_specific_request = (
+            show_merge_info
+            or show_merge_context
+            or show_conflict_context
+            or solution_index is not None
+            or show_solutions
+            or show_pr_comments
+            or show_user_comment
+            or show_merge_description
+            or show_prompt
+            or show_raw
         )
+
+        # Show summary by default if no specific section requested
+        show_summary = show_summary or not has_specific_request
 
         output_str = ""
 
         if show_raw:
-            import json
-
-            json_str = json.dumps(note, indent=2 if pretty else None)
+            json_str = json.dumps(note, indent=2)
             if format == "markdown":
-                raise Exception("Raw output is only available in JSON format.")
-
+                raise Exception("Raw output is only available in text/JSON format.")
             output_str += json_str + "\n"
 
         if show_summary:
             if format == "markdown":
                 output_str += "# Summary\n"
             output_str += formatters.commit_note_to_summary_str(
-                app.repo.commit(commit), note, format=format, pretty=pretty
+                app.repo.commit(commit), note, format=format, pretty=True
             )
 
-        # TODO: add support for MergeContext
-        if show_context:
-            context_dict = note.get("conflict_context")
-            if not context_dict:
-                raise Exception("No context found in the note.")
+        if show_merge_info:
+            merge_info_dict = note.get("merge_info")
+            if not merge_info_dict:
+                raise Exception("No merge info found in the note.")
+            merge_info = MergeInfo.from_dict(merge_info_dict, app.repo)
+            output_str += formatters.merge_info_to_str(merge_info, format) + "\n"
 
-            context = ConflictContext.from_dict(context_dict, app.repo)
-            output_str += formatters.conflict_context_to_str(context, format, pretty=pretty)
+        if show_merge_context:
+            merge_context_dict = note.get("merge_context")
+            if not merge_context_dict:
+                raise Exception("No merge context found in the note.")
+            merge_context = MergeContext.from_dict(merge_context_dict, app.repo)
+            output_str += formatters.merge_context_to_str(merge_context, format) + "\n"
+
+        if show_conflict_context:
+            conflict_context_dict = note.get("conflict_context")
+            if not conflict_context_dict:
+                raise Exception("No conflict context found in the note.")
+            conflict_context = ConflictContext.from_dict(conflict_context_dict, app.repo)
+            output_str += formatters.conflict_context_to_str(conflict_context, format, pretty=True)
 
         if show_pr_comments:
             pr_comments = note.get("pr_comments")
             if not pr_comments:
                 raise Exception("No PR comments found in the note.")
-
-            output_str += formatters.pr_comments_to_str(pr_comments, format, pretty=pretty)
+            output_str += formatters.pr_comments_to_str(pr_comments, format, pretty=True)
 
         if show_user_comment:
             user_comment = note.get("user_comment")
             if not user_comment:
                 raise Exception("No user comment found in the note.")
+            output_str += formatters.user_comment_to_str(user_comment, format, pretty=True)
 
-            output_str += formatters.user_comment_to_str(user_comment, format, pretty=pretty)
+        if show_merge_description:
+            merge_description = note.get("merge_description")
+            if not merge_description:
+                raise Exception("No merge description found in the note.")
+            output_str += formatters.merge_description_to_str(merge_description, format, pretty=True)
 
-        if show_solution:
-            # Handle both legacy "solution" and new "solutions" array
-            if "solutions" in note:
-                solutions = note["solutions"]
-                if not solutions:
+        if solution_index is not None:
+            # Show a specific solution by index
+            solutions = note.get("solutions", [])
+            if not solutions:
+                # Check for legacy "solution" field
+                if "solution" in note:
+                    if solution_index != 0:
+                        raise Exception(f"Solution index {solution_index} out of range. Only solution 0 exists (legacy format).")
+                    output_str += formatters.conflict_solution_to_str(note["solution"], format, pretty=True)
+                else:
                     raise Exception("No solutions found in the note.")
+            elif solution_index < 0 or solution_index >= len(solutions):
+                raise Exception(f"Solution index {solution_index} out of range. Available: 0-{len(solutions)-1}")
+            else:
+                output_str += formatters.conflict_solution_to_str(solutions[solution_index], format, pretty=True)
+
+        if show_solutions:
+            # Show all solutions
+            solutions = note.get("solutions", [])
+            if not solutions:
+                if "solution" in note:
+                    output_str += formatters.conflict_solution_to_str(note["solution"], format, pretty=True)
+                else:
+                    raise Exception("No solutions found in the note.")
+            else:
                 for idx, solution in enumerate(solutions):
                     if len(solutions) > 1:
                         if format == "markdown":
-                            output_str += f"## Solution {idx + 1}\n\n"
+                            output_str += f"## Solution {idx}\n\n"
                         else:
-                            output_str += f"=== Solution {idx + 1} ===\n"
-                    output_str += formatters.conflict_solution_to_str(
-                        solution, format, pretty=pretty
-                    )
-            elif "solution" in note:
-                solution = note["solution"]
-                output_str += formatters.conflict_solution_to_str(
-                    solution, format, pretty=pretty
-                )
-            else:
-                raise Exception("No solution found in the note.")
+                            output_str += f"=== Solution {idx} ===\n"
+                    output_str += formatters.conflict_solution_to_str(solution, format, pretty=True)
 
         if output_str:
             util.print_or_page(output_str, format=format)
