@@ -169,14 +169,14 @@ def show(
             if not merge_info_dict:
                 raise Exception("No merge info found in the note.")
             merge_info = MergeInfo.from_dict(merge_info_dict, app.repo)
-            output_str += formatters.merge_info_to_str(merge_info, format) + "\n"
+            output_str += formatters.merge_info_to_str(merge_info, format)
 
         if show_merge_context:
             merge_context_dict = note.get("merge_context")
             if not merge_context_dict:
                 raise Exception("No merge context found in the note.")
             merge_context = MergeContext.from_dict(merge_context_dict, app.repo)
-            output_str += formatters.merge_context_to_str(merge_context, format) + "\n"
+            output_str += formatters.merge_context_to_str(merge_context, format)
 
         if show_conflict_context:
             conflict_context_dict = note.get("conflict_context")
