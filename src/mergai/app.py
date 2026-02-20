@@ -1028,6 +1028,10 @@ class AppContext:
         for commit_sha, git_note in commits_with_notes:
             fields_for_this_commit = []
 
+            # Handle mergai_version - take from first note that has it
+            if "mergai_version" in git_note and "mergai_version" not in note_dict:
+                note_dict["mergai_version"] = git_note["mergai_version"]
+
             # Handle merge_info
             if "merge_info" in git_note:
                 if reference_merge_info is None:
@@ -1107,6 +1111,11 @@ class AppContext:
             del note_dict["solutions"]
         if not note_dict["note_index"]:
             del note_dict["note_index"]
+
+        # Set mergai_version to current version if not found in any git note
+        if "mergai_version" not in note_dict:
+            from .version import __version__
+            note_dict["mergai_version"] = __version__
 
         # Convert to MergaiNote
         return MergaiNote.from_dict(note_dict, self.repo)
