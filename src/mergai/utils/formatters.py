@@ -617,7 +617,12 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
 
     output_str += f"Message:\n    {commit.message.strip().replace(chr(10), chr(10) + '    ')}\n"
 
-    output_str += "\n"
+    # mergai version at the end
+    if "mergai_version" in note:
+        output_str += f"\nnote created with mergai {note['mergai_version']}\n"
+    else:
+        output_str += "\n"
+
     return output_str
 
 
@@ -659,7 +664,11 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
     if "merge_description" in note:
         output_str += f"  - Merge Description (use mergai show --merge-description to see the merge description.)\n"
 
-    output_str += "\n"
+    # mergai version at the end
+    if "mergai_version" in note:
+        output_str += f"\nnote created with mergai {note['mergai_version']}\n"
+    else:
+        output_str += "\n"
 
     return output_str
 
@@ -685,6 +694,9 @@ def commit_note_to_summary_json(commit: git.Commit, note: dict, pretty: bool = F
         "message": commit.message.strip(),
         "content": {},
     }
+
+    if "mergai_version" in note:
+        summary["mergai_version"] = note["mergai_version"]
 
     if "merge_info" in note:
         summary["content"]["merge_info"] = True

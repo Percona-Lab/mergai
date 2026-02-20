@@ -817,10 +817,11 @@ class MergaiNote:
     """A MergAI note containing merge information and optional context data.
 
     This is the main data structure for storing merge-related information.
-    The merge_info field is required; all other fields are optional.
+    The merge_info and mergai_version fields are required; all other fields are optional.
 
     Attributes:
         merge_info: Required merge information (target branch, commit SHAs).
+        mergai_version: Required version of mergai that created/modified this note.
         conflict_context: Optional context for merge conflicts.
         merge_context: Optional context for successful merges.
         solutions: Optional list of AI-generated solutions.
@@ -831,6 +832,7 @@ class MergaiNote:
     """
 
     merge_info: MergeInfo
+    mergai_version: str
     conflict_context: Optional[ConflictContext] = None
     merge_context: Optional[MergeContext] = None
     solutions: Optional[List[dict]] = None
@@ -854,9 +856,16 @@ class MergaiNote:
 
         Returns:
             MergaiNote instance with repo bound if provided.
+
+        Raises:
+            ValueError: If required field 'mergai_version' is missing.
         """
+        if "mergai_version" not in data:
+            raise ValueError("Note missing required field 'mergai_version'")
+
         note = cls(
             merge_info=MergeInfo.from_dict(data["merge_info"], repo),
+            mergai_version=data["mergai_version"],
             conflict_context=ConflictContext.from_dict(data["conflict_context"], repo) if "conflict_context" in data else None,
             merge_context=MergeContext.from_dict(data["merge_context"], repo) if "merge_context" in data else None,
             solutions=data.get("solutions"),
@@ -872,14 +881,18 @@ class MergaiNote:
     def create(cls, merge_info: MergeInfo, repo: "Repo" = None) -> "MergaiNote":
         """Create a new MergaiNote with the given merge_info.
 
+        Sets mergai_version to the current version of mergai.
+
         Args:
             merge_info: Required merge information.
             repo: Optional GitPython Repo for resolving commits.
 
         Returns:
-            New MergaiNote instance.
+            New MergaiNote instance with current mergai version.
         """
-        return cls(merge_info=merge_info, _repo=repo)
+        from .version import __version__
+
+        return cls(merge_info=merge_info, mergai_version=__version__, _repo=repo)
 
     @classmethod
     def combine_from_dicts(
@@ -891,6 +904,7 @@ class MergaiNote:
 
         Merges all note data from the provided commits into a single note:
         - merge_info: taken from the first commit that has it
+        - mergai_version: set to the current mergai version (the version doing the combine)
         - conflict_context: taken from the first commit that has it
         - merge_context: taken from the first commit that has it
         - solutions: all solutions combined into a single array
@@ -907,9 +921,12 @@ class MergaiNote:
             repo: Optional GitPython Repo for resolving commits.
 
         Returns:
-            A new MergaiNote instance with combined data.
+            A new MergaiNote instance with combined data and current mergai version.
         """
-        combined: Dict[str, Any] = {}
+        from .version import __version__
+
+        # Always use current version when combining notes
+        combined: Dict[str, Any] = {"mergai_version": __version__}
 
         for _, git_note in commits_with_notes:
             if git_note is None:
@@ -1368,7 +1385,10 @@ class MergaiNote:
         Returns:
             Dictionary suitable for JSON serialization.
         """
-        result = {"merge_info": self.merge_info.to_dict()}
+        result = {
+            "merge_info": self.merge_info.to_dict(),
+            "mergai_version": self.mergai_version,
+        }
         if self.conflict_context:
             result["conflict_context"] = self.conflict_context.to_dict()
         if self.merge_context:

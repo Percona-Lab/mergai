@@ -352,8 +352,11 @@ class AppContext:
 
         note_dict = self.note.to_dict()
 
-        # Build selective note content - always include merge_info
-        selective_note = {"merge_info": note_dict["merge_info"]}
+        # Build selective note content - always include merge_info and mergai_version
+        selective_note = {
+            "merge_info": note_dict["merge_info"],
+            "mergai_version": note_dict["mergai_version"],
+        }
 
         for field in fields:
             # Handle solutions[N] format

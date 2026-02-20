@@ -2,6 +2,7 @@ import click
 import logging
 from .app import AppContext
 from .config import load_config
+from .version import __version__
 import git
 
 LOG_FORMAT = "[%(asctime)s.%(msecs)03d][%(levelname)s][%(name)s] %(message)s"
@@ -60,6 +61,7 @@ def register_commands(cli):
     cli.add_command(config)
 
 @click.group()
+@click.version_option(version=__version__, prog_name="mergai")
 @click.pass_obj
 @click.option(
     "--config",

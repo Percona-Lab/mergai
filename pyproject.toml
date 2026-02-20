@@ -1,10 +1,10 @@
 [build-system]
-requires = ["setuptools", "wheel"]
+requires = ["setuptools>=45", "setuptools-scm[toml]>=6.2", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "mergai"
-version = "0.1.0"
+dynamic = ["version"]
 dependencies = [
     "click==8.3.1",
     "pyaml==25.7.0",
@@ -31,3 +31,9 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "mergai" = ["prompts/*.md", "templates/**/*.jinja2"]
+
+[tool.setuptools_scm]
+# Version derived from git tags (e.g., v0.1.0 -> 0.1.0)
+# Development versions: 0.1.0.dev5+g1234abc (5 commits after tag)
+version_scheme = "guess-next-dev"
+local_scheme = "node-and-date"

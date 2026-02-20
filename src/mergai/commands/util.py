@@ -395,6 +395,11 @@ def convert_note_to_text_summary(note: dict) -> str:
         output.append("  Commit Status: All fields committed")
         output.append("")
 
+    # MergAI Version (at the end)
+    if "mergai_version" in note:
+        output.append(f"  note created with mergai {note['mergai_version']}")
+        output.append("")
+
     return "\n".join(output)
 
 
