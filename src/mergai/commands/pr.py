@@ -154,6 +154,7 @@ def _build_solutions_pr_body(app: AppContext) -> str:
     body += "\n\n"
     body += formatters.solutions_to_markdown(app.note.solutions)
     body += "\n\n"
+    body += f"---\n\n*note created with mergai {app.note.mergai_version}*\n"
 
     return body
 
@@ -165,6 +166,7 @@ def _build_merge_pr_body(app: AppContext) -> str:
     body += "\n\n"
     body += formatters.merge_context_to_markdown(app.note.merge_context, markdown_config)
     body += "\n\n"
+    body += f"---\n\n*note created with mergai {app.note.mergai_version}*\n"
 
     return body
 
