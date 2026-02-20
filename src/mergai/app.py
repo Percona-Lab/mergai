@@ -623,13 +623,15 @@ class AppContext:
         conflict_context = combined_note.get("conflict_context", {})
         conflict_files = set(conflict_context.get("files", []))
 
-        # Collect modified files ONLY from solution commits (not from the merge commit)
+        # Collect modified files ONLY from solution commits (not from merge-related commits)
         # Solution commits are identified by having a "solution" in their note
-        # or by NOT having "conflict_context" (the merge commit has conflict_context)
+        # or by NOT having "conflict_context" or "merge_context"
+        # (merge-related commits have conflict_context and/or merge_context)
         solution_modified_files = set()
         for commit, note in commits_with_notes:
-            # Skip if this commit has conflict_context (it's the merge commit)
-            if note and "conflict_context" in note:
+            # Skip if this commit has conflict_context or merge_context
+            # (these are mergai-managed commits, not solution commits)
+            if note and ("conflict_context" in note or "merge_context" in note):
                 continue
             # Include files from commits that have a solution or no note at all
             # (PR merge commits may not have mergai notes)
