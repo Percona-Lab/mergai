@@ -150,8 +150,9 @@ def _build_solutions_pr_body(app: AppContext) -> str:
     body += "\n\n"
     body += formatters.merge_context_to_markdown(app.note.merge_context, markdown_config)
     body += "\n\n"
-    body += formatters.conflict_context_to_markdown(app.note.conflict_context, markdown_config)
-    body += "\n\n"
+    if app.note.has_conflict_context:
+        body += formatters.conflict_context_to_markdown(app.note.conflict_context, markdown_config)
+        body += "\n\n"
     body += formatters.solutions_to_markdown(app.note.solutions)
     body += "\n\n"
     body += f"---\n\n*note created with mergai {app.note.mergai_version}*\n"
@@ -206,27 +207,18 @@ def _create_solution_pr(
 
 def _build_main_pr_body(app: AppContext) -> str:
     """Build PR body for main PR from merge_context or conflict resolution data."""
-    if app.note.has_conflict_context and app.note.has_solutions:
+    # If we have solutions (from any source - AI, human, or synced), include them
+    if app.note.has_solutions:
         return _build_solutions_pr_body(app)
 
+    # No solutions - use merge PR body if we have merge_context
     if app.note.has_merge_context:
         return _build_merge_pr_body(app)
 
-    if app.note.has_conflict_context and not app.note.has_solutions:
-        raise click.ClickException(
-            "Found conflict_context but no solutions. "
-            "Run 'mergai resolve' to generate a solution first."
-        )
-
-    if app.note.has_solutions and not app.note.has_conflict_context:
-        raise click.ClickException(
-            "Found solutions but no conflict_context. "
-            "Run 'mergai context create conflict' first."
-        )
     raise click.ClickException(
-        "No merge_context or conflict resolution data found. "
+        "No merge_context or solutions found. "
         "Run 'mergai context create merge' for non-conflict merges, "
-        "or ensure conflict_context and solutions are present for conflict resolutions."
+        "or run 'mergai resolve' to generate solutions."
     )
 
 
