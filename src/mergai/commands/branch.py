@@ -67,7 +67,7 @@ def branch():
     The following commands support the 'target' type:
     - switch
 
-    Branch names are generated using the format from .mergai/config.yaml:
+    Branch names are generated using the format from .mergai/config.yml:
     branch.name_format (default: "mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)")
     """
     pass

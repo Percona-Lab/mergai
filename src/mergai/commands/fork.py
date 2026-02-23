@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from git import Commit
 from ..app import AppContext
 from ..utils import git_utils
-from ..config import MergePicksConfig
+from ..config import MergePicksConfig, DEFAULT_CONFIG_PATH
 from ..merge_pick_strategies import MergePickCommit, MergePickStrategyContext
 from ..utils.util import format_number, format_commit_info, format_commit_info_oneline, print_or_page
 
@@ -37,7 +37,7 @@ def resolve_upstream_ref(
 
     if upstream_url is None:
         click.echo("Error: No UPSTREAM-REF provided and fork.upstream_url not configured.", err=True)
-        click.echo("Either provide UPSTREAM-REF argument or set fork.upstream_url in .mergai/config.yaml", err=True)
+        click.echo(f"Either provide UPSTREAM-REF argument or set fork.upstream_url in {DEFAULT_CONFIG_PATH}", err=True)
         raise SystemExit(1)
 
     remote_name = git_utils.find_remote_by_url(app.repo, upstream_url)
@@ -302,7 +302,7 @@ def init(app: AppContext, upstream_url: Optional[str]):
 
     if url is None:
         click.echo("Error: No upstream URL provided and fork.upstream_url not configured.", err=True)
-        click.echo("Either provide UPSTREAM-URL argument or set fork.upstream_url in .mergai/config.yaml", err=True)
+        click.echo(f"Either provide UPSTREAM-URL argument or set fork.upstream_url in {DEFAULT_CONFIG_PATH}", err=True)
         raise SystemExit(1)
 
     # Determine desired remote name from config, default to "upstream"

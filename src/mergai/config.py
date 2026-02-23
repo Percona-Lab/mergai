@@ -1,6 +1,6 @@
 """Configuration file support for MergAI.
 
-This module handles loading and parsing the .mergai/config.yaml configuration file.
+This module handles loading and parsing the .mergai/config.yml configuration file.
 """
 
 from dataclasses import dataclass, field
@@ -15,7 +15,7 @@ from .merge_pick_strategies import MergePickStrategy, ImportantFilesStrategy
 log = logging.getLogger(__name__)
 
 
-DEFAULT_CONFIG_PATH = ".mergai/config.yaml"
+DEFAULT_CONFIG_PATH = ".mergai/config.yml"
 DEFAULT_COMMIT_FIELDS = ["hexsha"]
 
 
@@ -732,7 +732,7 @@ def load_config(config_path: Optional[str] = None) -> MergaiConfig:
     """Load configuration from a YAML file.
 
     If config_path is explicitly provided and the file doesn't exist, raises an error.
-    If config_path is None and the default .mergai/config.yaml doesn't exist, returns default config.
+    If config_path is None and the default .mergai/config.yml doesn't exist, returns default config.
 
     Args:
         config_path: Path to the config file, or None to use the default path.

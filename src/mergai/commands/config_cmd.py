@@ -312,7 +312,7 @@ def config(
     - notes.displayRef = refs/notes/mergai-marker (show notes in git log)
 
     \b
-    Settings can be customized in .mergai/config.yaml:
+    Settings can be customized in .mergai/config.yml:
         config:
           git:
             conflictstyle: diff3

@@ -1,7 +1,7 @@
 import click
 import logging
 from .app import AppContext
-from .config import load_config
+from .config import load_config, DEFAULT_CONFIG_PATH
 from .version import __version__
 import git
 
@@ -69,7 +69,7 @@ def register_commands(cli):
     "config_path",
     type=click.Path(),
     default=None,
-    help="Path to config file (default: .mergai/config.yaml)",
+    help=f"Path to config file (default: {DEFAULT_CONFIG_PATH})",
 )
 @click.option(
     "--repo-path",
