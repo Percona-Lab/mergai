@@ -945,12 +945,6 @@ class MergaiNote:
                 combined["merge_context"] = git_note["merge_context"]
 
             # solutions - combine all into array
-            # Handle both "solution" (singular in git note) and "solutions" (array)
-            if "solution" in git_note:
-                if "solutions" not in combined:
-                    combined["solutions"] = []
-                combined["solutions"].append(git_note["solution"])
-
             if "solutions" in git_note:
                 if "solutions" not in combined:
                     combined["solutions"] = []
@@ -1309,9 +1303,6 @@ class MergaiNote:
                 match = re.match(r"solutions\[(\d+)\]", field)
                 if match:
                     committed.add(int(match.group(1)))
-                # Also handle legacy "solution" field
-                if field == "solution":
-                    committed.add(0)
 
         return committed
 

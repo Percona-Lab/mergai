@@ -267,8 +267,6 @@ def format_note_summary(note: Optional[dict]) -> str:
         fields.append("conflict_context")
     if "merge_context" in note:
         fields.append("merge_context")
-    if "solution" in note:
-        fields.append("solution")
     if "solutions" in note:
         fields.append(f"solutions[{len(note['solutions'])}]")
     if "merge_description" in note:

@@ -581,7 +581,6 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
             if user != "total_comments":
                 output_str += f"    - {user}: {count} comment(s)\n"
 
-    # Handle both legacy "solution" and new "solutions" array
     if "solutions" in note:
         output_str += f"  - Solutions ({len(note['solutions'])})\n"
         for idx, solution in enumerate(note["solutions"]):
@@ -591,13 +590,6 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
             if stats["unresolved_files"] > 0:
                 output_str += f", Unresolved: {stats['unresolved_files']}"
             output_str += "\n"
-    elif "solution" in note:
-        output_str += f"  - Solution\n"
-        stats = get_solution_stats(note["solution"])
-        author = format_solution_author(note["solution"])
-        output_str += f"    - {author}: Resolved Files: {stats['resolved_files']}/{stats['total_files']}\n"
-        if stats["unresolved_files"] > 0:
-            output_str += f"    - Unresolved Files: {stats['unresolved_files']}/{stats['total_files']}\n"
 
     if "merge_description" in note:
         output_str += f"  - Merge Description\n"
@@ -657,9 +649,6 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
         for idx, solution in enumerate(note["solutions"]):
             author = format_solution_author(solution)
             output_str += f"    [{idx}] {author}\n"
-    elif "solution" in note:
-        author = format_solution_author(note["solution"])
-        output_str += f"  - Solution by {author} (use mergai show --solution to see the conflict solution.)\n"
 
     if "merge_description" in note:
         output_str += f"  - Merge Description (use mergai show --merge-description to see the merge description.)\n"
@@ -707,11 +696,8 @@ def commit_note_to_summary_json(commit: git.Commit, note: dict, pretty: bool = F
         summary["content"]["conflict_context"] = True
     if "pr_comments" in note:
         summary["content"]["pr_comments"] = True
-    # Handle both legacy "solution" and new "solutions" array
     if "solutions" in note:
         summary["content"]["solutions"] = len(note["solutions"])
-    elif "solution" in note:
-        summary["content"]["solution"] = True
     if "user_comment" in note:
         summary["content"]["user_comment"] = True
         summary["user_comment"] = note["user_comment"]

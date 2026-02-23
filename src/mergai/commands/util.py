@@ -207,13 +207,7 @@ def show(
             # Show a specific solution by index
             solutions = note.get("solutions", [])
             if not solutions:
-                # Check for legacy "solution" field
-                if "solution" in note:
-                    if solution_index != 0:
-                        raise Exception(f"Solution index {solution_index} out of range. Only solution 0 exists (legacy format).")
-                    output_str += formatters.conflict_solution_to_str(note["solution"], format, pretty=True)
-                else:
-                    raise Exception("No solutions found in the note.")
+                raise Exception("No solutions found in the note.")
             elif solution_index < 0 or solution_index >= len(solutions):
                 raise Exception(f"Solution index {solution_index} out of range. Available: 0-{len(solutions)-1}")
             else:
@@ -223,10 +217,7 @@ def show(
             # Show all solutions
             solutions = note.get("solutions", [])
             if not solutions:
-                if "solution" in note:
-                    output_str += formatters.conflict_solution_to_str(note["solution"], format, pretty=True)
-                else:
-                    raise Exception("No solutions found in the note.")
+                raise Exception("No solutions found in the note.")
             else:
                 for idx, solution in enumerate(solutions):
                     if len(solutions) > 1:
@@ -336,9 +327,6 @@ def convert_note_to_text_summary(note: dict) -> str:
             output.append(stats_line)
             if sol.get("commit_sha"):
                 output.append(f"        Commit: {sol['commit_sha'][:11]}")
-        output.append("")
-    elif "solution" in note:
-        output.append("  Solution: (legacy format)")
         output.append("")
 
     # PR Comments

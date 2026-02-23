@@ -364,8 +364,8 @@ class AppContext:
             if match:
                 idx = int(match.group(1))
                 if self.note.has_solutions and idx < len(self.note.solutions):
-                    # In the git note, store as "solution" (singular) for the specific solution
-                    selective_note["solution"] = self.note.solutions[idx]
+                    # Store as "solutions" array with single element
+                    selective_note["solutions"] = [self.note.solutions[idx]]
             elif field == "conflict_context" and self.note.has_conflict_context:
                 selective_note["conflict_context"] = note_dict["conflict_context"]
             elif field == "merge_context" and self.note.has_merge_context:
@@ -624,7 +624,7 @@ class AppContext:
         conflict_files = set(conflict_context.get("files", []))
 
         # Collect modified files ONLY from solution commits (not from merge-related commits)
-        # Solution commits are identified by having a "solution" in their note
+        # Solution commits are identified by having "solutions" in their note
         # or by NOT having "conflict_context" or "merge_context"
         # (merge-related commits have conflict_context and/or merge_context)
         solution_modified_files = set()
@@ -863,11 +863,7 @@ class AppContext:
             fields.append("conflict_context")
         if "merge_context" in note:
             fields.append("merge_context")
-        if "solution" in note:
-            # Single solution (from selective note)
-            fields.append("solution")
         if "solutions" in note:
-            # Array of solutions
             count = len(note["solutions"])
             if count == 1:
                 fields.append("solution")
@@ -997,6 +993,11 @@ class AppContext:
         # Collect commits and their notes
         commits_with_notes = []
         for commit in self.repo.iter_commits():
+            # Stop BEFORE processing the target commit - its note belongs to a
+            # previous merge operation and should not be included
+            if target_sha and commit.hexsha == target_sha:
+                break
+
             git_note = self.get_note_from_commit(commit.hexsha)
             if git_note:
                 commits_with_notes.append((commit.hexsha, git_note))
@@ -1006,10 +1007,6 @@ class AppContext:
                     target_branch_sha = git_note["merge_info"].get("target_branch_sha")
                     if target_branch_sha:
                         target_sha = target_branch_sha
-
-            # Stop if we've reached the target
-            if target_sha and commit.hexsha == target_sha:
-                break
 
         if not commits_with_notes:
             raise click.ClickException(
@@ -1069,12 +1066,7 @@ class AppContext:
                     fields_for_this_commit.append("merge_context")
 
             # Handle solution (singular in git note -> add to solutions array)
-            if "solution" in git_note:
-                idx = len(note_dict["solutions"])
-                note_dict["solutions"].append(git_note["solution"])
-                fields_for_this_commit.append(f"solutions[{idx}]")
-
-            # Handle solutions (array in git note -> add all to solutions array)
+            # Handle solutions array
             if "solutions" in git_note:
                 for solution in git_note["solutions"]:
                     idx = len(note_dict["solutions"])
@@ -1194,9 +1186,7 @@ class AppContext:
             git_note = self.get_note_from_commit(commit.hexsha)
             
             # Check if commit already has a solution
-            has_solution = git_note is not None and (
-                "solution" in git_note or "solutions" in git_note
-            )
+            has_solution = git_note is not None and "solutions" in git_note
 
             # Check if commit has conflict_context or merge_context - these are
             # mergai-managed commits (from 'mergai commit conflict' or 'mergai commit merge'),
