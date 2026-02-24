@@ -94,7 +94,7 @@ class ImportantFilesStrategy(MergePickStrategy):
             modified = context.commit_stats_cache[commit.hexsha].files_modified
         else:
             modified = git_utils.get_commit_modified_files(repo, commit)
-        
+
         matches = sorted(set(modified) & set(self.config.files))
         if matches:
             return ImportantFilesResult(matched_files=matches)

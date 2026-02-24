@@ -464,7 +464,16 @@ def create_merge(app: AppContext, force: bool, from_stdin: bool, strategy: str):
 @click.pass_obj
 @click.argument(
     "part",
-    type=click.Choice(["conflict", "solution", "pr_comments", "user_comment", "merge_info", "merge_context"]),
+    type=click.Choice(
+        [
+            "conflict",
+            "solution",
+            "pr_comments",
+            "user_comment",
+            "merge_info",
+            "merge_context",
+        ]
+    ),
     required=False,
     default=None,
 )
@@ -504,16 +513,16 @@ def drop(app: AppContext, part: Optional[str], drop_all_solutions: bool):
             app.drop_all()
             click.echo("Dropped all context.")
             return
-        
+
         if part == "merge_info":
             app.drop_all()
             click.echo("Dropped merge info.")
             return
-        
+
         if not app.has_note:
             click.echo("No note found.")
             return
-        
+
         if part == "conflict":
             app.note.drop_conflict_context()
             click.echo("Dropped conflict context.")
@@ -534,7 +543,7 @@ def drop(app: AppContext, part: Optional[str], drop_all_solutions: bool):
             click.echo("Dropped merge context.")
         else:
             raise Exception(f"Invalid part: {part}")
-        
+
         app.save_note(app.note)
     except Exception as e:
         click.echo(f"Error: {e}")

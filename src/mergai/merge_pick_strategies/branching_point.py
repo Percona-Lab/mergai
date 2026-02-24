@@ -92,7 +92,7 @@ class BranchingPointStrategy(MergePickStrategy):
                 child_count = context.branching_points_cache[commit.hexsha]
                 return BranchingPointResult(child_count=child_count)
             return None
-        
+
         # Fallback to individual check if no cache
         is_bp, child_count = git_utils.is_branching_point(
             repo, commit, context.upstream_ref

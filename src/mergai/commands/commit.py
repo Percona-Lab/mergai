@@ -30,6 +30,7 @@ def conflict(app: AppContext):
         click.echo(f"Error: {e}")
         exit(1)
 
+
 @commit.command()
 @click.pass_obj
 def merge(app: AppContext):

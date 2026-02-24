@@ -28,7 +28,7 @@ class MergePickStrategyContext:
 
     upstream_ref: Optional[str] = None
     fork_ref: Optional[str] = None
-    
+
     # Batch data caches for performance optimization
     commit_stats_cache: Dict[str, "CommitStats"] = field(default_factory=dict)
     branching_points_cache: Dict[str, int] = field(default_factory=dict)

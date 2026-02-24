@@ -119,7 +119,9 @@ class PromptBuilder:
         Returns:
             A dict with context fields hydrated for prompt use.
         """
-        prompt_serialization_config = self.prompt_config.to_prompt_serialization_config()
+        prompt_serialization_config = (
+            self.prompt_config.to_prompt_serialization_config()
+        )
 
         result = {"merge_info": self.note.merge_info.to_dict()}
 

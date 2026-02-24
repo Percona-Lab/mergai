@@ -7,9 +7,15 @@ from ..app import AppContext
 from ..utils import git_utils
 from ..config import MergePicksConfig, DEFAULT_CONFIG_PATH
 from ..merge_pick_strategies import MergePickCommit, MergePickStrategyContext
-from ..utils.util import format_number, format_commit_info, format_commit_info_oneline, print_or_page
+from ..utils.util import (
+    format_number,
+    format_commit_info,
+    format_commit_info_oneline,
+    print_or_page,
+)
 
 log = logging.getLogger(__name__)
+
 
 def resolve_upstream_ref(
     app: AppContext,
@@ -36,15 +42,26 @@ def resolve_upstream_ref(
     upstream_url = app.config.fork.upstream_url
 
     if upstream_url is None:
-        click.echo("Error: No UPSTREAM-REF provided and fork.upstream_url not configured.", err=True)
-        click.echo(f"Either provide UPSTREAM-REF argument or set fork.upstream_url in {DEFAULT_CONFIG_PATH}", err=True)
+        click.echo(
+            "Error: No UPSTREAM-REF provided and fork.upstream_url not configured.",
+            err=True,
+        )
+        click.echo(
+            f"Either provide UPSTREAM-REF argument or set fork.upstream_url in {DEFAULT_CONFIG_PATH}",
+            err=True,
+        )
         raise SystemExit(1)
 
     remote_name = git_utils.find_remote_by_url(app.repo, upstream_url)
 
     if remote_name is None:
-        click.echo(f"Error: No remote found matching upstream_url: {upstream_url}", err=True)
-        click.echo("Hint: Run 'mergai fork init' to add and fetch the upstream remote.", err=True)
+        click.echo(
+            f"Error: No remote found matching upstream_url: {upstream_url}", err=True
+        )
+        click.echo(
+            "Hint: Run 'mergai fork init' to add and fetch the upstream remote.",
+            err=True,
+        )
         raise SystemExit(1)
 
     upstream_branch = app.config.fork.upstream_branch
@@ -104,7 +121,9 @@ def get_prioritized_commits(
     # This avoids per-commit git calls in the strategy loop
     if _needs_commit_stats(config):
         log.debug(f"Batch loading commit stats for {len(unmerged_commit_shas)} commits")
-        context.commit_stats_cache = git_utils.get_batch_commit_stats(repo, unmerged_commit_shas)
+        context.commit_stats_cache = git_utils.get_batch_commit_stats(
+            repo, unmerged_commit_shas
+        )
         log.debug(f"Loaded stats for {len(context.commit_stats_cache)} commits")
 
     if _needs_branching_points(config) and context.upstream_ref:
@@ -119,8 +138,10 @@ def get_prioritized_commits(
                 base_sha = oldest_sha
         except Exception:
             base_sha = oldest_sha
-        
-        log.debug(f"Batch loading branching points from {base_sha[:11]} to {context.upstream_ref}")
+
+        log.debug(
+            f"Batch loading branching points from {base_sha[:11]} to {context.upstream_ref}"
+        )
         context.branching_points_cache = git_utils.get_batch_branching_points(
             repo, base_sha, context.upstream_ref
         )
@@ -162,6 +183,7 @@ def get_prioritized_commits(
 
     return prioritized
 
+
 def build_status_summary(
     app: AppContext,
     fork_status,
@@ -180,26 +202,40 @@ def build_status_summary(
     output_lines = []
 
     # Header with upstream info
-    output_lines.append(f"Upstream URL:    {app.config.fork.upstream_url or '(not configured)'}")
+    output_lines.append(
+        f"Upstream URL:    {app.config.fork.upstream_url or '(not configured)'}"
+    )
     output_lines.append(f"Upstream branch: {app.config.fork.upstream_branch}")
     output_lines.append(f"Upstream ref:    {upstream_ref}")
     output_lines.append("")
-    output_lines.append(f"Status: {'up to date' if fork_status.is_up_to_date else 'diverged'}")
+    output_lines.append(
+        f"Status: {'up to date' if fork_status.is_up_to_date else 'diverged'}"
+    )
 
     # Divergence estimate
     if not fork_status.is_up_to_date:
         output_lines.append("Divergence:")
-        output_lines.append(f"  Commits behind:   {format_number(fork_status.commits_behind)}")
+        output_lines.append(
+            f"  Commits behind:   {format_number(fork_status.commits_behind)}"
+        )
         output_lines.append(f"  Days behind:      {fork_status.days_behind}")
         date_range = fork_status.unmerged_date_range
         if date_range:
             first_date_str = date_range[0].strftime("%Y-%m-%d")
             last_date_str = date_range[1].strftime("%Y-%m-%d")
-            output_lines.append(f"  Date range:       {first_date_str} to {last_date_str}")
+            output_lines.append(
+                f"  Date range:       {first_date_str} to {last_date_str}"
+            )
 
-        output_lines.append(f"  Files affected:   {format_number(fork_status.files_affected)}")
-        output_lines.append(f"  Total additions:  +{format_number(fork_status.total_additions)}")
-        output_lines.append(f"  Total deletions:  -{format_number(fork_status.total_deletions)}")
+        output_lines.append(
+            f"  Files affected:   {format_number(fork_status.files_affected)}"
+        )
+        output_lines.append(
+            f"  Total additions:  +{format_number(fork_status.total_additions)}"
+        )
+        output_lines.append(
+            f"  Total deletions:  -{format_number(fork_status.total_deletions)}"
+        )
         output_lines.append("")
 
         # Last merged commit
@@ -213,6 +249,7 @@ def build_status_summary(
         output_lines.append("")
 
     return output_lines
+
 
 def format_commit_list(
     commits: List[Commit],
@@ -241,7 +278,9 @@ def format_commit_list(
         display_commits = commits
     else:
         # Only show prioritized commits
-        display_commits = [pc.commit for pc in prioritized_commits] if prioritized_commits else []
+        display_commits = (
+            [pc.commit for pc in prioritized_commits] if prioritized_commits else []
+        )
 
     if not display_commits:
         return []
@@ -257,7 +296,9 @@ def format_commit_list(
         if pc:
             # This is a merge pick - add strategy info (with colors)
             strategy_tag = click.style(f" [{pc.strategy_name}]", fg="cyan")
-            details_tag = click.style(f" ({pc.result.format_short()})", fg="bright_black")
+            details_tag = click.style(
+                f" ({pc.result.format_short()})", fg="bright_black"
+            )
         else:
             strategy_tag = ""
             details_tag = ""
@@ -274,6 +315,7 @@ def format_commit_list(
             output_lines.append(f"{commit_info}{strategy_tag}{details_tag}")
 
     return output_lines
+
 
 @click.group()
 def fork():
@@ -301,8 +343,14 @@ def init(app: AppContext, upstream_url: Optional[str]):
     url = upstream_url or app.config.fork.upstream_url
 
     if url is None:
-        click.echo("Error: No upstream URL provided and fork.upstream_url not configured.", err=True)
-        click.echo(f"Either provide UPSTREAM-URL argument or set fork.upstream_url in {DEFAULT_CONFIG_PATH}", err=True)
+        click.echo(
+            "Error: No upstream URL provided and fork.upstream_url not configured.",
+            err=True,
+        )
+        click.echo(
+            f"Either provide UPSTREAM-URL argument or set fork.upstream_url in {DEFAULT_CONFIG_PATH}",
+            err=True,
+        )
         raise SystemExit(1)
 
     # Determine desired remote name from config, default to "upstream"
@@ -319,11 +367,16 @@ def init(app: AppContext, upstream_url: Optional[str]):
         # Remote with desired name exists - check if URL matches
         existing_urls = list(existing_remote.urls)
         if url in existing_urls:
-            click.echo(f"Remote '{desired_remote_name}' already configured with URL: {url}")
+            click.echo(
+                f"Remote '{desired_remote_name}' already configured with URL: {url}"
+            )
             remote_name = desired_remote_name
         else:
             # Remote exists but with different URL
-            click.echo(f"Error: Remote '{desired_remote_name}' exists but has different URL: {existing_urls[0]}", err=True)
+            click.echo(
+                f"Error: Remote '{desired_remote_name}' exists but has different URL: {existing_urls[0]}",
+                err=True,
+            )
             click.echo(f"Expected URL: {url}", err=True)
             raise SystemExit(1)
     else:
@@ -333,7 +386,9 @@ def init(app: AppContext, upstream_url: Optional[str]):
         if remote_name is not None:
             click.echo(f"Remote '{remote_name}' already configured with URL: {url}")
             if remote_name != desired_remote_name:
-                click.echo(f"Note: Using existing remote '{remote_name}' instead of configured name '{desired_remote_name}'")
+                click.echo(
+                    f"Note: Using existing remote '{remote_name}' instead of configured name '{desired_remote_name}'"
+                )
         else:
             # No remote found, create new one with desired name
             remote_name = desired_remote_name
@@ -371,14 +426,16 @@ def init(app: AppContext, upstream_url: Optional[str]):
     metavar="FORK-REF",
 )
 @click.option(
-    "--list", "-l",
+    "--list",
+    "-l",
     "list_commits",
     is_flag=True,
     default=False,
     help="List unmerged commits",
 )
 @click.option(
-    "--show-merge-picks", "-p",
+    "--show-merge-picks",
+    "-p",
     "show_merge_picks",
     is_flag=True,
     default=False,
@@ -457,6 +514,7 @@ def status(
     # Output via pager if listing commits, otherwise print directly
     output = "\n".join(output_lines)
     print_or_page(output)
+
 
 @fork.command("merge-pick")
 @click.pass_obj

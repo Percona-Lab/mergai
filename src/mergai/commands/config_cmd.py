@@ -84,7 +84,10 @@ def configure_git(
             click.echo(f"  Would set: {key} = {desired_value}{status_suffix}")
         else:
             set_git_config_value(repo, key, desired_value, global_scope)
-            click.echo(click.style("  + ", fg="green") + f"{key} = {desired_value}{status_suffix}")
+            click.echo(
+                click.style("  + ", fg="green")
+                + f"{key} = {desired_value}{status_suffix}"
+            )
             configured += 1
 
     # Configure notes.displayRef if display is enabled
@@ -102,7 +105,10 @@ def configure_git(
                 click.echo(f"  Would set: {key} = {desired_value}{status_suffix}")
             else:
                 set_git_config_value(repo, key, desired_value, global_scope)
-                click.echo(click.style("  + ", fg="green") + f"{key} = {desired_value}{status_suffix}")
+                click.echo(
+                    click.style("  + ", fg="green")
+                    + f"{key} = {desired_value}{status_suffix}"
+                )
                 configured += 1
 
     return configured, skipped
@@ -125,7 +131,7 @@ def get_completion_script_content(shell: str) -> str:
     elif shell == "zsh":
         return f'eval "$({env_var}=zsh_source mergai)"'
     elif shell == "fish":
-        return f'{env_var}=fish_source mergai | source'
+        return f"{env_var}=fish_source mergai | source"
     else:
         return f'eval "$({env_var}={shell}_source mergai)"'
 
@@ -185,7 +191,9 @@ def setup_completion(
     click.echo(f"    source {rc_file}")
 
 
-def check_git_status(repo, config: InitConfig, global_scope: bool) -> Dict[str, Tuple[Optional[str], str, bool]]:
+def check_git_status(
+    repo, config: InitConfig, global_scope: bool
+) -> Dict[str, Tuple[Optional[str], str, bool]]:
     """Check current git configuration status.
 
     Args:
@@ -233,19 +241,27 @@ def show_status(repo, config: InitConfig, global_scope: bool) -> None:
         if is_configured:
             click.echo(click.style("  [OK] ", fg="green") + f"{key} = {current}")
         elif current is None:
-            click.echo(click.style("  [--] ", fg="yellow") + f"{key} (not set, recommended: {desired})")
+            click.echo(
+                click.style("  [--] ", fg="yellow")
+                + f"{key} (not set, recommended: {desired})"
+            )
             all_configured = False
         else:
-            click.echo(click.style("  [!!] ", fg="red") + f"{key} = {current} (recommended: {desired})")
+            click.echo(
+                click.style("  [!!] ", fg="red")
+                + f"{key} = {current} (recommended: {desired})"
+            )
 
     # Show notes marker text (from config file, not git config)
     click.echo("")
     click.echo("Notes settings (from config file):")
-    click.echo(f"  marker_text: \"{config.git.notes.marker_text}\"")
+    click.echo(f'  marker_text: "{config.git.notes.marker_text}"')
 
     click.echo("")
     if all_configured:
-        click.echo(click.style("All git settings are configured correctly.", fg="green"))
+        click.echo(
+            click.style("All git settings are configured correctly.", fg="green")
+        )
     else:
         click.echo("Run 'mergai config' to configure missing settings.")
 
@@ -362,6 +378,8 @@ def config(
     elif configured_count > 0:
         click.echo(click.style("Done! ", fg="green") + "mergai is ready to use.")
     elif skipped_count > 0:
-        click.echo(click.style("Done! ", fg="green") + "All settings already configured.")
+        click.echo(
+            click.style("Done! ", fg="green") + "All settings already configured."
+        )
     else:
         click.echo("Done!")

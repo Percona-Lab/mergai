@@ -7,7 +7,11 @@ using the SHA from merge_info.
 import click
 from git.exc import GitCommandError
 from ..app import AppContext
-from ..config import MERGE_DESCRIBE_ALWAYS, MERGE_DESCRIBE_SUCCESS, MERGE_DESCRIBE_CONFLICT
+from ..config import (
+    MERGE_DESCRIBE_ALWAYS,
+    MERGE_DESCRIBE_SUCCESS,
+    MERGE_DESCRIBE_CONFLICT,
+)
 from ..utils import git_utils
 
 
@@ -32,8 +36,7 @@ def _maybe_run_describe(app: AppContext, merge_outcome: str):
     describe_setting = app.config.merge.describe
 
     should_describe = (
-        describe_setting == MERGE_DESCRIBE_ALWAYS
-        or describe_setting == merge_outcome
+        describe_setting == MERGE_DESCRIBE_ALWAYS or describe_setting == merge_outcome
     )
 
     if not should_describe:
@@ -159,7 +162,9 @@ def merge(app: AppContext, no_context: bool, force: bool):
                     if parsed.strategy:
                         click.echo(f"  strategy: {parsed.strategy}")
                     if parsed.auto_merged_files:
-                        click.echo(f"  auto_merged: {len(parsed.auto_merged_files)} files")
+                        click.echo(
+                            f"  auto_merged: {len(parsed.auto_merged_files)} files"
+                        )
             except Exception as e:
                 click.echo(f"Warning: Failed to create merge_context: {e}")
 
@@ -215,7 +220,9 @@ def merge(app: AppContext, no_context: bool, force: bool):
                         if parsed.strategy:
                             click.echo(f"  strategy: {parsed.strategy}")
                         if parsed.auto_merged_files:
-                            click.echo(f"  auto_merged: {len(parsed.auto_merged_files)} files")
+                            click.echo(
+                                f"  auto_merged: {len(parsed.auto_merged_files)} files"
+                            )
                 except Exception as ctx_err:
                     click.echo(f"Warning: Failed to create merge_context: {ctx_err}")
 

@@ -10,16 +10,16 @@ with support for three serialization modes:
 Example usage:
     # Load from note.json
     ctx = ConflictContext.from_dict(note["conflict_context"])
-    
+
     # Bind repo for git operations
     ctx.bind_repo(repo)
-    
+
     # Serialize for storage (default)
     note["conflict_context"] = ctx.to_dict()
-    
+
     # Serialize for templates
     template_data = ctx.to_dict(ContextSerializationConfig.template())
-    
+
     # Serialize for prompts with custom fields
     prompt_config = ContextSerializationConfig.prompt(
         CommitSerializationConfig(include_message=True)
@@ -40,25 +40,26 @@ if TYPE_CHECKING:
 
 class MarkdownFormat(Enum):
     """Markdown output format styles.
-    
+
     SIMPLE: Plain markdown with just commit hashes (no links).
     PR: GitHub PR-friendly markdown with clickable commit links.
     """
+
     SIMPLE = "simple"
     PR = "pr"
 
 
 def _parse_github_url_from_remote(remote_url: str) -> Optional[str]:
     """Parse a GitHub repository URL from a git remote URL.
-    
+
     Supports both SSH and HTTPS formats:
     - git@github.com:owner/repo.git
     - https://github.com/owner/repo.git
     - https://github.com/owner/repo
-    
+
     Args:
         remote_url: Git remote URL (SSH or HTTPS format).
-    
+
     Returns:
         GitHub repository URL (https://github.com/owner/repo) or None if not GitHub.
     """
@@ -66,50 +67,51 @@ def _parse_github_url_from_remote(remote_url: str) -> Optional[str]:
     ssh_match = re.match(r"git@github\.com:(.+?)(?:\.git)?$", remote_url)
     if ssh_match:
         return f"https://github.com/{ssh_match.group(1)}"
-    
+
     # HTTPS format: https://github.com/owner/repo.git or https://github.com/owner/repo
     https_match = re.match(r"https://github\.com/(.+?)(?:\.git)?$", remote_url)
     if https_match:
         return f"https://github.com/{https_match.group(1)}"
-    
+
     return None
 
 
 @dataclass
 class MarkdownConfig:
     """Configuration for markdown output formatting.
-    
+
     Attributes:
         format: Markdown format style (SIMPLE or PR).
         repo_url: Base GitHub repository URL for generating commit links.
                   If None and format is PR, commit links won't be generated.
-    
+
     Example usage:
         # Simple markdown (no links)
         config = MarkdownConfig.simple()
-        
+
         # PR markdown with auto-detected repo URL
         config = MarkdownConfig.for_pr(repo)
-        
+
         # PR markdown with explicit URL
         config = MarkdownConfig.for_pr_with_url("https://github.com/owner/repo")
     """
+
     format: MarkdownFormat = MarkdownFormat.SIMPLE
     repo_url: Optional[str] = None
-    
+
     @classmethod
     def simple(cls) -> "MarkdownConfig":
         """Create config for simple markdown (no links)."""
         return cls(format=MarkdownFormat.SIMPLE)
-    
+
     @classmethod
     def for_pr(cls, repo: "Repo", remote_name: str = "origin") -> "MarkdownConfig":
         """Create config for PR markdown with auto-detected repo URL.
-        
+
         Args:
             repo: GitPython Repo instance.
             remote_name: Name of the remote to use for URL detection (default: "origin").
-        
+
         Returns:
             MarkdownConfig with PR format and detected repo URL.
         """
@@ -123,26 +125,26 @@ class MarkdownConfig:
         except (ValueError, AttributeError):
             pass
         return cls(format=MarkdownFormat.PR, repo_url=repo_url)
-    
+
     @classmethod
     def for_pr_with_url(cls, repo_url: str) -> "MarkdownConfig":
         """Create config for PR markdown with explicit repo URL.
-        
+
         Args:
             repo_url: GitHub repository URL (e.g., "https://github.com/owner/repo").
-        
+
         Returns:
             MarkdownConfig with PR format and specified repo URL.
         """
         # Ensure URL doesn't have trailing slash
         return cls(format=MarkdownFormat.PR, repo_url=repo_url.rstrip("/"))
-    
+
     def get_commit_url(self, sha: str) -> Optional[str]:
         """Get the URL for a commit.
-        
+
         Args:
             sha: Commit SHA (full or short).
-        
+
         Returns:
             Full commit URL or None if repo_url is not set.
         """
@@ -153,15 +155,15 @@ class MarkdownConfig:
 
 class EnhancedCommit:
     """Wrapper around git.Commit that adds additional properties.
-    
+
     This class wraps a git.Commit object and adds:
     - commit_url: URL to the commit on GitHub (if markdown_config is provided)
     - All original git.Commit attributes via delegation
-    
+
     Attributes:
         commit: The underlying git.Commit object.
         markdown_config: Optional MarkdownConfig for URL generation.
-    
+
     Example usage:
         commit = repo.commit("abc123")
         config = MarkdownConfig.for_pr(repo)
@@ -169,57 +171,59 @@ class EnhancedCommit:
         print(enhanced.commit_url)  # https://github.com/owner/repo/commit/abc123...
         print(enhanced.hexsha)  # abc123... (delegated to underlying commit)
     """
-    
-    def __init__(self, commit: "Commit", markdown_config: Optional[MarkdownConfig] = None):
+
+    def __init__(
+        self, commit: "Commit", markdown_config: Optional[MarkdownConfig] = None
+    ):
         """Initialize EnhancedCommit.
-        
+
         Args:
             commit: GitPython Commit object to wrap.
             markdown_config: Optional MarkdownConfig for URL generation.
         """
         self._commit = commit
         self._markdown_config = markdown_config
-    
+
     def __getattr__(self, name: str) -> Any:
         """Delegate attribute access to the underlying commit."""
         return getattr(self._commit, name)
-    
+
     @property
     def commit_url(self) -> Optional[str]:
         """Get the URL to this commit on GitHub.
-        
+
         Returns:
             Commit URL or None if markdown_config doesn't have repo_url.
         """
         if self._markdown_config:
             return self._markdown_config.get_commit_url(self._commit.hexsha)
         return None
-    
+
     @property
     def short_sha(self) -> str:
         """Get the short SHA (first 11 characters).
-        
+
         Returns:
             Short SHA string.
         """
         return self._commit.hexsha[:11]
-    
+
     def format_sha(self, use_short: bool = False) -> str:
         """Format the SHA as markdown, optionally with link.
-        
+
         Args:
             use_short: If True, use short SHA in display.
-        
+
         Returns:
             Markdown formatted SHA (with link if PR format and repo_url available).
         """
         display_sha = self.short_sha if use_short else self._commit.hexsha
-        
+
         if self._markdown_config and self._markdown_config.format == MarkdownFormat.PR:
             url = self.commit_url
             if url:
                 return f"[`{display_sha}`]({url})"
-        
+
         return f"`{display_sha}`"
 
 
@@ -456,7 +460,9 @@ def _short_sha(sha: str) -> str:
     return sha[:11]
 
 
-def _commit_to_dict(commit: "Commit", config: CommitSerializationConfig) -> Union[dict, str]:
+def _commit_to_dict(
+    commit: "Commit", config: CommitSerializationConfig
+) -> Union[dict, str]:
     """Serialize a git Commit based on config.
 
     Args:
@@ -468,13 +474,15 @@ def _commit_to_dict(commit: "Commit", config: CommitSerializationConfig) -> Unio
         if only hexsha is configured.
     """
     # If only hexsha is configured, return just the SHA string
-    if (config.include_hexsha and
-        not config.include_short_sha and
-        not config.include_author and
-        not config.include_authored_date and
-        not config.include_summary and
-        not config.include_message and
-        not config.include_parents):
+    if (
+        config.include_hexsha
+        and not config.include_short_sha
+        and not config.include_author
+        and not config.include_authored_date
+        and not config.include_summary
+        and not config.include_message
+        and not config.include_parents
+    ):
         return commit.hexsha
 
     result = {}
@@ -652,8 +660,7 @@ class ConflictContext:
             result["diffs"] = self.diffs
         if self.their_commits_shas:
             result["their_commits"] = {
-                path: self.get_their_commits(path)
-                for path in self.their_commits_shas
+                path: self.get_their_commits(path) for path in self.their_commits_shas
             }
         return result
 
@@ -866,8 +873,16 @@ class MergaiNote:
         note = cls(
             merge_info=MergeInfo.from_dict(data["merge_info"], repo),
             mergai_version=data["mergai_version"],
-            conflict_context=ConflictContext.from_dict(data["conflict_context"], repo) if "conflict_context" in data else None,
-            merge_context=MergeContext.from_dict(data["merge_context"], repo) if "merge_context" in data else None,
+            conflict_context=(
+                ConflictContext.from_dict(data["conflict_context"], repo)
+                if "conflict_context" in data
+                else None
+            ),
+            merge_context=(
+                MergeContext.from_dict(data["merge_context"], repo)
+                if "merge_context" in data
+                else None
+            ),
             solutions=data.get("solutions"),
             pr_comments=data.get("pr_comments"),
             user_comment=data.get("user_comment"),

@@ -109,7 +109,9 @@ class BranchConfig:
             - %(target_branch_short_sha) - Short SHA of the target branch (11 chars)
     """
 
-    name_format: str = "mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)"
+    name_format: str = (
+        "mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)"
+    )
 
     @classmethod
     def from_dict(cls, data: dict) -> "BranchConfig":
@@ -778,7 +780,11 @@ class MergaiConfig:
 
         # Parse config section if present (for 'mergai config' command)
         config_section_data = data.get("config", {})
-        config_config = InitConfig.from_dict(config_section_data) if config_section_data else InitConfig()
+        config_config = (
+            InitConfig.from_dict(config_section_data)
+            if config_section_data
+            else InitConfig()
+        )
 
         return cls(
             fork=fork_config,

@@ -184,7 +184,9 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If max attempts reached without valid result.
         """
-        current_prompt = f"See @{prompt_path} make sure the output is in specified format"
+        current_prompt = (
+            f"See @{prompt_path} make sure the output is in specified format"
+        )
         error = None
         result = None
 
@@ -202,7 +204,9 @@ class AgentExecutor:
             agent_result = self.agent.run(current_prompt)
             if not agent_result.success():
                 click.echo(f"Agent execution failed: {agent_result.error()}")
-                current_prompt = PromptBuilder.error_to_prompt(str(agent_result.error()))
+                current_prompt = PromptBuilder.error_to_prompt(
+                    str(agent_result.error())
+                )
                 error = str(agent_result.error())
                 continue
 
@@ -222,9 +226,7 @@ class AgentExecutor:
             break
 
         if result is None:
-            raise AgentExecutionError(
-                "Failed to obtain a valid result from the agent."
-            )
+            raise AgentExecutionError("Failed to obtain a valid result from the agent.")
 
         return result
 

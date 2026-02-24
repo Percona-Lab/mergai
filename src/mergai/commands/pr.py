@@ -12,7 +12,9 @@ from urllib.parse import urlencode, quote
 from mergai import app
 
 
-def _parse_labels_option(labels_arg: Optional[str], config_labels: List[str]) -> List[str]:
+def _parse_labels_option(
+    labels_arg: Optional[str], config_labels: List[str]
+) -> List[str]:
     """Parse the --labels argument and combine with config labels.
 
     Behavior:
@@ -148,10 +150,14 @@ def _build_solutions_pr_body(app: AppContext) -> str:
 
     body = formatters.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
-    body += formatters.merge_context_to_markdown(app.note.merge_context, markdown_config)
+    body += formatters.merge_context_to_markdown(
+        app.note.merge_context, markdown_config
+    )
     body += "\n\n"
     if app.note.has_conflict_context:
-        body += formatters.conflict_context_to_markdown(app.note.conflict_context, markdown_config)
+        body += formatters.conflict_context_to_markdown(
+            app.note.conflict_context, markdown_config
+        )
         body += "\n\n"
     body += formatters.solutions_to_markdown(app.note.solutions)
     body += "\n\n"
@@ -168,7 +174,9 @@ def _build_merge_pr_body(app: AppContext) -> str:
 
     body = formatters.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
-    body += formatters.merge_context_to_markdown(app.note.merge_context, markdown_config)
+    body += formatters.merge_context_to_markdown(
+        app.note.merge_context, markdown_config
+    )
     body += "\n\n"
     if app.note.has_merge_description:
         body += formatters.merge_description_to_markdown(app.note.merge_description)

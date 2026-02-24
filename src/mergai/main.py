@@ -43,22 +43,29 @@ def register_commands(cli):
     cli.add_command(commit)
 
     from .commands.notes import notes
+
     cli.add_command(notes)
 
     from .commands.fork import fork
+
     cli.add_command(fork)
 
     from .commands.branch import branch
+
     cli.add_command(branch)
 
     from .commands.merge import merge
+
     cli.add_command(merge)
 
     from .commands.finalize import finalize
+
     cli.add_command(finalize)
 
     from .commands.config_cmd import config
+
     cli.add_command(config)
+
 
 @click.group()
 @click.version_option(version=__version__, prog_name="mergai")
@@ -96,6 +103,8 @@ def cli(app: AppContext, config_path: str, repo_path: str = ".", verbose: int = 
         format=LOG_FORMAT,
         datefmt="%Y-%m-%d %H:%M:%S",
     )
+
+
 def main():
 
     register_commands(cli)

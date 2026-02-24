@@ -21,6 +21,11 @@ def describe(
     a description without modifying any files. The description is stored
     in the note as 'merge_description'.
     """
+    click.echo(
+        click.style("WARNING: ", fg="yellow")
+        + "The 'describe' command is experimental and may change in future versions."
+    )
+    click.echo("")
     try:
         app.describe(force, max_attempts=app.config.resolve.max_attempts)
     except Exception as e:

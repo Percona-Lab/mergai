@@ -172,7 +172,9 @@ def get_notes_merge_conflicts(repo: Repo) -> List[str]:
     return conflicts
 
 
-def preview_notes_merge(repo: Repo, local_ref: str, remote_ref: str) -> NotesMergePreview:
+def preview_notes_merge(
+    repo: Repo, local_ref: str, remote_ref: str
+) -> NotesMergePreview:
     """Preview what a notes merge would do without actually performing it.
 
     Compares local and remote notes refs and categorizes each note.
@@ -385,7 +387,10 @@ def update(
         try:
             refspec = "+refs/notes/mergai*:refs/notes/mergai*"
             app.repo.git.fetch(remote, refspec)
-            click.echo(click.style("Done. ", fg="green") + "Local notes overwritten with remote.")
+            click.echo(
+                click.style("Done. ", fg="green")
+                + "Local notes overwritten with remote."
+            )
         except Exception as e:
             raise click.ClickException(f"Failed to fetch notes: {e}")
         return
@@ -452,7 +457,9 @@ def update(
                 click.echo("")
                 click.echo(f"  Commit: {short_sha(conflict.commit_sha)}")
                 click.echo(f"    Local:  {format_note_summary(conflict.local_content)}")
-                click.echo(f"    Remote: {format_note_summary(conflict.remote_content)}")
+                click.echo(
+                    f"    Remote: {format_note_summary(conflict.remote_content)}"
+                )
 
         if dry_run:
             click.echo("")
@@ -467,7 +474,9 @@ def update(
             click.echo("")
             click.echo("To resolve, choose one of:")
             click.echo("")
-            click.echo("  1. Keep YOUR local notes (discard remote changes for conflicts):")
+            click.echo(
+                "  1. Keep YOUR local notes (discard remote changes for conflicts):"
+            )
             click.echo("     mergai notes update --ours")
             click.echo("")
             click.echo("  2. Keep REMOTE notes (discard local changes for conflicts):")
@@ -475,7 +484,9 @@ def update(
             click.echo("")
             click.echo("  3. Manually inspect and resolve:")
             for conflict in preview.conflicts[:3]:  # Show first 3
-                click.echo(f"     git notes --ref=mergai show {short_sha(conflict.commit_sha)}        # Local")
+                click.echo(
+                    f"     git notes --ref=mergai show {short_sha(conflict.commit_sha)}        # Local"
+                )
                 click.echo(
                     f"     git notes --ref={NOTES_REMOTE_TMP_REF} show {short_sha(conflict.commit_sha)}  # Remote"
                 )
@@ -491,7 +502,9 @@ def update(
             click.echo(
                 f"Temporary remote notes kept at refs/notes/{NOTES_REMOTE_TMP_REF} for inspection."
             )
-            click.echo(f"Run 'git update-ref -d refs/notes/{NOTES_REMOTE_TMP_REF}' to clean up.")
+            click.echo(
+                f"Run 'git update-ref -d refs/notes/{NOTES_REMOTE_TMP_REF}' to clean up."
+            )
             raise SystemExit(1)
 
     # Perform the merge
@@ -545,7 +558,9 @@ def update(
         cleanup_temp_refs(app.repo)
 
         click.echo("")
-        click.echo(click.style("Success! ", fg="green") + f"Notes updated from {remote}.")
+        click.echo(
+            click.style("Success! ", fg="green") + f"Notes updated from {remote}."
+        )
 
         # Show summary
         if has_remote_notes and has_local_notes:
@@ -639,7 +654,9 @@ def merge_cmd(app: AppContext, do_commit: bool, do_abort: bool):
         else:
             click.echo("No notes merge in progress.")
             click.echo("")
-            click.echo("Use 'mergai notes update' to fetch and merge notes from a remote.")
+            click.echo(
+                "Use 'mergai notes update' to fetch and merge notes from a remote."
+            )
         return
 
     if do_commit:
@@ -793,7 +810,7 @@ def remove(app: AppContext, commit: str, remove_marker: bool):
     # Check if notes exist
     note_content = get_note_content(app.repo, NOTES_REF, commit_sha)
     has_main_note = note_content is not None
-    
+
     # Check for marker (marker notes are plain text, not JSON, so use note_exists)
     has_marker = note_exists(app.repo, NOTES_MARKER_REF, commit_sha)
 
@@ -804,7 +821,7 @@ def remove(app: AppContext, commit: str, remove_marker: bool):
     # Show what will be removed
     click.echo(f"Commit: {short_sha(commit_sha)}")
     click.echo(f"  Message: {resolved_commit.summary}")
-    
+
     if has_main_note:
         click.echo(f"  Note fields: {format_note_summary(note_content)}")
     else:

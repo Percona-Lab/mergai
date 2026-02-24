@@ -182,26 +182,36 @@ def show(
             conflict_context_dict = note.get("conflict_context")
             if not conflict_context_dict:
                 raise Exception("No conflict context found in the note.")
-            conflict_context = ConflictContext.from_dict(conflict_context_dict, app.repo)
-            output_str += formatters.conflict_context_to_str(conflict_context, format, pretty=True)
+            conflict_context = ConflictContext.from_dict(
+                conflict_context_dict, app.repo
+            )
+            output_str += formatters.conflict_context_to_str(
+                conflict_context, format, pretty=True
+            )
 
         if show_pr_comments:
             pr_comments = note.get("pr_comments")
             if not pr_comments:
                 raise Exception("No PR comments found in the note.")
-            output_str += formatters.pr_comments_to_str(pr_comments, format, pretty=True)
+            output_str += formatters.pr_comments_to_str(
+                pr_comments, format, pretty=True
+            )
 
         if show_user_comment:
             user_comment = note.get("user_comment")
             if not user_comment:
                 raise Exception("No user comment found in the note.")
-            output_str += formatters.user_comment_to_str(user_comment, format, pretty=True)
+            output_str += formatters.user_comment_to_str(
+                user_comment, format, pretty=True
+            )
 
         if show_merge_description:
             merge_description = note.get("merge_description")
             if not merge_description:
                 raise Exception("No merge description found in the note.")
-            output_str += formatters.merge_description_to_str(merge_description, format, pretty=True)
+            output_str += formatters.merge_description_to_str(
+                merge_description, format, pretty=True
+            )
 
         if solution_index is not None:
             # Show a specific solution by index
@@ -209,9 +219,13 @@ def show(
             if not solutions:
                 raise Exception("No solutions found in the note.")
             elif solution_index < 0 or solution_index >= len(solutions):
-                raise Exception(f"Solution index {solution_index} out of range. Available: 0-{len(solutions)-1}")
+                raise Exception(
+                    f"Solution index {solution_index} out of range. Available: 0-{len(solutions)-1}"
+                )
             else:
-                output_str += formatters.conflict_solution_to_str(solutions[solution_index], format, pretty=True)
+                output_str += formatters.conflict_solution_to_str(
+                    solutions[solution_index], format, pretty=True
+                )
 
         if show_solutions:
             # Show all solutions
@@ -225,7 +239,9 @@ def show(
                             output_str += f"## Solution {idx}\n\n"
                         else:
                             output_str += f"=== Solution {idx} ===\n"
-                    output_str += formatters.conflict_solution_to_str(solution, format, pretty=True)
+                    output_str += formatters.conflict_solution_to_str(
+                        solution, format, pretty=True
+                    )
 
         if output_str:
             util.print_or_page(output_str, format=format)
@@ -249,7 +265,7 @@ def convert_note_to_text_summary(note: dict) -> str:
         Text summary of the note contents.
     """
     output = []
-    
+
     output.append("Note Summary:")
     output.append("")
 
@@ -258,8 +274,10 @@ def convert_note_to_text_summary(note: dict) -> str:
         mi = note["merge_info"]
         output.append("  Merge Info:")
         output.append(f"    Target Branch: {mi.get('target_branch', 'unknown')}")
-        if mi.get('target_branch_sha'):
-            output.append(f"    Target Branch SHA: {mi.get('target_branch_sha', 'unknown')[:11]}")
+        if mi.get("target_branch_sha"):
+            output.append(
+                f"    Target Branch SHA: {mi.get('target_branch_sha', 'unknown')[:11]}"
+            )
         output.append(f"    Merge Commit: {mi.get('merge_commit', 'unknown')[:11]}")
         output.append("")
 
@@ -268,12 +286,12 @@ def convert_note_to_text_summary(note: dict) -> str:
         mc = note["merge_context"]
         output.append("  Merge Context:")
         output.append(f"    Merged Commits: {len(mc.get('merged_commits', []))}")
-        auto_merged = mc.get('auto_merged', {})
+        auto_merged = mc.get("auto_merged", {})
         if auto_merged:
             output.append(f"    Auto-Merged Files: {len(auto_merged.get('files', []))}")
-            if auto_merged.get('strategy'):
+            if auto_merged.get("strategy"):
                 output.append(f"    Strategy: {auto_merged.get('strategy')}")
-        important = mc.get('important_files_modified', [])
+        important = mc.get("important_files_modified", [])
         if important:
             output.append(f"    Important Files Modified: {len(important)}")
         output.append("")
@@ -283,12 +301,14 @@ def convert_note_to_text_summary(note: dict) -> str:
         cc = note["conflict_context"]
         output.append("  Conflict Context:")
         # Handle both SHA strings and dict format
-        base = cc.get('base_commit', '')
-        ours = cc.get('ours_commit', '')
-        theirs = cc.get('theirs_commit', '')
-        base_sha = base if isinstance(base, str) else base.get('hexsha', str(base))
-        ours_sha = ours if isinstance(ours, str) else ours.get('hexsha', str(ours))
-        theirs_sha = theirs if isinstance(theirs, str) else theirs.get('hexsha', str(theirs))
+        base = cc.get("base_commit", "")
+        ours = cc.get("ours_commit", "")
+        theirs = cc.get("theirs_commit", "")
+        base_sha = base if isinstance(base, str) else base.get("hexsha", str(base))
+        ours_sha = ours if isinstance(ours, str) else ours.get("hexsha", str(ours))
+        theirs_sha = (
+            theirs if isinstance(theirs, str) else theirs.get("hexsha", str(theirs))
+        )
         output.append(f"    Base Commit: {base_sha[:11]}")
         output.append(f"    Ours Commit: {ours_sha[:11]}")
         output.append(f"    Theirs Commit: {theirs_sha[:11]}")
@@ -305,18 +325,20 @@ def convert_note_to_text_summary(note: dict) -> str:
             unresolved = len(response.get("unresolved", {}))
             modified = len(response.get("modified", {}))
             total = resolved + unresolved
-            
+
             # Author info
             if "agent_info" in sol:
                 agent = sol["agent_info"]
-                author = f"{agent.get('agent_type', 'unknown')} v{agent.get('version', '?')}"
+                author = (
+                    f"{agent.get('agent_type', 'unknown')} v{agent.get('version', '?')}"
+                )
             elif "author" in sol:
                 name = sol["author"].get("name", "unknown")
                 email = sol["author"].get("email", "")
                 author = f"{name} <{email}>" if email else name
             else:
                 author = "unknown"
-            
+
             output.append(f"    [{idx}] By: {author}")
             # Build stats line: "Resolved: X/Y" + optional ", Unresolved: Z" + optional ", Modified: M"
             stats_line = f"        Resolved: {resolved}/{total}"
@@ -354,14 +376,16 @@ def convert_note_to_text_summary(note: dict) -> str:
         output.append(f"    Auto-Merged Files: {len(response.get('auto_merged', {}))}")
         if md.get("agent_info"):
             agent = md["agent_info"]
-            output.append(f"    Agent: {agent.get('agent_type', 'unknown')} v{agent.get('version', '?')}")
+            output.append(
+                f"    Agent: {agent.get('agent_type', 'unknown')} v{agent.get('version', '?')}"
+            )
         output.append("")
 
     # Note Index and Commit Status - tracks which commits have which fields
     # Check commit status using MergaiNote model
     mergai_note = MergaiNote.from_dict(note)
     uncommitted_fields = mergai_note.get_uncommitted_fields()
-    
+
     if "note_index" in note:
         ni = note["note_index"]
         output.append(f"  Note Index ({len(ni)} entries):")
@@ -370,7 +394,7 @@ def convert_note_to_text_summary(note: dict) -> str:
             fields = entry.get("fields", [])
             output.append(f"    {sha}: {', '.join(fields)}")
         output.append("")
-    
+
     # Show commit status
     if uncommitted_fields:
         output.append("  Uncommitted Changes:")
@@ -426,11 +450,11 @@ def convert_note(
     """
     if format == "json":
         return json.dumps(note, indent=2 if pretty else None) + "\n"
-    
+
     elif format == "text":
         # Text format shows a summary of what's in the note
         return convert_note_to_text_summary(note)
-    
+
     elif format == "markdown":
         # Markdown format shows full details
         output_str = ""
@@ -446,15 +470,23 @@ def convert_note(
         if show_pr_comments and "pr_comments" in note:
             output_str += formatters.pr_comments_to_markdown(note["pr_comments"]) + "\n"
         if show_user_comment and "user_comment" in note:
-            output_str += formatters.user_comment_to_markdown(note["user_comment"]) + "\n"
+            output_str += (
+                formatters.user_comment_to_markdown(note["user_comment"]) + "\n"
+            )
         if show_solution and note.get("solutions"):
-            output_str += formatters.solutions_to_markdown(note.get("solutions", [])) + "\n"
+            output_str += (
+                formatters.solutions_to_markdown(note.get("solutions", [])) + "\n"
+            )
         if show_merge_description and "merge_description" in note:
-            output_str += formatters.merge_description_to_markdown(note["merge_description"]) + "\n"
+            output_str += (
+                formatters.merge_description_to_markdown(note["merge_description"])
+                + "\n"
+            )
 
         return output_str
-    
+
     return str(note)
+
 
 @click.command()
 @click.pass_obj

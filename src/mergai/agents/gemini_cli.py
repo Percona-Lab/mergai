@@ -105,7 +105,8 @@ class GeminiCLIAgent(CliAgent):
     def build_args(self, prompt: str) -> list:
         args = [
             "gemini",
-            "--approval-mode", "yolo" if self.yolo else "auto_edit",
+            "--approval-mode",
+            "yolo" if self.yolo else "auto_edit",
             "-o",
             "stream-json",
         ]
