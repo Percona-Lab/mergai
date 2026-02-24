@@ -7,6 +7,7 @@ using the SHA from merge_info.
 import click
 from git.exc import GitCommandError
 from ..app import AppContext
+from ..config import MERGE_DESCRIBE_ALWAYS, MERGE_DESCRIBE_SUCCESS, MERGE_DESCRIBE_CONFLICT
 from ..utils import git_utils
 
 
@@ -14,6 +15,37 @@ from ..utils import git_utils
 EXIT_SUCCESS = 0
 EXIT_CONFLICT = 1
 EXIT_ERROR = 2
+
+
+def _maybe_run_describe(app: AppContext, merge_outcome: str):
+    """Run describe command if configured for the given merge outcome.
+
+    Args:
+        app: AppContext instance.
+        merge_outcome: Either "success" or "conflict".
+
+    Note:
+        This function catches all exceptions and prints warnings instead of
+        failing, so that the merge command can complete even if describe fails.
+    """
+    # TODO: Add CLI flag (--describe/--no-describe) to override config setting
+    describe_setting = app.config.merge.describe
+
+    should_describe = (
+        describe_setting == MERGE_DESCRIBE_ALWAYS
+        or describe_setting == merge_outcome
+    )
+
+    if not should_describe:
+        return
+
+    click.echo("")
+    click.echo("Running describe (as configured)...")
+    try:
+        app.describe(force=False, max_attempts=app.config.resolve.max_attempts)
+        click.echo("Created merge_description.")
+    except Exception as e:
+        click.echo(f"Warning: Failed to create merge_description: {e}")
 
 
 @click.command()
@@ -131,6 +163,8 @@ def merge(app: AppContext, no_context: bool, force: bool):
             except Exception as e:
                 click.echo(f"Warning: Failed to create merge_context: {e}")
 
+            _maybe_run_describe(app, MERGE_DESCRIBE_SUCCESS)
+
         raise SystemExit(EXIT_SUCCESS)
 
     except GitCommandError as e:
@@ -204,6 +238,8 @@ def merge(app: AppContext, no_context: bool, force: bool):
                         click.echo("Created conflict_context.")
                 except Exception as ctx_err:
                     click.echo(f"Warning: Failed to create conflict_context: {ctx_err}")
+
+                _maybe_run_describe(app, MERGE_DESCRIBE_CONFLICT)
 
             raise SystemExit(EXIT_CONFLICT)
         else:

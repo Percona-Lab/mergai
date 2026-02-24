@@ -299,6 +299,63 @@ class FinalizeConfig:
         )
 
 
+# Valid values for merge.describe config
+MERGE_DESCRIBE_NEVER = "never"
+MERGE_DESCRIBE_ALWAYS = "always"
+MERGE_DESCRIBE_SUCCESS = "success"
+MERGE_DESCRIBE_CONFLICT = "conflict"
+VALID_MERGE_DESCRIBE_VALUES = [
+    MERGE_DESCRIBE_NEVER,
+    MERGE_DESCRIBE_ALWAYS,
+    MERGE_DESCRIBE_SUCCESS,
+    MERGE_DESCRIBE_CONFLICT,
+]
+
+
+@dataclass
+class MergeConfig:
+    """Configuration for the merge command.
+
+    Controls behavior after performing a git merge.
+
+    Attributes:
+        describe: When to automatically run the describe command after merge.
+            - 'never': Don't run describe (default)
+            - 'always': Run describe regardless of merge outcome
+            - 'success': Run describe only if merge succeeded (no conflicts)
+            - 'conflict': Run describe only if merge resulted in conflicts
+
+    Example YAML config:
+        merge:
+          describe: never
+    """
+
+    describe: str = MERGE_DESCRIBE_NEVER
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MergeConfig":
+        """Create a MergeConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            MergeConfig instance with values from data.
+
+        Raises:
+            ValueError: If describe value is not valid.
+        """
+        describe = data.get("describe", cls.describe)
+        if describe not in VALID_MERGE_DESCRIBE_VALUES:
+            raise ValueError(
+                f"Invalid value for merge.describe: '{describe}'. "
+                f"Valid values are: {', '.join(VALID_MERGE_DESCRIBE_VALUES)}"
+            )
+        return cls(
+            describe=describe,
+        )
+
+
 @dataclass
 class PromptConfig:
     """Configuration for prompt generation.
@@ -621,6 +678,7 @@ class MergaiConfig:
         commit: Configuration for commit message generation.
         pr: Configuration for pull request titles.
         finalize: Configuration for the finalize command.
+        merge: Configuration for the merge command.
         config: Configuration for the 'mergai config' command.
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
@@ -632,6 +690,7 @@ class MergaiConfig:
     commit: CommitConfig = field(default_factory=CommitConfig)
     pr: PRConfig = field(default_factory=PRConfig)
     finalize: FinalizeConfig = field(default_factory=FinalizeConfig)
+    merge: MergeConfig = field(default_factory=MergeConfig)
     config: InitConfig = field(default_factory=InitConfig)
     _raw: Dict[str, Any] = field(default_factory=dict)
 
@@ -711,6 +770,12 @@ class MergaiConfig:
             else FinalizeConfig()
         )
 
+        # Parse merge section if present
+        merge_data = data.get("merge", {})
+        merge_config = (
+            MergeConfig.from_dict(merge_data) if merge_data else MergeConfig()
+        )
+
         # Parse config section if present (for 'mergai config' command)
         config_section_data = data.get("config", {})
         config_config = InitConfig.from_dict(config_section_data) if config_section_data else InitConfig()
@@ -723,6 +788,7 @@ class MergaiConfig:
             commit=commit_config,
             pr=pr_config,
             finalize=finalize_config,
+            merge=merge_config,
             config=config_config,
             _raw=data,
         )

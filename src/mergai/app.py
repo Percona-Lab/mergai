@@ -520,9 +520,10 @@ class AppContext:
             message,
         )
 
-        self.add_selective_note(
-            self.repo.head.commit.hexsha, ["conflict_context", "merge_context"]
-        )
+        fields = ["conflict_context", "merge_context"]
+        if self.note.has_merge_description:
+            fields.append("merge_description")
+        self.add_selective_note(self.repo.head.commit.hexsha, fields)
 
     def commit_merge(self):
         """Commit the current staged changes as a merge commit.
@@ -541,7 +542,10 @@ class AppContext:
 
         self.repo.git.commit("-m", message)
 
-        self.add_selective_note(self.repo.head.commit.hexsha, ["merge_context"])
+        fields = ["merge_context"]
+        if self.note.has_merge_description:
+            fields.append("merge_description")
+        self.add_selective_note(self.repo.head.commit.hexsha, fields)
 
     def _collect_commits_for_squash(
         self, target_sha: str

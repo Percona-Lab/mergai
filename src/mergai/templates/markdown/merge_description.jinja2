@@ -3,11 +3,9 @@
 ## Summary
 
 {{ merge_description.response.summary }}
+{% if merge_description.response.auto_merged | length > 0 %}
 
 ## Auto-Merged Files
-{% if merge_description.response.auto_merged | length == 0 %}
-No files were auto-merged.
-{% else %}
 
 | File Path | Description |
 |-----------|-------------|
@@ -19,23 +17,22 @@ No files were auto-merged.
 ## Review Notes
 
 {{ merge_description.response.review_notes if merge_description.response.review_notes else "No review notes provided." }}
-{% if merge_description.stats %}
+{% if merge_description.stats or merge_description.agent_info %}
 
-## Stats
-{% if merge_description.stats.models | length > 0 %}
+<details>
+<summary>Agent Stats</summary>
+{% if merge_description.agent_info %}
 
-### Models
+**Agent:** {{ merge_description.agent_info.agent_type }} (version {{ merge_description.agent_info.version }})
+{% endif %}
+{% if merge_description.stats and merge_description.stats.models | length > 0 %}
 
-| Model | Input tokens | Output tokens | Cached tokens | Thoughts tokens | Tool tokens | Total tokens |
-|-------|--------------|---------------|---------------|-----------------|-------------|--------------|
+| Model | Input | Output | Cached | Thoughts | Tool | Total |
+|-------|-------|--------|--------|----------|------|-------|
 {%- for model, stat in merge_description.stats.models.items() %}
 | {{ model }} | {{ stat.tokens.input }} | {{ stat.tokens.output }} | {{ stat.tokens.cached }} | {{ stat.tokens.thoughts }} | {{ stat.tokens.tool }} | {{ stat.tokens.total }} |
 {%- endfor %}
 {% endif %}
-{% endif %}
-{% if merge_description.agent_info %}
 
-## Agent Info
-
-Executed with '{{ merge_description.agent_info.agent_type }}' agent, version '{{ merge_description.agent_info.version }}'.
+</details>
 {% endif %}
