@@ -733,6 +733,22 @@ class AppContext:
 
         click.echo(f"Found {len(commits_with_notes)} commit(s) to squash.")
 
+        # Check if there's only 1 commit and it's already a proper merge commit
+        # with the expected parents (target_branch_sha, merge_commit_sha).
+        # In this case, squashing is a no-op - the commit is already in the desired state.
+        if len(commits_with_notes) == 1:
+            head_commit = self.repo.head.commit
+            if (
+                len(head_commit.parents) == 2
+                and head_commit.parents[0].hexsha == target_sha_full
+                and head_commit.parents[1].hexsha == merge_commit_sha
+            ):
+                click.echo(
+                    "HEAD is already a merge commit with the expected structure. "
+                    "Nothing to squash."
+                )
+                return
+
         # Soft reset to target_branch_sha to stage all changes
         click.echo(f"Resetting to {git_utils.short_sha(target_branch_sha)}...")
         self.repo.git.reset("--soft", target_branch_sha)
