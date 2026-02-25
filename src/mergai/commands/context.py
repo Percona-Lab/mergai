@@ -8,10 +8,12 @@ This module provides commands for creating and managing merge context:
 """
 
 import sys
+from collections.abc import Callable
 
 import click
 
 from ..app import AppContext
+from ..models import MergaiNote
 from ..utils import git_utils
 from ..utils.branch_name_builder import BranchNameBuilder, ParsedBranchName
 
@@ -470,14 +472,17 @@ def create_merge(app: AppContext, force: bool, from_stdin: bool, strategy: str):
             click.echo("  auto_merged.files: (none)")
 
 
-# Mapping of drop part names to (method_name, message) tuples.
+# Mapping of drop part names to (method, message) tuples.
 # Used by the 'drop' command to dispatch to the appropriate MergaiNote method.
-_DROP_HANDLERS: dict[str, tuple[str, str]] = {
-    "conflict": ("drop_conflict_context", "Dropped conflict context."),
-    "pr_comments": ("drop_pr_comments", "Dropped PR comments."),
-    "user_comment": ("drop_user_comment", "Dropped user comment."),
-    "merge_context": ("drop_merge_context", "Dropped merge context."),
-    "merge_description": ("drop_merge_description", "Dropped merge description."),
+_DROP_HANDLERS: dict[str, tuple[Callable[[MergaiNote], MergaiNote], str]] = {
+    "conflict": (MergaiNote.drop_conflict_context, "Dropped conflict context."),
+    "pr_comments": (MergaiNote.drop_pr_comments, "Dropped PR comments."),
+    "user_comment": (MergaiNote.drop_user_comment, "Dropped user comment."),
+    "merge_context": (MergaiNote.drop_merge_context, "Dropped merge context."),
+    "merge_description": (
+        MergaiNote.drop_merge_description,
+        "Dropped merge description.",
+    ),
 }
 
 # Valid choices for the drop command (handlers + special cases)
@@ -547,8 +552,8 @@ def drop(app: AppContext, part: str | None, drop_all_solutions: bool):
             click.echo("Dropped uncommitted solutions.")
     else:
         # Use handler dispatch for standard cases
-        method_name, message = _DROP_HANDLERS[part]
-        getattr(app.note, method_name)()
+        method, message = _DROP_HANDLERS[part]
+        method(app.note)
         click.echo(message)
 
     app.save_note(app.note)
