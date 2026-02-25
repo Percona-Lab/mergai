@@ -8,6 +8,7 @@ This module provides commands for creating and managing merge context:
 """
 
 import click
+import sys
 
 from ..app import AppContext
 from ..utils import git_utils
@@ -237,6 +238,13 @@ def init(
         mergai context init              # rebuild from commits or use branch info
         mergai context init -f           # force overwrite existing merge_info
     """
+
+    # Check if note already exists with merge_info
+    if app.has_note and not force:
+        raise click.ClickException(
+            "merge_info already exists in the note. Use -f/--force to overwrite."
+        )
+
     # For init, we only use branch parsing for defaults (not note.json)
     # since we're creating/overwriting merge_info
     current_branch = git_utils.get_current_branch(app.repo)
@@ -274,12 +282,6 @@ def init(
         target_branch_sha = git_utils.resolve_ref_sha(app.repo, target_branch)
     except ValueError as e:
         raise click.ClickException(str(e)) from e
-
-    # Check if note already exists with merge_info
-    if app.has_note and not force:
-        raise click.ClickException(
-            "merge_info already exists in the note. Use -f/--force to overwrite."
-        )
 
     # Create and save the note
     from ..models import MergaiNote, MergeInfo
@@ -347,41 +349,38 @@ def create_conflict(
         mergai context create conflict -f
         mergai context create conflict --diff-lines-of-context 3
     """
-    try:
-        if not git_utils.is_merge_conflict_style_diff3(app.repo):
-            click.echo(
-                "Warning: Git is not configured to use diff3 for merges. "
-                "It's recommended to set 'merge.conflictstyle' to 'diff3' "
-                "for better conflict resolution context.\n\n"
-                "You can set it globally with:\n"
-                "  git config --global merge.conflictstyle diff3\n"
-                "or locally in the repository with:\n"
-                "  git config merge.conflictstyle diff3"
-            )
-        if app.note.has_conflict_context and not force:
-            raise Exception(
-                "Conflict context already exists in the note. Use -f/--force to overwrite."
-            )
-
-        # Use config values as defaults, CLI flags override if explicitly set
-        ctx_config = app.config.context.conflict.with_overrides(
-            use_diffs=use_diffs,
-            diff_lines_of_context=diff_lines_of_context,
-            use_compressed_diffs=use_compressed_diffs,
-            use_their_commits=use_their_commits,
+    if app.note.has_conflict_context and not force:
+        raise click.ClickException(
+            "Conflict context already exists in the note. Use -f/--force to overwrite."
         )
 
-        context = app.context_builder.create_conflict_context(
-            ctx_config.use_diffs,
-            ctx_config.diff_lines_of_context,
-            ctx_config.use_compressed_diffs,
-            ctx_config.use_their_commits,
+    if not git_utils.is_merge_conflict_style_diff3(app.repo):
+        click.echo(
+            "Warning: Git is not configured to use diff3 for merges. "
+            "It's recommended to set 'merge.conflictstyle' to 'diff3' "
+            "for better conflict resolution context.\n\n"
+            "You can set it globally with:\n"
+            "  git config --global merge.conflictstyle diff3\n"
+            "or locally in the repository with:\n"
+            "  git config merge.conflictstyle diff3"
         )
-        app.note.set_conflict_context(context)
-        app.save_note(app.note)
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)
+
+    # Use config values as defaults, CLI flags override if explicitly set
+    ctx_config = app.config.context.conflict.with_overrides(
+        use_diffs=use_diffs,
+        diff_lines_of_context=diff_lines_of_context,
+        use_compressed_diffs=use_compressed_diffs,
+        use_their_commits=use_their_commits,
+    )
+
+    context = app.context_builder.create_conflict_context(
+        ctx_config.use_diffs,
+        ctx_config.diff_lines_of_context,
+        ctx_config.use_compressed_diffs,
+        ctx_config.use_their_commits,
+    )
+    app.note.set_conflict_context(context)
+    app.save_note(app.note)
 
 
 @create.command(name="merge")
@@ -428,7 +427,11 @@ def create_merge(app: AppContext, force: bool, from_stdin: bool, strategy: str):
         mergai context create merge --stdin  # read git merge output from stdin
         mergai context create merge --stdin --strategy ort  # override strategy
     """
-    import sys
+
+    if app.note.has_merge_context and not force:
+        raise click.ClickException(
+            "merge_context already exists. Use -f/--force to overwrite."
+        )
 
     auto_merged_files = None
     merge_strategy = strategy
@@ -440,38 +443,30 @@ def create_merge(app: AppContext, force: bool, from_stdin: bool, strategy: str):
         if merge_strategy is None:
             merge_strategy = parsed.strategy
 
-    try:
-        if app.note.has_merge_context and not force:
-            raise Exception(
-                "merge_context already exists. Use -f/--force to overwrite."
-            )
+    context = app.context_builder.create_merge_context(
+        auto_merged_files=auto_merged_files,
+        merge_strategy=merge_strategy,
+    )
+    app.note.set_merge_context(context)
+    app.save_note(app.note)
 
-        context = app.context_builder.create_merge_context(
-            auto_merged_files=auto_merged_files,
-            merge_strategy=merge_strategy,
+    click.echo("Created merge context:")
+    click.echo(f"  merge_commit: {context.merge_commit_sha}")
+    click.echo(f"  merged_commits: {len(context.merged_commits_shas)} commits")
+    if context.important_files_modified:
+        click.echo(
+            f"  important_files_modified: {', '.join(context.important_files_modified)}"
         )
-        app.note.set_merge_context(context)
-        app.save_note(app.note)
-
-        click.echo("Created merge context:")
-        click.echo(f"  merge_commit: {context.merge_commit_sha}")
-        click.echo(f"  merged_commits: {len(context.merged_commits_shas)} commits")
-        if context.important_files_modified:
-            click.echo(
-                f"  important_files_modified: {', '.join(context.important_files_modified)}"
-            )
+    else:
+        click.echo("  important_files_modified: (none)")
+    if context.auto_merged:
+        auto_merged = context.auto_merged
+        if auto_merged.get("strategy"):
+            click.echo(f"  auto_merged.strategy: {auto_merged['strategy']}")
+        if auto_merged.get("files"):
+            click.echo(f"  auto_merged.files: {len(auto_merged['files'])} files")
         else:
-            click.echo("  important_files_modified: (none)")
-        if context.auto_merged:
-            auto_merged = context.auto_merged
-            if auto_merged.get("strategy"):
-                click.echo(f"  auto_merged.strategy: {auto_merged['strategy']}")
-            if auto_merged.get("files"):
-                click.echo(f"  auto_merged.files: {len(auto_merged['files'])} files")
-            else:
-                click.echo("  auto_merged.files: (none)")
-    except Exception as e:
-        raise click.ClickException(str(e)) from e
+            click.echo("  auto_merged.files: (none)")
 
 
 @context.command()
@@ -524,46 +519,42 @@ def drop(app: AppContext, part: str | None, drop_all_solutions: bool):
         mergai context drop solution --all  # drops all solutions
         mergai context drop pr_comments  # drops only PR comments
     """
-    try:
-        if part is None:
-            app.drop_all()
-            click.echo("Dropped all context.")
-            return
+    if part is None:
+        app.drop_all()
+        click.echo("Dropped all context.")
+        return
 
-        if part == "merge_info":
-            app.drop_all()
-            click.echo("Dropped merge info.")
-            return
+    if part == "merge_info":
+        app.drop_all()
+        click.echo("Dropped merge info.")
+        return
 
-        if not app.has_note:
-            click.echo("No note found.")
-            return
+    if not app.has_note:
+        click.echo("No note found.")
+        return
 
-        if part == "conflict":
-            app.note.drop_conflict_context()
-            click.echo("Dropped conflict context.")
-        elif part == "solution":
-            app.note.drop_solution(all=drop_all_solutions)
-            if drop_all_solutions:
-                click.echo("Dropped all solutions.")
-            else:
-                click.echo("Dropped uncommitted solutions.")
-        elif part == "pr_comments":
-            app.note.drop_pr_comments()
-            click.echo("Dropped PR comments.")
-        elif part == "user_comment":
-            app.note.drop_user_comment()
-            click.echo("Dropped user comment.")
-        elif part == "merge_context":
-            app.note.drop_merge_context()
-            click.echo("Dropped merge context.")
-        elif part == "merge_description":
-            app.note.drop_merge_description()
-            click.echo("Dropped merge description.")
+    if part == "conflict":
+        app.note.drop_conflict_context()
+        click.echo("Dropped conflict context.")
+    elif part == "solution":
+        app.note.drop_solution(all=drop_all_solutions)
+        if drop_all_solutions:
+            click.echo("Dropped all solutions.")
         else:
-            raise Exception(f"Invalid part: {part}")
+            click.echo("Dropped uncommitted solutions.")
+    elif part == "pr_comments":
+        app.note.drop_pr_comments()
+        click.echo("Dropped PR comments.")
+    elif part == "user_comment":
+        app.note.drop_user_comment()
+        click.echo("Dropped user comment.")
+    elif part == "merge_context":
+        app.note.drop_merge_context()
+        click.echo("Dropped merge context.")
+    elif part == "merge_description":
+        app.note.drop_merge_description()
+        click.echo("Dropped merge description.")
+    else:
+        raise click.ClickException(f"Invalid part: {part}")
 
-        app.save_note(app.note)
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)
+    app.save_note(app.note)
