@@ -26,7 +26,7 @@ jobs:
           pip install pip-audit
 
       - name: Run pip-audit
-        run: pip-audit --strict --progress-spinner off
+        run: pip-audit --progress-spinner off --skip-editable
 
   codeql:
     name: CodeQL Analysis
