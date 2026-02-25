@@ -37,3 +37,19 @@ where = ["src"]
 # Development versions: 0.1.0.dev5+g1234abc (5 commits after tag)
 version_scheme = "guess-next-dev"
 local_scheme = "node-and-date"
+
+[project.optional-dependencies]
+dev = ["pre-commit>=3.0.0"]
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.git
+    | \.venv
+    | venv
+    | __pycache__
+)/
+'''

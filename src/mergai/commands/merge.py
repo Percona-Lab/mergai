@@ -14,7 +14,6 @@ from ..config import (
 )
 from ..utils import git_utils
 
-
 # Exit codes
 EXIT_SUCCESS = 0
 EXIT_CONFLICT = 1

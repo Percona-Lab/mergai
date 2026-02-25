@@ -8,7 +8,6 @@ import re
 from pathlib import Path
 from typing import Optional
 
-
 JSON_BLOCK_RE = re.compile(
     r"```json\s*\n(.*?)\n```",
     re.DOTALL | re.IGNORECASE,

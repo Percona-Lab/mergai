@@ -27,7 +27,12 @@ To add a new strategy:
     5. Register the strategy in registry.py
 """
 
-from .base import MergePickStrategy, MergePickStrategyResult, MergePickStrategyContext, MergePickCommit
+from .base import (
+    MergePickStrategy,
+    MergePickStrategyResult,
+    MergePickStrategyContext,
+    MergePickCommit,
+)
 from .huge_commit import HugeCommitStrategy, HugeCommitStrategyConfig, HugeCommitResult
 from .important_files import (
     ImportantFilesStrategy,

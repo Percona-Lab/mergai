@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from git import Repo
 from ..app import AppContext
 
-
 # Constants for notes refs
 NOTES_REF = "mergai"
 NOTES_MARKER_REF = "mergai-marker"

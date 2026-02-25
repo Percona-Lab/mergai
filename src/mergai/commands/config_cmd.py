@@ -11,7 +11,6 @@ from pathlib import Path
 
 from ..config import MergaiConfig, InitConfig
 
-
 # Constant for notes display ref - not configurable, only whether to set it
 NOTES_DISPLAY_REF = "refs/notes/mergai-marker"
 

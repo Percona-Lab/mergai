@@ -14,7 +14,6 @@ from ..app import AppContext
 from ..utils import git_utils
 from ..utils.branch_name_builder import BranchNameBuilder, ParsedBranchName
 
-
 CREATE_CONFLICT_CONTEXT_FLAGS = [
     click.option(
         "--use-diffs/--no-diffs",

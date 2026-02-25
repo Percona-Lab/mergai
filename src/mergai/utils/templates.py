@@ -28,7 +28,9 @@ def _create_jinja_env() -> Environment:
 
     # Add custom filters
     env.filters["short_sha"] = lambda sha: sha[:11] if sha else ""
-    env.filters["to_json"] = lambda obj, **kwargs: json.dumps(obj, default=str, **kwargs)
+    env.filters["to_json"] = lambda obj, **kwargs: json.dumps(
+        obj, default=str, **kwargs
+    )
 
     return env
 

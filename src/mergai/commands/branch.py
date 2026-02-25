@@ -13,7 +13,6 @@ from ..app import AppContext
 from ..utils.branch_name_builder import BranchType
 from ..utils import git_utils
 
-
 BRANCH_ALL = "all"
 
 # Excluded types for common operations:

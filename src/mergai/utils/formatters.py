@@ -19,13 +19,14 @@ from ..models import (
     MarkdownFormat,
 )
 
-
 # =============================================================================
 # Helper Functions
 # =============================================================================
 
 
-def _create_format_sha_func(markdown_config: Optional[MarkdownConfig] = None) -> Callable[[str, bool], str]:
+def _create_format_sha_func(
+    markdown_config: Optional[MarkdownConfig] = None,
+) -> Callable[[str, bool], str]:
     """Create a format_sha function for Jinja2 templates.
 
     Args:
@@ -157,7 +158,9 @@ def merge_info_to_markdown(
         Markdown formatted string.
     """
     format_sha = _create_format_sha_func(markdown_config)
-    return render_template("markdown", "merge_info", merge_info=merge_info, format_sha=format_sha)
+    return render_template(
+        "markdown", "merge_info", merge_info=merge_info, format_sha=format_sha
+    )
 
 
 def merge_info_to_str(
@@ -178,7 +181,10 @@ def merge_info_to_str(
         Formatted string representation.
     """
     if format == OutputFormat.JSON.value or format == "json":
-        return json.dumps(merge_info.to_dict(), default=str, indent=2 if pretty else None) + "\n"
+        return (
+            json.dumps(merge_info.to_dict(), default=str, indent=2 if pretty else None)
+            + "\n"
+        )
     elif format == OutputFormat.MARKDOWN.value or format == "markdown":
         return merge_info_to_markdown(merge_info, markdown_config) + "\n"
     else:
@@ -221,7 +227,12 @@ def conflict_context_to_markdown(
 
     template_data = conflict_context.to_dict(ContextSerializationConfig.template())
     format_sha = _create_format_sha_func(markdown_config)
-    return render_template("markdown", "conflict_context", conflict_context=template_data, format_sha=format_sha)
+    return render_template(
+        "markdown",
+        "conflict_context",
+        conflict_context=template_data,
+        format_sha=format_sha,
+    )
 
 
 def conflict_context_to_str(
@@ -248,7 +259,10 @@ def conflict_context_to_str(
         )
 
     if format == OutputFormat.JSON.value or format == "json":
-        return json.dumps(context.to_dict(), default=str, indent=2 if pretty else None) + "\n"
+        return (
+            json.dumps(context.to_dict(), default=str, indent=2 if pretty else None)
+            + "\n"
+        )
     elif format == OutputFormat.MARKDOWN.value or format == "markdown":
         return conflict_context_to_markdown(context, markdown_config) + "\n"
     else:
@@ -289,7 +303,9 @@ def merge_context_to_markdown(
         )
 
     format_sha = _create_format_sha_func(markdown_config)
-    return render_template("markdown", "merge_context", merge_context=merge_context, format_sha=format_sha)
+    return render_template(
+        "markdown", "merge_context", merge_context=merge_context, format_sha=format_sha
+    )
 
 
 def merge_context_to_str(
@@ -316,7 +332,12 @@ def merge_context_to_str(
         )
 
     if format == OutputFormat.JSON.value or format == "json":
-        return json.dumps(merge_context.to_dict(), default=str, indent=2 if pretty else None) + "\n"
+        return (
+            json.dumps(
+                merge_context.to_dict(), default=str, indent=2 if pretty else None
+            )
+            + "\n"
+        )
     elif format == OutputFormat.MARKDOWN.value or format == "markdown":
         return merge_context_to_markdown(merge_context, markdown_config) + "\n"
     else:
@@ -473,7 +494,9 @@ def user_comment_to_str(user_comment: dict, format: str, pretty: bool = False) -
         Formatted string representation.
     """
     if format == OutputFormat.JSON.value or format == "json":
-        return json.dumps(user_comment, default=str, indent=2 if pretty else None) + "\n"
+        return (
+            json.dumps(user_comment, default=str, indent=2 if pretty else None) + "\n"
+        )
     elif format == OutputFormat.MARKDOWN.value or format == "markdown":
         return user_comment_to_markdown(user_comment) + "\n"
     else:
@@ -487,15 +510,21 @@ def user_comment_to_str(user_comment: dict, format: str, pretty: bool = False) -
 
 def merge_description_to_text(merge_description: dict) -> str:
     """Convert merge description to text format."""
-    return render_template("text", "merge_description", merge_description=merge_description)
+    return render_template(
+        "text", "merge_description", merge_description=merge_description
+    )
 
 
 def merge_description_to_markdown(merge_description: dict) -> str:
     """Convert merge description to markdown format."""
-    return render_template("markdown", "merge_description", merge_description=merge_description)
+    return render_template(
+        "markdown", "merge_description", merge_description=merge_description
+    )
 
 
-def merge_description_to_str(merge_description: dict, format: str, pretty: bool = False) -> str:
+def merge_description_to_str(
+    merge_description: dict, format: str, pretty: bool = False
+) -> str:
     """Convert merge description to string in specified format.
 
     Args:
@@ -507,7 +536,10 @@ def merge_description_to_str(merge_description: dict, format: str, pretty: bool 
         Formatted string representation.
     """
     if format == OutputFormat.JSON.value or format == "json":
-        return json.dumps(merge_description, default=str, indent=2 if pretty else None) + "\n"
+        return (
+            json.dumps(merge_description, default=str, indent=2 if pretty else None)
+            + "\n"
+        )
     elif format == OutputFormat.MARKDOWN.value or format == "markdown":
         return merge_description_to_markdown(merge_description) + "\n"
     else:
@@ -539,13 +571,21 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
     if "merge_info" in note:
         output_str += f"  - Merge Info\n"
         merge_info = note["merge_info"]
-        output_str += f"    - Target Branch: {merge_info.get('target_branch', 'unknown')}\n"
-        output_str += f"    - Merge Commit: {merge_info.get('merge_commit', 'unknown')}\n"
+        output_str += (
+            f"    - Target Branch: {merge_info.get('target_branch', 'unknown')}\n"
+        )
+        output_str += (
+            f"    - Merge Commit: {merge_info.get('merge_commit', 'unknown')}\n"
+        )
     if "merge_context" in note:
         output_str += f"  - Merge Context\n"
         merge_context = note["merge_context"]
-        output_str += f"    - Merge Commit: {merge_context.get('merge_commit', 'unknown')}\n"
-        output_str += f"    - Merged Commits: {len(merge_context.get('merged_commits', []))}\n"
+        output_str += (
+            f"    - Merge Commit: {merge_context.get('merge_commit', 'unknown')}\n"
+        )
+        output_str += (
+            f"    - Merged Commits: {len(merge_context.get('merged_commits', []))}\n"
+        )
         important_files = merge_context.get("important_files_modified", [])
         if important_files:
             output_str += f"    - Important Files Modified: {len(important_files)}\n"
@@ -607,7 +647,9 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
         output_str += f"{note['user_comment'].get('body', '')}\n"
         output_str += f"\n"
 
-    output_str += f"Message:\n    {commit.message.strip().replace(chr(10), chr(10) + '    ')}\n"
+    output_str += (
+        f"Message:\n    {commit.message.strip().replace(chr(10), chr(10) + '    ')}\n"
+    )
 
     # mergai version at the end
     if "mergai_version" in note:
@@ -634,13 +676,17 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
     output_str += f"- Message:\n\n    {commit.message.strip().replace(chr(10), chr(10) + '    ')}\n"
     output_str += f"- Content:\n"
     if "merge_info" in note:
-        output_str += f"  - Merge Info (use mergai show --merge-info to see the merge info.)\n"
+        output_str += (
+            f"  - Merge Info (use mergai show --merge-info to see the merge info.)\n"
+        )
     if "merge_context" in note:
         output_str += f"  - Merge Context (use mergai show --merge-context to see the merge context.)\n"
     if "conflict_context" in note:
         output_str += f"  - Conflict Context (use mergai show --context to see the conflict context.)\n"
     if "pr_comments" in note:
-        output_str += f"  - PR Comments (use mergai show --pr-comments to see the PR comments.)\n"
+        output_str += (
+            f"  - PR Comments (use mergai show --pr-comments to see the PR comments.)\n"
+        )
 
     # Handle both legacy "solution" and new "solutions" array
     if "solutions" in note:
@@ -662,7 +708,9 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
     return output_str
 
 
-def commit_note_to_summary_json(commit: git.Commit, note: dict, pretty: bool = False) -> str:
+def commit_note_to_summary_json(
+    commit: git.Commit, note: dict, pretty: bool = False
+) -> str:
     """Convert commit and note to JSON summary format.
 
     Args:
@@ -743,6 +791,8 @@ def commit_to_summary_str(commit: git.Commit) -> str:
     output_str += f"Date:   {commit.authored_datetime}\n"
     output_str += "Content:\n"
     output_str += "  (no note)\n"
-    output_str += f"Message:\n    {commit.message.strip().replace(chr(10), chr(10) + '    ')}\n"
+    output_str += (
+        f"Message:\n    {commit.message.strip().replace(chr(10), chr(10) + '    ')}\n"
+    )
     output_str += "\n"
     return output_str

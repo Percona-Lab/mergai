@@ -163,7 +163,6 @@ class AppContext:
         except Exception as e:
             return None
 
-    
     @property
     def prompt_builder(self) -> PromptBuilder:
         """Get a PromptBuilder instance for the current note.
@@ -832,9 +831,7 @@ class AppContext:
 
         # Print validation summary
         click.echo(f"Finalize mode: keep (commits preserved)")
-        click.echo(
-            f"Commits from HEAD to {git_utils.short_sha(target_branch_sha)}:\n"
-        )
+        click.echo(f"Commits from HEAD to {git_utils.short_sha(target_branch_sha)}:\n")
         for commit, note in commits_with_notes:
             short_sha = git_utils.short_sha(commit.hexsha)
             first_line = commit.message.split("\n")[0].strip()
@@ -1113,6 +1110,7 @@ class AppContext:
         # Set mergai_version to current version if not found in any git note
         if "mergai_version" not in note_dict:
             from .version import __version__
+
             note_dict["mergai_version"] = __version__
 
         # Convert to MergaiNote
@@ -1142,7 +1140,7 @@ class AppContext:
         # or if it's an ancestor of the conflict branch tip
         first_parent = commit.parents[0]
         first_parent_note = self.get_note_from_commit(first_parent.hexsha)
-        
+
         # If first parent has conflict_context, this is likely a PR merge into conflict branch
         if first_parent_note is not None and "conflict_context" in first_parent_note:
             return True
@@ -1188,7 +1186,7 @@ class AppContext:
 
             # Check if this commit has a mergai note
             git_note = self.get_note_from_commit(commit.hexsha)
-            
+
             # Check if commit already has a solution
             has_solution = git_note is not None and "solutions" in git_note
 
@@ -1261,7 +1259,9 @@ class AppContext:
             else:
                 # Determine appropriate description
                 if file_path in previously_unresolved:
-                    resolved[file_path] = "Resolved by human (was previously unresolved)"
+                    resolved[file_path] = (
+                        "Resolved by human (was previously unresolved)"
+                    )
                 elif file_path in conflict_files:
                     resolved[file_path] = "Resolved by human"
                 else:
@@ -1271,7 +1271,9 @@ class AppContext:
         # Parse commit message
         message_lines = commit.message.strip().split("\n")
         summary = message_lines[0] if message_lines else "Human changes"
-        review_notes = "\n".join(message_lines[1:]).strip() if len(message_lines) > 1 else ""
+        review_notes = (
+            "\n".join(message_lines[1:]).strip() if len(message_lines) > 1 else ""
+        )
 
         return {
             "response": {
@@ -1327,7 +1329,9 @@ class AppContext:
                     has_markers = git_utils.file_has_conflict_markers(
                         self.repo, commit.hexsha, file_path
                     )
-                    status = " (UNRESOLVED - has conflict markers)" if has_markers else ""
+                    status = (
+                        " (UNRESOLVED - has conflict markers)" if has_markers else ""
+                    )
                     click.echo(f"    - {file_path}{status}")
             return len(commits_to_sync)
 
@@ -1363,8 +1367,7 @@ class AppContext:
             if modified_count > 0:
                 summary_parts.append(f"{modified_count} modified")
             click.echo(
-                f"  -> Added solution [{solution_idx}]: "
-                f"{', '.join(summary_parts)}"
+                f"  -> Added solution [{solution_idx}]: " f"{', '.join(summary_parts)}"
             )
 
         click.echo(f"\nSuccessfully synced {synced_count} commit(s).")

@@ -26,11 +26,14 @@ class ConflictType(StrEnum):
 def short_sha(sha: str) -> str:
     return sha[:11]
 
+
 def is_merge_commit(commit: Commit) -> bool:
     return len(commit.parents) > 1
 
+
 def is_merge_commit_parent(commit: Commit, parent_sha: str) -> bool:
     return is_merge_commit(commit) and commit.parents[1].hexsha == parent_sha
+
 
 def resolve_ref_sha(repo: Repo, ref: str, try_remote: bool = True) -> str:
     """Resolve a git reference (branch, tag, SHA) to its full SHA.
@@ -456,7 +459,11 @@ def commit_would_conflict(
                 continue
 
             # Skip GitPython error prefix lines
-            if line.startswith("Cmd(") or line.startswith("cmdline:") or line.startswith("stdout:"):
+            if (
+                line.startswith("Cmd(")
+                or line.startswith("cmdline:")
+                or line.startswith("stdout:")
+            ):
                 # Handle "  stdout: '<tree-oid>" format
                 if "stdout:" in line and "'" in line:
                     # Extract the actual content after stdout: '
@@ -493,6 +500,7 @@ def get_note_from_commit(repo: Repo, ref: str, commit: str) -> Optional[str]:
         return note
     except Exception as e:
         return None
+
 
 def get_note_from_commit_as_dict(repo: Repo, ref: str, commit: str) -> Optional[dict]:
     note_str = get_note_from_commit(repo, ref, commit)
@@ -660,7 +668,7 @@ def parse_git_merge_output(output: str, repo: Optional[Repo] = None) -> GitMerge
 
 class ForkStatus:
     """Status information about a fork compared to its upstream base.
-    
+
     This class uses lazy loading for commits - commit SHAs are stored
     and full Commit objects are only created when needed. This significantly
     improves performance when there are many unmerged commits.
@@ -698,7 +706,7 @@ class ForkStatus:
     @property
     def unmerged_commit_shas(self) -> List[str]:
         """Get the list of unmerged commit SHAs (newest first).
-        
+
         This is efficient as it doesn't require loading full Commit objects.
         """
         return self._unmerged_commit_shas
@@ -706,7 +714,7 @@ class ForkStatus:
     @property
     def unmerged_commits(self) -> List[Commit]:
         """Get the list of unmerged commits (newest first).
-        
+
         Note: This loads all Commit objects on first access. For better
         performance when only needing SHAs or a subset of commits, use
         unmerged_commit_shas or get_commit() instead.
@@ -719,10 +727,10 @@ class ForkStatus:
 
     def get_commit(self, sha: str) -> Commit:
         """Get a single commit by SHA.
-        
+
         Args:
             sha: The commit SHA to retrieve.
-            
+
         Returns:
             The Commit object.
         """
@@ -789,7 +797,9 @@ class CommitStats:
     num_of_dirs: int
 
 
-def get_batch_commit_stats(repo: Repo, commit_shas: List[str]) -> dict[str, CommitStats]:
+def get_batch_commit_stats(
+    repo: Repo, commit_shas: List[str]
+) -> dict[str, CommitStats]:
     """Batch calculate stats for multiple commits in a single git call.
 
     This is much more efficient than calling get_commit_stats() for each commit
@@ -812,10 +822,7 @@ def get_batch_commit_stats(repo: Repo, commit_shas: List[str]) -> dict[str, Comm
         # Format: SHA, then numstat output, separated by a marker
         # We use --stdin to pass the list of commits
         output = repo.git.log(
-            "--numstat",
-            "--format=COMMIT_START %H",
-            "--no-walk",
-            *commit_shas
+            "--numstat", "--format=COMMIT_START %H", "--no-walk", *commit_shas
         )
 
         current_sha = None
@@ -972,7 +979,9 @@ def get_commit_modified_files(repo: Repo, commit: Commit) -> List[str]:
     return files_modified
 
 
-def get_file_content_at_commit(repo: Repo, commit_sha: str, file_path: str) -> Optional[str]:
+def get_file_content_at_commit(
+    repo: Repo, commit_sha: str, file_path: str
+) -> Optional[str]:
     """Get file content at a specific commit.
 
     Args:
@@ -1201,7 +1210,9 @@ def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
     # are loaded on-demand via ForkStatus.unmerged_commits property
     try:
         behind_output = repo.git.rev_list(f"{fork_ref}..{upstream_ref}").strip()
-        unmerged_commit_shas = [sha for sha in behind_output.split("\n") if sha] if behind_output else []
+        unmerged_commit_shas = (
+            [sha for sha in behind_output.split("\n") if sha] if behind_output else []
+        )
     except Exception:
         unmerged_commit_shas = []
 
@@ -1212,8 +1223,12 @@ def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
     # First and last unmerged commits - these we load eagerly since they're
     # needed for the status summary display
     # unmerged_commit_shas are in reverse chronological order (newest first)
-    first_unmerged_commit = repo.commit(unmerged_commit_shas[-1]) if unmerged_commit_shas else None
-    last_unmerged_commit = repo.commit(unmerged_commit_shas[0]) if unmerged_commit_shas else None
+    first_unmerged_commit = (
+        repo.commit(unmerged_commit_shas[-1]) if unmerged_commit_shas else None
+    )
+    last_unmerged_commit = (
+        repo.commit(unmerged_commit_shas[0]) if unmerged_commit_shas else None
+    )
 
     # Get divergence stats using git diff --stat
     files_affected = 0

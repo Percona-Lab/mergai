@@ -49,7 +49,11 @@ def format_option(
     def decorator(func: Callable) -> Callable:
         # Build choices based on include_json
         if include_json:
-            choices = [OutputFormat.TEXT.value, OutputFormat.MARKDOWN.value, OutputFormat.JSON.value]
+            choices = [
+                OutputFormat.TEXT.value,
+                OutputFormat.MARKDOWN.value,
+                OutputFormat.JSON.value,
+            ]
         else:
             choices = [OutputFormat.TEXT.value, OutputFormat.MARKDOWN.value]
 
@@ -82,6 +86,7 @@ def format_option(
 
         # Add --json alias (only if JSON is included)
         if include_json:
+
             def set_json(ctx, param, value):
                 if value:
                     ctx.params["format"] = OutputFormat.JSON.value

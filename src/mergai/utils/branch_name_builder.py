@@ -6,6 +6,7 @@ from . import git_utils
 from ..models import MergeInfo
 from ..config import BranchConfig
 
+
 @dataclass
 class ParsedBranchName:
     """Parsed components of a mergai branch name.
