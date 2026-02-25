@@ -290,3 +290,77 @@ git commit -m "Fix remaining conflicts" # Create regular git commit
 mergai commit sync                     # Sync human commits to notes
 mergai pr --repo <repo> update solution # Update PR body with new solutions
 ```
+
+## Development
+
+### Setup
+
+Install the package with development dependencies:
+
+```bash
+pip install -e ".[dev]"
+```
+
+Set up pre-commit hooks to automatically check formatting before commits:
+
+```bash
+pre-commit install
+```
+
+### Code Quality Tools
+
+The project uses several tools to maintain code quality:
+
+| Tool | Purpose | Config |
+|------|---------|--------|
+| **Black** | Code formatter (line length 88, Python 3.10+) | `pyproject.toml` |
+| **Ruff** | Fast linter (pycodestyle, Pyflakes, isort, flake8-bugbear, flake8-comprehensions, pyupgrade, flake8-simplify) | `pyproject.toml` |
+| **mypy** | Static type checking | `pyproject.toml` |
+| **deptry** | Unused/missing dependency detection | `pyproject.toml` |
+| **pip-audit** | Dependency vulnerability scanning | - |
+
+### Running Tools Locally
+
+```bash
+# Format code with Black
+black src/
+
+# Check formatting without modifying files
+black --check --diff src/
+
+# Run Ruff linter
+ruff check src/
+
+# Auto-fix linting issues where possible
+ruff check --fix src/
+
+# Run type checker
+mypy src/mergai --ignore-missing-imports
+
+# Check for unused/missing dependencies
+deptry src/
+
+# Scan dependencies for security vulnerabilities
+pip-audit --skip-editable
+```
+
+### Pre-commit Hooks
+
+The project uses pre-commit with Black configured to check formatting before each commit. The configuration is in `.pre-commit-config.yaml`.
+
+To run pre-commit manually on all files:
+
+```bash
+pre-commit run --all-files
+```
+
+### Continuous Integration
+
+GitHub Actions workflows run automatically on push and pull requests:
+
+| Workflow | Checks | Schedule |
+|----------|--------|----------|
+| **Format Check** | Black formatting | push, PR |
+| **Lint** | Ruff linter, mypy type checking | push, PR |
+| **Dependency Check** | deptry unused dependencies | push, PR |
+| **Security Scan** | pip-audit vulnerabilities, CodeQL analysis | push to main/master, PR, weekly |
