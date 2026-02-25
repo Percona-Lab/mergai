@@ -615,7 +615,7 @@ def merge_pick(
         if prioritized:
             click.echo(prioritized[0].commit.hexsha)
         # If no prioritized commits, output nothing (success)
-        # TODO: Consider fallback to first unmerged commit if no priority match
+        # Users can enable most_recent_fallback in config to get a fallback commit
         return
 
     if not fork_status.is_up_to_date:
