@@ -5,8 +5,10 @@ from the mergai.templates package.
 """
 
 import json
-from typing import Any, Callable, Dict, Optional
-from jinja2 import Environment, PackageLoader, TemplateNotFound
+from collections.abc import Callable
+from typing import Any
+
+from jinja2 import Environment, PackageLoader
 
 from .output import OutputFormat
 
@@ -36,7 +38,7 @@ def _create_jinja_env() -> Environment:
 
 
 # Global Jinja2 environment (lazy initialization)
-_jinja_env: Optional[Environment] = None
+_jinja_env: Environment | None = None
 
 
 def get_jinja_env() -> Environment:
@@ -72,7 +74,7 @@ def load_template(format: str, name: str):
 def render_template(
     format: str,
     name: str,
-    format_sha: Optional[Callable[[str], str]] = None,
+    format_sha: Callable[[str], str] | None = None,
     **context: Any,
 ) -> str:
     """Render a template with the given context.
@@ -93,7 +95,9 @@ def render_template(
 
     # Add default format_sha if not provided
     if format_sha is None:
-        format_sha = lambda sha, use_short=False: sha[:11] if use_short else sha
+
+        def format_sha(sha, use_short=False):
+            return sha[:11] if use_short else sha
 
     return template.render(format_sha=format_sha, **context)
 
@@ -102,7 +106,7 @@ def render_to_format(
     format: str,
     template_name: str,
     data: Any,
-    format_sha: Optional[Callable[[str], str]] = None,
+    format_sha: Callable[[str], str] | None = None,
     pretty: bool = False,
     **extra_context: Any,
 ) -> str:

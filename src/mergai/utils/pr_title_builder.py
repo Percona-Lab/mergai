@@ -1,4 +1,5 @@
 import re
+
 from ..config import PRConfig
 from ..models import MergeInfo
 from . import git_utils

@@ -1,14 +1,14 @@
 """Huge commit strategy - prioritizes commits based on expression evaluation."""
 
-from dataclasses import dataclass, field
-from typing import Optional, Dict, Any, TYPE_CHECKING
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, Any
 
-from simpleeval import simple_eval, InvalidExpression
+from simpleeval import InvalidExpression, simple_eval
 
-from .base import MergePickStrategy, MergePickStrategyResult, MergePickStrategyContext
+from .base import MergePickStrategy, MergePickStrategyContext, MergePickStrategyResult
 
 if TYPE_CHECKING:
-    from git import Repo, Commit
+    from git import Commit, Repo
 
 
 @dataclass
@@ -21,7 +21,7 @@ class HugeCommitResult(MergePickStrategyResult):
     """
 
     expression: str
-    evaluated_vars: Dict[str, Any]
+    evaluated_vars: dict[str, Any]
 
     def format_short(self) -> str:
         """Return a short description showing the evaluated variables."""
@@ -100,7 +100,7 @@ class HugeCommitStrategy(MergePickStrategy):
 
     def check(
         self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
-    ) -> Optional[HugeCommitResult]:
+    ) -> HugeCommitResult | None:
         """Check if commit matches the expression.
 
         Args:
@@ -133,11 +133,11 @@ class HugeCommitStrategy(MergePickStrategy):
         except InvalidExpression as e:
             raise ValueError(
                 f"Invalid huge_commit expression '{self.config.expression}': {e}"
-            )
+            ) from e
         except Exception as e:
             raise ValueError(
                 f"Error evaluating huge_commit expression '{self.config.expression}': {e}"
-            )
+            ) from e
 
         if result:
             return HugeCommitResult(

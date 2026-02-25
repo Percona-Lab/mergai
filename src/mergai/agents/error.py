@@ -1,5 +1,4 @@
 from enum import Enum
-from typing import Optional
 
 
 class AgentErrorType(str, Enum):
@@ -15,9 +14,7 @@ class AgentError(Exception):
 
 
 class AgentResult:
-    def __init__(
-        self, result: Optional[dict] = None, error: Optional[AgentError] = None
-    ):
+    def __init__(self, result: dict | None = None, error: AgentError | None = None):
         self._result = result
         self._error = error
 
@@ -27,5 +24,5 @@ class AgentResult:
     def error(self) -> AgentError:
         return self._error
 
-    def result(self) -> Optional[dict]:
+    def result(self) -> dict | None:
         return self._result

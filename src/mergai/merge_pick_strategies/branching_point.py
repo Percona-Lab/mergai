@@ -1,12 +1,12 @@
 """Branching point strategy - prioritizes commits with multiple children in upstream."""
 
 from dataclasses import dataclass
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from .base import MergePickStrategy, MergePickStrategyResult, MergePickStrategyContext
+from .base import MergePickStrategy, MergePickStrategyContext, MergePickStrategyResult
 
 if TYPE_CHECKING:
-    from git import Repo, Commit
+    from git import Commit, Repo
 
 
 @dataclass
@@ -69,7 +69,7 @@ class BranchingPointStrategy(MergePickStrategy):
 
     def check(
         self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
-    ) -> Optional[BranchingPointResult]:
+    ) -> BranchingPointResult | None:
         """Check if commit is a branching point.
 
         Args:

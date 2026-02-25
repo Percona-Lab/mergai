@@ -1,20 +1,16 @@
+from urllib.parse import quote, urlencode
+
 import click
+from github import GithubException
+from github import PullRequest as GithubPullRequest
+
 from ..app import AppContext
 from ..models import MarkdownConfig
-from github import PullRequest as GithubPullRequest
-from github import GithubException
-from ..utils import git_utils
-from ..utils import formatters
+from ..utils import formatters, git_utils
 from ..utils.branch_name_builder import BranchNameBuilder, BranchType
-from typing import Optional, List
-from urllib.parse import urlencode, quote
-
-from mergai import app
 
 
-def _parse_labels_option(
-    labels_arg: Optional[str], config_labels: List[str]
-) -> List[str]:
+def _parse_labels_option(labels_arg: str | None, config_labels: list[str]) -> list[str]:
     """Parse the --labels argument and combine with config labels.
 
     Behavior:
@@ -66,7 +62,7 @@ def _build_pr_url(
     body: str,
     head: str,
     base: str,
-    labels: Optional[List[str]] = None,
+    labels: list[str] | None = None,
 ) -> str:
     """Build a GitHub URL for creating a PR with pre-filled information.
 
@@ -102,7 +98,7 @@ def _create_pr(
     base: str,
     dry_run: bool = False,
     url_only: bool = False,
-    labels: Optional[List[str]] = None,
+    labels: list[str] | None = None,
 ):
 
     if url_only:
@@ -191,7 +187,7 @@ def _create_solution_pr(
     dry_run: bool,
     url_only: bool = False,
     skip_body: bool = False,
-    labels: Optional[List[str]] = None,
+    labels: list[str] | None = None,
 ) -> None:
     """Create a PR from the current branch (with existing solution commits) to the conflict branch."""
 
@@ -241,7 +237,7 @@ def _create_main_pr(
     dry_run: bool,
     url_only: bool = False,
     skip_body: bool = False,
-    labels: Optional[List[str]] = None,
+    labels: list[str] | None = None,
 ) -> None:
     """Create a PR from the main branch to target_branch (merge or conflict resolution)."""
 
@@ -271,7 +267,7 @@ def _create_main_pr(
     envvar="GH_REPO",
     help="The repository where the PR is located.",
 )
-def pr(app: AppContext, repo: Optional[str]):
+def pr(app: AppContext, repo: str | None):
     if repo is None:
         raise click.ClickException(
             "GitHub repository not set. Use --repo or set GH_REPO environment variable."
@@ -322,7 +318,7 @@ def create(
     dry_run: bool,
     url_only: bool,
     skip_body: bool,
-    labels_arg: Optional[str],
+    labels_arg: str | None,
     no_labels: bool,
 ):
     """Create a pull request.
@@ -384,7 +380,7 @@ def create(
 
     # Compute final labels
     if no_labels:
-        final_labels: List[str] = []
+        final_labels: list[str] = []
     else:
         final_labels = _parse_labels_option(labels_arg, config_labels)
 
@@ -394,7 +390,7 @@ def create(
         _create_main_pr(app, dry_run, url_only, skip_body, final_labels)
 
 
-def get_prs_for_current_branch(app: AppContext) -> List[GithubPullRequest.PullRequest]:
+def get_prs_for_current_branch(app: AppContext) -> list[GithubPullRequest.PullRequest]:
     # TODO: the head should include the repo owner
     pulls = app.gh_repo.get_pulls(
         sort="created", head=git_utils.get_current_branch(app.repo)
@@ -434,7 +430,7 @@ def show(app: AppContext):
         exit(1)
 
 
-def _detect_pr_type_from_branch(app: AppContext) -> Optional[str]:
+def _detect_pr_type_from_branch(app: AppContext) -> str | None:
     """Detect PR type from current branch name.
 
     Parses the current branch name using the branch config format to determine
@@ -464,7 +460,7 @@ def _detect_pr_type_from_branch(app: AppContext) -> Optional[str]:
 
 def _find_pr_for_branch(
     app: AppContext, head_branch: str, base_branch: str
-) -> Optional[GithubPullRequest.PullRequest]:
+) -> GithubPullRequest.PullRequest | None:
     """Find an open PR from head_branch to base_branch.
 
     Args:
@@ -495,7 +491,7 @@ def _find_pr_for_branch(
     type=click.Choice(["main", "solution"], case_sensitive=False),
     required=False,
 )
-def update(app: AppContext, pr_type: Optional[str], dry_run: bool):
+def update(app: AppContext, pr_type: str | None, dry_run: bool):
     """Update an existing pull request's body.
 
     PR_TYPE specifies which PR to update. If not provided, it will be auto-detected

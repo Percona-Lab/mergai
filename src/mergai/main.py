@@ -1,15 +1,16 @@
-import click
 import logging
-from .app import AppContext
-from .config import load_config, DEFAULT_CONFIG_PATH
-from .version import __version__
+
+import click
 import git
-
-LOG_FORMAT = "[%(asctime)s.%(msecs)03d][%(levelname)s][%(name)s] %(message)s"
-
 from dotenv import load_dotenv
 
+from .app import AppContext
+from .config import DEFAULT_CONFIG_PATH, load_config
+from .version import __version__
+
 load_dotenv()
+
+LOG_FORMAT = "[%(asctime)s.%(msecs)03d][%(levelname)s][%(name)s] %(message)s"
 
 
 def register_commands(cli):
@@ -29,7 +30,7 @@ def register_commands(cli):
 
     cli.add_command(pr)
 
-    from .commands.util import show, status, log, prompt, comment, merge_prompt
+    from .commands.util import comment, log, merge_prompt, prompt, show, status
 
     cli.add_command(show)
     cli.add_command(status)
@@ -94,9 +95,9 @@ def cli(app: AppContext, config_path: str, repo_path: str = ".", verbose: int = 
     try:
         app.config = load_config(config_path)
     except FileNotFoundError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
     except Exception as e:
-        raise click.ClickException(f"Error loading config: {e}")
+        raise click.ClickException(f"Error loading config: {e}") from e
     app.repo = git.Repo(repo_path)
     logging.basicConfig(
         level=max(logging.WARNING - (10 * verbose), logging.DEBUG),

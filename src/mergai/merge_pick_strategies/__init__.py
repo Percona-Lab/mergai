@@ -28,24 +28,24 @@ To add a new strategy:
 """
 
 from .base import (
-    MergePickStrategy,
-    MergePickStrategyResult,
-    MergePickStrategyContext,
     MergePickCommit,
-)
-from .huge_commit import HugeCommitStrategy, HugeCommitStrategyConfig, HugeCommitResult
-from .important_files import (
-    ImportantFilesStrategy,
-    ImportantFilesStrategyConfig,
-    ImportantFilesResult,
+    MergePickStrategy,
+    MergePickStrategyContext,
+    MergePickStrategyResult,
 )
 from .branching_point import (
+    BranchingPointResult,
     BranchingPointStrategy,
     BranchingPointStrategyConfig,
-    BranchingPointResult,
 )
-from .conflict import ConflictStrategy, ConflictStrategyConfig, ConflictResult
-from .most_recent import MostRecentStrategy, MostRecentStrategyConfig, MostRecentResult
+from .conflict import ConflictResult, ConflictStrategy, ConflictStrategyConfig
+from .huge_commit import HugeCommitResult, HugeCommitStrategy, HugeCommitStrategyConfig
+from .important_files import (
+    ImportantFilesResult,
+    ImportantFilesStrategy,
+    ImportantFilesStrategyConfig,
+)
+from .most_recent import MostRecentResult, MostRecentStrategy, MostRecentStrategyConfig
 from .registry import STRATEGY_REGISTRY, create_strategy
 
 __all__ = [

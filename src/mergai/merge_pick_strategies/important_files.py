@@ -1,12 +1,12 @@
 """Important files strategy - prioritizes commits touching specific files."""
 
 from dataclasses import dataclass, field
-from typing import Optional, List, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from .base import MergePickStrategy, MergePickStrategyResult, MergePickStrategyContext
+from .base import MergePickStrategy, MergePickStrategyContext, MergePickStrategyResult
 
 if TYPE_CHECKING:
-    from git import Repo, Commit
+    from git import Commit, Repo
 
 
 @dataclass
@@ -17,7 +17,7 @@ class ImportantFilesResult(MergePickStrategyResult):
         matched_files: List of important files that were modified.
     """
 
-    matched_files: List[str]
+    matched_files: list[str]
 
     def format_short(self) -> str:
         """Return a short description of the important files match."""
@@ -34,7 +34,7 @@ class ImportantFilesStrategyConfig:
         files: List of file paths considered important.
     """
 
-    files: List[str] = field(default_factory=list)
+    files: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data) -> "ImportantFilesStrategyConfig":
@@ -73,7 +73,7 @@ class ImportantFilesStrategy(MergePickStrategy):
 
     def check(
         self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
-    ) -> Optional[ImportantFilesResult]:
+    ) -> ImportantFilesResult | None:
         """Check if commit modifies any important files.
 
         Args:

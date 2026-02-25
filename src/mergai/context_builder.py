@@ -1,7 +1,6 @@
 """Builder for creating MergeContext and ConflictContext."""
 
 import logging
-from typing import List, Optional
 
 import git
 
@@ -28,7 +27,7 @@ class ContextBuilder:
         self,
         repo: git.Repo,
         merge_info: MergeInfo,
-        important_files: Optional[List[str]] = None,
+        important_files: list[str] | None = None,
     ):
         """Initialize the ContextBuilder.
 
@@ -76,8 +75,8 @@ class ContextBuilder:
 
     def create_merge_context(
         self,
-        auto_merged_files: Optional[List[str]] = None,
-        merge_strategy: Optional[str] = None,
+        auto_merged_files: list[str] | None = None,
+        merge_strategy: str | None = None,
     ) -> MergeContext:
         """Create merge context from merge_info.
 

@@ -1,12 +1,12 @@
 """Conflict strategy - prioritizes commits that would cause merge conflicts."""
 
 from dataclasses import dataclass, field
-from typing import Optional, List, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from .base import MergePickStrategy, MergePickStrategyResult, MergePickStrategyContext
+from .base import MergePickStrategy, MergePickStrategyContext, MergePickStrategyResult
 
 if TYPE_CHECKING:
-    from git import Repo, Commit
+    from git import Commit, Repo
 
 
 @dataclass
@@ -17,7 +17,7 @@ class ConflictResult(MergePickStrategyResult):
         conflicting_files: List of files that would conflict.
     """
 
-    conflicting_files: List[str] = field(default_factory=list)
+    conflicting_files: list[str] = field(default_factory=list)
 
     def format_short(self) -> str:
         """Return a short description of the conflict match.
@@ -89,7 +89,7 @@ class ConflictStrategy(MergePickStrategy):
 
     def check(
         self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
-    ) -> Optional[ConflictResult]:
+    ) -> ConflictResult | None:
         """Check if commit would cause merge conflicts.
 
         Uses git merge-tree to perform a read-only merge simulation.

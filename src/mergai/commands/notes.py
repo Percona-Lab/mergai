@@ -1,10 +1,11 @@
-import os
+import contextlib
 import json
-import click
-from pathlib import Path
-from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
+from pathlib import Path
+
+import click
 from git import Repo
+
 from ..app import AppContext
 
 # Constants for notes refs
@@ -20,7 +21,7 @@ class NoteInfo:
 
     commit_sha: str
     blob_sha: str
-    content: Optional[dict] = None
+    content: dict | None = None
 
 
 @dataclass
@@ -36,13 +37,13 @@ class NotesConflict:
 class NotesMergePreview:
     """Preview of what a notes merge would do."""
 
-    local_only: List[NoteInfo]  # Notes only in local
-    remote_only: List[NoteInfo]  # Notes only in remote
-    identical: List[str]  # Commit SHAs with identical notes
-    conflicts: List[NotesConflict]  # Commit SHAs with conflicting notes
+    local_only: list[NoteInfo]  # Notes only in local
+    remote_only: list[NoteInfo]  # Notes only in remote
+    identical: list[str]  # Commit SHAs with identical notes
+    conflicts: list[NotesConflict]  # Commit SHAs with conflicting notes
 
 
-def list_notes_for_ref(repo: Repo, ref: str) -> Dict[str, str]:
+def list_notes_for_ref(repo: Repo, ref: str) -> dict[str, str]:
     """List all notes in a given ref.
 
     Args:
@@ -69,7 +70,7 @@ def list_notes_for_ref(repo: Repo, ref: str) -> Dict[str, str]:
         return {}
 
 
-def get_note_content(repo: Repo, ref: str, commit_sha: str) -> Optional[dict]:
+def get_note_content(repo: Repo, ref: str, commit_sha: str) -> dict | None:
     """Get the JSON content of a note for a specific commit.
 
     Args:
@@ -151,7 +152,7 @@ def notes_merge_in_progress(repo: Repo) -> bool:
     return False
 
 
-def get_notes_merge_conflicts(repo: Repo) -> List[str]:
+def get_notes_merge_conflicts(repo: Repo) -> list[str]:
     """Get list of commit SHAs with merge conflicts.
 
     Args:
@@ -250,13 +251,11 @@ def preview_notes_merge(
 def cleanup_temp_refs(repo: Repo):
     """Remove temporary refs created during fetch."""
     for ref in [NOTES_REMOTE_TMP_REF, NOTES_MARKER_REMOTE_TMP_REF]:
-        try:
+        with contextlib.suppress(Exception):
             repo.git.update_ref("-d", f"refs/notes/{ref}")
-        except Exception:
-            pass
 
 
-def format_note_summary(note: Optional[dict]) -> str:
+def format_note_summary(note: dict | None) -> str:
     """Format a brief summary of a note's contents."""
     if not note:
         return "(empty or invalid JSON)"
@@ -391,7 +390,7 @@ def update(
                 + "Local notes overwritten with remote."
             )
         except Exception as e:
-            raise click.ClickException(f"Failed to fetch notes: {e}")
+            raise click.ClickException(f"Failed to fetch notes: {e}") from e
         return
 
     # Fetch remote notes to temporary refs
@@ -588,10 +587,10 @@ def update(
             click.echo("  2. Run: mergai notes merge --commit")
             click.echo("")
             click.echo("Or abort: mergai notes merge --abort")
-            raise SystemExit(1)
+            raise SystemExit(1) from e
         else:
             cleanup_temp_refs(app.repo)
-            raise click.ClickException(f"Failed to merge notes: {e}")
+            raise click.ClickException(f"Failed to merge notes: {e}") from e
 
 
 @notes.command()
@@ -609,7 +608,7 @@ def push(app: AppContext, remote: str):
         app.repo.git.push(remote, "refs/notes/mergai*:refs/notes/mergai*")
         click.echo(f"Notes pushed to {remote}.")
     except Exception as e:
-        raise click.ClickException(f"Failed to push notes: {e}")
+        raise click.ClickException(f"Failed to push notes: {e}") from e
 
 
 @notes.command("merge")
@@ -664,7 +663,7 @@ def merge_cmd(app: AppContext, do_commit: bool, do_abort: bool):
             cleanup_temp_refs(app.repo)
             click.echo(click.style("Success! ", fg="green") + "Notes merge completed.")
         except Exception as e:
-            raise click.ClickException(f"Failed to commit notes merge: {e}")
+            raise click.ClickException(f"Failed to commit notes merge: {e}") from e
 
     elif do_abort:
         try:
@@ -672,7 +671,7 @@ def merge_cmd(app: AppContext, do_commit: bool, do_abort: bool):
             cleanup_temp_refs(app.repo)
             click.echo("Notes merge aborted.")
         except Exception as e:
-            raise click.ClickException(f"Failed to abort notes merge: {e}")
+            raise click.ClickException(f"Failed to abort notes merge: {e}") from e
 
     else:
         # Show status
@@ -731,7 +730,7 @@ def status(app: AppContext, verbose: bool):
 
     # List notes
     has_notes = ref_exists(app.repo, f"refs/notes/{NOTES_REF}")
-    has_markers = ref_exists(app.repo, f"refs/notes/{NOTES_MARKER_REF}")
+    ref_exists(app.repo, f"refs/notes/{NOTES_MARKER_REF}")
 
     if not has_notes:
         click.echo("No local notes found.")
@@ -748,7 +747,7 @@ def status(app: AppContext, verbose: bool):
     if verbose and notes_map:
         click.echo("")
         click.echo("Notes by commit:")
-        for commit_sha, blob_sha in sorted(notes_map.items()):
+        for commit_sha, _blob_sha in sorted(notes_map.items()):
             content = get_note_content(app.repo, NOTES_REF, commit_sha)
             summary = format_note_summary(content)
 
@@ -804,7 +803,7 @@ def remove(app: AppContext, commit: str, remove_marker: bool):
         resolved_commit = app.repo.commit(commit)
         commit_sha = resolved_commit.hexsha
     except Exception as e:
-        raise click.ClickException(f"Cannot resolve commit '{commit}': {e}")
+        raise click.ClickException(f"Cannot resolve commit '{commit}': {e}") from e
 
     # Check if notes exist
     note_content = get_note_content(app.repo, NOTES_REF, commit_sha)
@@ -824,7 +823,7 @@ def remove(app: AppContext, commit: str, remove_marker: bool):
     if has_main_note:
         click.echo(f"  Note fields: {format_note_summary(note_content)}")
     else:
-        click.echo(f"  Main note: not present")
+        click.echo("  Main note: not present")
 
     # Remove the main note if it exists
     if has_main_note:
@@ -832,7 +831,7 @@ def remove(app: AppContext, commit: str, remove_marker: bool):
             app.repo.git.notes("--ref", NOTES_REF, "remove", commit_sha)
             click.echo(f"Removed mergai note from {short_sha(commit_sha)}.")
         except Exception as e:
-            raise click.ClickException(f"Failed to remove note: {e}")
+            raise click.ClickException(f"Failed to remove note: {e}") from e
 
     # Remove marker if requested and exists
     if remove_marker and has_marker:

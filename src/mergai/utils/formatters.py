@@ -5,19 +5,20 @@ to various output formats (text, markdown, JSON).
 """
 
 import json
-from typing import Optional, Callable
+from collections.abc import Callable
+
 import git
 
-from .output import OutputFormat
-from .templates import render_template, get_jinja_env
 from ..models import (
-    MergeInfo,
-    MergeContext,
     ConflictContext,
     ContextSerializationConfig,
     MarkdownConfig,
     MarkdownFormat,
+    MergeContext,
+    MergeInfo,
 )
+from .output import OutputFormat
+from .templates import render_template
 
 # =============================================================================
 # Helper Functions
@@ -25,7 +26,7 @@ from ..models import (
 
 
 def _create_format_sha_func(
-    markdown_config: Optional[MarkdownConfig] = None,
+    markdown_config: MarkdownConfig | None = None,
 ) -> Callable[[str, bool], str]:
     """Create a format_sha function for Jinja2 templates.
 
@@ -146,7 +147,7 @@ def merge_info_to_text(merge_info: MergeInfo) -> str:
 
 
 def merge_info_to_markdown(
-    merge_info: MergeInfo, markdown_config: Optional[MarkdownConfig] = None
+    merge_info: MergeInfo, markdown_config: MarkdownConfig | None = None
 ) -> str:
     """Convert a MergeInfo object to markdown format.
 
@@ -167,7 +168,7 @@ def merge_info_to_str(
     merge_info: MergeInfo,
     format: str,
     pretty: bool = False,
-    markdown_config: Optional[MarkdownConfig] = None,
+    markdown_config: MarkdownConfig | None = None,
 ) -> str:
     """Convert a MergeInfo object to the specified format.
 
@@ -208,7 +209,7 @@ def conflict_context_to_text(conflict_context: ConflictContext) -> str:
 
 
 def conflict_context_to_markdown(
-    conflict_context: ConflictContext, markdown_config: Optional[MarkdownConfig] = None
+    conflict_context: ConflictContext, markdown_config: MarkdownConfig | None = None
 ) -> str:
     """Convert ConflictContext to markdown.
 
@@ -239,7 +240,7 @@ def conflict_context_to_str(
     context: ConflictContext,
     format: str,
     pretty: bool = False,
-    markdown_config: Optional[MarkdownConfig] = None,
+    markdown_config: MarkdownConfig | None = None,
 ) -> str:
     """Convert ConflictContext to string in specified format.
 
@@ -285,7 +286,7 @@ def merge_context_to_text(merge_context: MergeContext) -> str:
 
 
 def merge_context_to_markdown(
-    merge_context: MergeContext, markdown_config: Optional[MarkdownConfig] = None
+    merge_context: MergeContext, markdown_config: MarkdownConfig | None = None
 ) -> str:
     """Convert MergeContext to markdown.
 
@@ -312,7 +313,7 @@ def merge_context_to_str(
     merge_context: MergeContext,
     format: str,
     pretty: bool = False,
-    markdown_config: Optional[MarkdownConfig] = None,
+    markdown_config: MarkdownConfig | None = None,
 ) -> str:
     """Convert MergeContext to string in specified format.
 
@@ -567,9 +568,9 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
     output_str = f"commit: {commit.hexsha}\n"
     output_str += f"Author: {commit.author.name} <{commit.author.email}>\n"
     output_str += f"Date:   {commit.authored_datetime}\n"
-    output_str += f"Content:\n"
+    output_str += "Content:\n"
     if "merge_info" in note:
-        output_str += f"  - Merge Info\n"
+        output_str += "  - Merge Info\n"
         merge_info = note["merge_info"]
         output_str += (
             f"    - Target Branch: {merge_info.get('target_branch', 'unknown')}\n"
@@ -578,7 +579,7 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
             f"    - Merge Commit: {merge_info.get('merge_commit', 'unknown')}\n"
         )
     if "merge_context" in note:
-        output_str += f"  - Merge Context\n"
+        output_str += "  - Merge Context\n"
         merge_context = note["merge_context"]
         output_str += (
             f"    - Merge Commit: {merge_context.get('merge_commit', 'unknown')}\n"
@@ -590,7 +591,7 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
         if important_files:
             output_str += f"    - Important Files Modified: {len(important_files)}\n"
     if "conflict_context" in note:
-        output_str += f"  - Conflict Context\n"
+        output_str += "  - Conflict Context\n"
         conflict_context = note["conflict_context"]
         # Handle both storage format (SHA strings) and legacy format (dicts/objects)
         base_commit = conflict_context["base_commit"]
@@ -632,20 +633,20 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
             output_str += "\n"
 
     if "merge_description" in note:
-        output_str += f"  - Merge Description\n"
+        output_str += "  - Merge Description\n"
         merge_desc = note["merge_description"]
         response = merge_desc.get("response", {})
         auto_merged_count = len(response.get("auto_merged", {}))
         output_str += f"    - Auto-Merged Files: {auto_merged_count}\n"
 
     if "user_comment" in note:
-        output_str += f"\n"
-        output_str += f"User Comment:"
+        output_str += "\n"
+        output_str += "User Comment:"
         output_str += f" {note['user_comment'].get('user', 'unknown')}"
         output_str += f" <{note['user_comment'].get('email', 'unknown')}>"
         output_str += f" at {note['user_comment'].get('date', 'unknown')}\n"
         output_str += f"{note['user_comment'].get('body', '')}\n"
-        output_str += f"\n"
+        output_str += "\n"
 
     output_str += (
         f"Message:\n    {commit.message.strip().replace(chr(10), chr(10) + '    ')}\n"
@@ -674,18 +675,18 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
     output_str += f"- Author: {commit.author.name} <{commit.author.email}>\n"
     output_str += f"- Date:   {commit.authored_datetime}\n"
     output_str += f"- Message:\n\n    {commit.message.strip().replace(chr(10), chr(10) + '    ')}\n"
-    output_str += f"- Content:\n"
+    output_str += "- Content:\n"
     if "merge_info" in note:
         output_str += (
-            f"  - Merge Info (use mergai show --merge-info to see the merge info.)\n"
+            "  - Merge Info (use mergai show --merge-info to see the merge info.)\n"
         )
     if "merge_context" in note:
-        output_str += f"  - Merge Context (use mergai show --merge-context to see the merge context.)\n"
+        output_str += "  - Merge Context (use mergai show --merge-context to see the merge context.)\n"
     if "conflict_context" in note:
-        output_str += f"  - Conflict Context (use mergai show --context to see the conflict context.)\n"
+        output_str += "  - Conflict Context (use mergai show --context to see the conflict context.)\n"
     if "pr_comments" in note:
         output_str += (
-            f"  - PR Comments (use mergai show --pr-comments to see the PR comments.)\n"
+            "  - PR Comments (use mergai show --pr-comments to see the PR comments.)\n"
         )
 
     # Handle both legacy "solution" and new "solutions" array
@@ -697,7 +698,7 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
             output_str += f"    [{idx}] {author}\n"
 
     if "merge_description" in note:
-        output_str += f"  - Merge Description (use mergai show --merge-description to see the merge description.)\n"
+        output_str += "  - Merge Description (use mergai show --merge-description to see the merge description.)\n"
 
     # mergai version at the end
     if "mergai_version" in note:

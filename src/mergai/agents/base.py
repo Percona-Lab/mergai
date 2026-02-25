@@ -1,6 +1,3 @@
-from typing import Optional
-
-
 class Agent:
     def __init__(self, model: str):
         self._model = model
@@ -16,7 +13,7 @@ class Agent:
             return self  # type: ignore
         raise TypeError("Agent is not a CLI agent")
 
-    def get_session_data(self) -> Optional[dict]:
+    def get_session_data(self) -> dict | None:
         """Get session data from the last agent run.
 
         Override this method in subclasses to provide session data
@@ -27,7 +24,7 @@ class Agent:
         """
         return None
 
-    def get_session_id(self) -> Optional[str]:
+    def get_session_id(self) -> str | None:
         """Get session ID from the last agent run.
 
         Returns:

@@ -9,13 +9,14 @@ import os
 import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 
-from . import git_utils
 from jinja2 import Template
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.theme import Theme
-from datetime import datetime, timezone
+
+from . import git_utils
 
 
 def gh_auth_token() -> str:
@@ -30,7 +31,7 @@ def gh_auth_token() -> str:
 
     try:
         token = subprocess.check_output(["gh", "auth", "token"], text=True).strip()
-    except:
+    except Exception:
         token = None
 
     return token
@@ -123,7 +124,7 @@ def load_if_exists(filename: str) -> str:
     """Load file contents if the file exists, otherwise return empty string."""
     if not os.path.exists(filename):
         return ""
-    with open(filename, "r", encoding="utf-8") as f:
+    with open(filename, encoding="utf-8") as f:
         return f.read()
 
 

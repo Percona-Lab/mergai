@@ -10,7 +10,7 @@ git describe directly.
 """
 
 import subprocess
-from importlib.metadata import version, PackageNotFoundError
+from importlib.metadata import PackageNotFoundError, version
 
 
 def get_version() -> str:

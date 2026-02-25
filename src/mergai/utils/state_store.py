@@ -1,5 +1,5 @@
-from pathlib import Path
 import json
+from pathlib import Path
 
 
 class StateStore:
@@ -26,5 +26,5 @@ class StateStore:
             json.dump(note, f, indent=self.JSON_INDENT)
 
     def load_note(self) -> dict:
-        with open(self.note_path(), "r") as f:
+        with open(self.note_path()) as f:
             return json.load(f)

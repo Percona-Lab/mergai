@@ -2,11 +2,13 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
 from git import Commit
-from typing import Optional, Dict, Any, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from git import Repo, Commit
+    from git import Commit, Repo
+
     from ..utils.git_utils import CommitStats
 
 
@@ -26,12 +28,12 @@ class MergePickStrategyContext:
             Only commits with >1 child are included.
     """
 
-    upstream_ref: Optional[str] = None
-    fork_ref: Optional[str] = None
+    upstream_ref: str | None = None
+    fork_ref: str | None = None
 
     # Batch data caches for performance optimization
-    commit_stats_cache: Dict[str, "CommitStats"] = field(default_factory=dict)
-    branching_points_cache: Dict[str, int] = field(default_factory=dict)
+    commit_stats_cache: dict[str, "CommitStats"] = field(default_factory=dict)
+    branching_points_cache: dict[str, int] = field(default_factory=dict)
 
 
 class MergePickStrategyResult(ABC):
@@ -82,7 +84,7 @@ class MergePickStrategy(ABC):
     @abstractmethod
     def check(
         self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
-    ) -> Optional[MergePickStrategyResult]:
+    ) -> MergePickStrategyResult | None:
         """Check if commit matches this strategy.
 
         Args:

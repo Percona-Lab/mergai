@@ -1,12 +1,13 @@
+import json
+import os
+import re
+import subprocess
+from pathlib import Path
+
+import click
+
 from .base import CliAgent
 from .error import AgentError, AgentErrorType, AgentResult
-import click
-import subprocess
-import os
-import json
-import re
-from pathlib import Path
-from typing import Optional
 
 JSON_BLOCK_RE = re.compile(
     r"```json\s*\n(.*?)\n```",
@@ -39,7 +40,9 @@ def fix_response_json(result_json: dict) -> str:
         response_json = json.loads(response)
         result_json["response"] = response_json
     except json.JSONDecodeError as e:
-        raise AgentError(AgentErrorType.PARSING_RESULT, f"JSON decode error: {e}")
+        raise AgentError(
+            AgentErrorType.PARSING_RESULT, f"JSON decode error: {e}"
+        ) from e
 
     return result_json
 
@@ -48,7 +51,7 @@ class GeminiCLIAgent(CliAgent):
 
     def __init__(self, model: str, yolo: bool, debug: bool = False):
         super().__init__(model)
-        self.session_id: Optional[str] = None
+        self.session_id: str | None = None
         self.yolo = yolo
         self.debug = debug
 
@@ -76,7 +79,7 @@ class GeminiCLIAgent(CliAgent):
             if chats_dir.exists() and chats_dir.is_dir():
                 for chat_file in chats_dir.iterdir():
                     try:
-                        with open(chat_file, "r") as f:
+                        with open(chat_file) as f:
                             chat_data = json.load(f)
                             if chat_data.get("sessionId") == session_id:
                                 return chat_data
@@ -87,7 +90,7 @@ class GeminiCLIAgent(CliAgent):
     def parse_stats(self, session_data: dict) -> dict:
         models = {}
         for msg in session_data.get("messages", []):
-            if not "tokens" in msg:
+            if "tokens" not in msg:
                 continue
             tokens = msg["tokens"]
             model = msg.get("model", "unknown")
@@ -186,10 +189,10 @@ class GeminiCLIAgent(CliAgent):
             result = fix_response_json(response)
             version = self.get_version()
         except AgentError as e:
-            click.echo(f"Error parsing Gemini CLI response")
-            click.echo(f"--- Start of Gemini CLI response ---")
+            click.echo("Error parsing Gemini CLI response")
+            click.echo("--- Start of Gemini CLI response ---")
             click.echo(f"{response}")
-            click.echo(f"--- End of Gemini CLI response ---")
+            click.echo("--- End of Gemini CLI response ---")
             return AgentResult(error=e)
 
         result["agent_info"] = {
@@ -199,7 +202,7 @@ class GeminiCLIAgent(CliAgent):
 
         return AgentResult(result=result)
 
-    def get_session_data(self) -> Optional[dict]:
+    def get_session_data(self) -> dict | None:
         """Get session data from the last Gemini CLI run.
 
         Returns:
@@ -209,7 +212,7 @@ class GeminiCLIAgent(CliAgent):
             return None
         return self.read_session(self.session_id)
 
-    def get_session_id(self) -> Optional[str]:
+    def get_session_id(self) -> str | None:
         """Get session ID from the last Gemini CLI run.
 
         Returns:

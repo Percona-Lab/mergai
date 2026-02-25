@@ -4,12 +4,12 @@ This module provides the AgentExecutor class which encapsulates the logic
 for running AI agents with retry capabilities and result validation.
 """
 
-import click
 import json
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, Optional
 
+import click
 import git
 
 from .agents.base import Agent
@@ -89,7 +89,7 @@ class AgentExecutor:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         return f"session_{session_id}_{timestamp}.json"
 
-    def _save_session_on_failure(self) -> Optional[Path]:
+    def _save_session_on_failure(self) -> Path | None:
         """Save agent session data to file on failure.
 
         Retrieves session data from the agent and saves it to the state
@@ -114,7 +114,7 @@ class AgentExecutor:
     def run_with_retry(
         self,
         prompt: str,
-        validator: Callable[[dict], Optional[str]] = None,
+        validator: Callable[[dict], str | None] = None,
     ) -> dict:
         """Run agent with retry logic and optional result validation.
 
@@ -170,7 +170,7 @@ class AgentExecutor:
     def _execute_with_retry(
         self,
         prompt_path: Path,
-        validator: Callable[[dict], Optional[str]] = None,
+        validator: Callable[[dict], str | None] = None,
     ) -> dict:
         """Execute the agent with retry logic.
 
@@ -230,7 +230,7 @@ class AgentExecutor:
 
         return result
 
-    def validate_solution_files(self, solution: dict) -> Optional[str]:
+    def validate_solution_files(self, solution: dict) -> str | None:
         """Validate that solution files have been modified in the repo.
 
         Checks that all files listed in the solution's 'resolved' dict
@@ -254,7 +254,7 @@ class AgentExecutor:
         dirty_files = [item.a_path for item in self.repo.index.diff(None)]
 
         # Check resolved files
-        for path in solution["response"]["resolved"].keys():
+        for path in solution["response"]["resolved"]:
             click.echo(
                 f"Checking file '{path}': {'dirty' if path in dirty_files else 'not dirty'}"
             )
@@ -262,7 +262,7 @@ class AgentExecutor:
                 not_dirty_files.append(path)
 
         # Also check modified files (non-conflict files that were changed)
-        for path in solution["response"].get("modified", {}).keys():
+        for path in solution["response"].get("modified", {}):
             click.echo(
                 f"Checking modified file '{path}': {'dirty' if path in dirty_files else 'not dirty'}"
             )
@@ -276,7 +276,7 @@ class AgentExecutor:
 
         return None
 
-    def validate_describe_response(self, response: dict) -> Optional[str]:
+    def validate_describe_response(self, response: dict) -> str | None:
         """Validate that describe response has the correct format.
 
         Checks for required fields: summary, auto_merged, review_notes.
@@ -298,7 +298,7 @@ class AgentExecutor:
 
         return None
 
-    def validate_no_file_modifications(self, was_dirty_before: bool) -> Optional[str]:
+    def validate_no_file_modifications(self, was_dirty_before: bool) -> str | None:
         """Validate that no new files were modified during execution.
 
         Used for operations like 'describe' that should not modify files.
@@ -330,7 +330,7 @@ class AgentExecutor:
 
     def create_describe_validator(
         self, was_dirty_before: bool
-    ) -> Callable[[dict], Optional[str]]:
+    ) -> Callable[[dict], str | None]:
         """Create a composite validator for describe operations.
 
         Combines response format validation and file modification validation.
@@ -342,7 +342,7 @@ class AgentExecutor:
             A validator function suitable for use with run_with_retry.
         """
 
-        def validator(result: dict) -> Optional[str]:
+        def validator(result: dict) -> str | None:
             # Validate response format
             format_error = self.validate_describe_response(result["response"])
             if format_error:

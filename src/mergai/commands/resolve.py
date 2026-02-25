@@ -1,6 +1,6 @@
 import click
+
 from ..app import AppContext
-from .context import conflict_context_flags
 
 
 @click.command()

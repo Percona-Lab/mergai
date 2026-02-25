@@ -1,16 +1,16 @@
-import click
 import logging
-from typing import Optional, List
-from dataclasses import dataclass
+
+import click
 from git import Commit
+
 from ..app import AppContext
-from ..utils import git_utils
-from ..config import MergePicksConfig, DEFAULT_CONFIG_PATH
+from ..config import DEFAULT_CONFIG_PATH, MergePicksConfig
 from ..merge_pick_strategies import MergePickCommit, MergePickStrategyContext
+from ..utils import git_utils
 from ..utils.util import (
-    format_number,
     format_commit_info,
     format_commit_info_oneline,
+    format_number,
     print_or_page,
 )
 
@@ -19,7 +19,7 @@ log = logging.getLogger(__name__)
 
 def resolve_upstream_ref(
     app: AppContext,
-    upstream_ref: Optional[str],
+    upstream_ref: str | None,
 ) -> str:
     """Resolve upstream ref from argument or config.
 
@@ -78,19 +78,16 @@ def _needs_commit_stats(config: MergePicksConfig) -> bool:
 
 def _needs_branching_points(config: MergePicksConfig) -> bool:
     """Check if any strategy needs branching point data."""
-    for strategy in config.strategies:
-        if strategy.name == "branching_point":
-            return True
-    return False
+    return any(strategy.name == "branching_point" for strategy in config.strategies)
 
 
 def get_prioritized_commits(
     repo,
-    unmerged_commit_shas: List[str],
+    unmerged_commit_shas: list[str],
     config: MergePicksConfig,
     context: MergePickStrategyContext,
-    limit: Optional[int] = None,
-) -> List[MergePickCommit]:
+    limit: int | None = None,
+) -> list[MergePickCommit]:
     """Evaluate unmerged commits and return those matching priority strategies.
 
     This function uses batch operations to efficiently compute data needed
@@ -188,7 +185,7 @@ def build_status_summary(
     app: AppContext,
     fork_status,
     upstream_ref: str,
-) -> List[str]:
+) -> list[str]:
     """Build the status summary output lines.
 
     Args:
@@ -252,11 +249,11 @@ def build_status_summary(
 
 
 def format_commit_list(
-    commits: List[Commit],
-    prioritized_commits: Optional[List[MergePickCommit]] = None,
+    commits: list[Commit],
+    prioritized_commits: list[MergePickCommit] | None = None,
     show_all: bool = True,
     show_prefix: bool = True,
-) -> List[str]:
+) -> list[str]:
     """Format a list of commits for display.
 
     Args:
@@ -304,10 +301,7 @@ def format_commit_list(
             details_tag = ""
 
         if show_prefix:
-            if pc:
-                prefix = click.style("*", fg="yellow", bold=True)
-            else:
-                prefix = " "
+            prefix = click.style("*", fg="yellow", bold=True) if pc else " "
             output_lines.append(
                 f"{prefix}{i:{index_width}d}: {commit_info}{strategy_tag}{details_tag}"
             )
@@ -332,7 +326,7 @@ def fork():
     default=None,
     metavar="UPSTREAM-URL",
 )
-def init(app: AppContext, upstream_url: Optional[str]):
+def init(app: AppContext, upstream_url: str | None):
     """Initialize upstream remote for fork management.
 
     Adds a git remote for the upstream repository (if not already present)
@@ -397,7 +391,7 @@ def init(app: AppContext, upstream_url: Optional[str]):
                 app.repo.create_remote(remote_name, url)
             except Exception as e:
                 click.echo(f"Error: Failed to create remote: {e}", err=True)
-                raise SystemExit(1)
+                raise SystemExit(1) from e
 
     # Fetch the remote
     click.echo(f"Fetching '{remote_name}'...")
@@ -406,7 +400,7 @@ def init(app: AppContext, upstream_url: Optional[str]):
         click.echo(f"Done. Remote '{remote_name}' is ready.")
     except Exception as e:
         click.echo(f"Error: Failed to fetch remote: {e}", err=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
 
 @fork.command()
@@ -443,12 +437,12 @@ def init(app: AppContext, upstream_url: Optional[str]):
 )
 def status(
     app: AppContext,
-    upstream_ref: Optional[str],
+    upstream_ref: str | None,
     fork_ref: str,
     list_commits: bool,
     show_merge_picks: bool,
 ):
-    log.info(f"getting fork status for:")
+    log.info("getting fork status for:")
     log.info(f"  upstream_ref:{upstream_ref}")
     log.info(f"  fork_ref={fork_ref}")
     log.info(f"  list_commits={list_commits}")
@@ -460,7 +454,7 @@ def status(
         fork_status = git_utils.get_fork_status(app.repo, upstream_ref, fork_ref)
     except Exception as e:
         click.echo(f"Error: Failed to get fork status: {e}", err=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
     # Get prioritized commits if -p is specified
     prioritized = None
@@ -474,7 +468,7 @@ def status(
             fork_ref=fork_ref,
         )
 
-        log.info(f"getting prioritized commits for merge picks")
+        log.info("getting prioritized commits for merge picks")
         prioritized = get_prioritized_commits(
             app.repo,
             fork_status.unmerged_commit_shas,
@@ -550,7 +544,7 @@ def status(
 )
 def merge_pick(
     app: AppContext,
-    upstream_ref: Optional[str],
+    upstream_ref: str | None,
     fork_ref: str,
     next_only: bool,
     list_commits: bool,
@@ -585,7 +579,7 @@ def merge_pick(
         fork_status = git_utils.get_fork_status(app.repo, upstream_ref, fork_ref)
     except Exception as e:
         click.echo(f"Error: Failed to get fork status: {e}", err=True)
-        raise SystemExit(1)
+        raise SystemExit(1) from e
 
     if fork_status.is_up_to_date:
         # No unmerged commits - nothing to do

@@ -1,10 +1,10 @@
+import re
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Optional
-import re
-from . import git_utils
-from ..models import MergeInfo
+
 from ..config import BranchConfig
+from ..models import MergeInfo
+from . import git_utils
 
 
 @dataclass
@@ -185,7 +185,7 @@ class BranchNameBuilder:
         cls,
         branch_name: str,
         name_format: str,
-    ) -> Optional[ParsedBranchName]:
+    ) -> ParsedBranchName | None:
         """Parse a branch name back into its components.
 
         This method reverses the branch name generation process, extracting
@@ -268,7 +268,7 @@ class BranchNameBuilder:
         cls,
         branch_name: str,
         config: "BranchConfig",
-    ) -> Optional[ParsedBranchName]:
+    ) -> ParsedBranchName | None:
         """Parse a branch name using format from BranchConfig.
 
         Convenience method that extracts the name_format from config.

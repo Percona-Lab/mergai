@@ -3,8 +3,9 @@
 This module provides a unified way to handle output formats across commands.
 """
 
+from collections.abc import Callable
 from enum import Enum
-from typing import Callable, Optional
+
 import click
 
 

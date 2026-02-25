@@ -1,9 +1,7 @@
-from typing import Dict, Type
-
 from .base import Agent
 from .gemini_cli import GeminiCLIAgent
 
-REGISTRY: Dict[str, Type[Agent]] = {
+REGISTRY: dict[str, type[Agent]] = {
     "gemini-cli": GeminiCLIAgent,
 }
 

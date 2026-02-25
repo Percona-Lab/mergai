@@ -27,15 +27,15 @@ Example usage:
     prompt_data = ctx.to_dict(prompt_config)
 """
 
-from dataclasses import dataclass, field
-from typing import Optional, List, Dict, Any, TYPE_CHECKING, Union, Tuple, TypeVar
-from enum import Enum
 import re
+from dataclasses import dataclass, field
+from enum import Enum
+from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
 T = TypeVar("T", bound="MergaiNote")
 
 if TYPE_CHECKING:
-    from git import Repo, Commit
+    from git import Commit, Repo
 
 
 class MarkdownFormat(Enum):
@@ -49,7 +49,7 @@ class MarkdownFormat(Enum):
     PR = "pr"
 
 
-def _parse_github_url_from_remote(remote_url: str) -> Optional[str]:
+def _parse_github_url_from_remote(remote_url: str) -> str | None:
     """Parse a GitHub repository URL from a git remote URL.
 
     Supports both SSH and HTTPS formats:
@@ -97,7 +97,7 @@ class MarkdownConfig:
     """
 
     format: MarkdownFormat = MarkdownFormat.SIMPLE
-    repo_url: Optional[str] = None
+    repo_url: str | None = None
 
     @classmethod
     def simple(cls) -> "MarkdownConfig":
@@ -139,7 +139,7 @@ class MarkdownConfig:
         # Ensure URL doesn't have trailing slash
         return cls(format=MarkdownFormat.PR, repo_url=repo_url.rstrip("/"))
 
-    def get_commit_url(self, sha: str) -> Optional[str]:
+    def get_commit_url(self, sha: str) -> str | None:
         """Get the URL for a commit.
 
         Args:
@@ -172,9 +172,7 @@ class EnhancedCommit:
         print(enhanced.hexsha)  # abc123... (delegated to underlying commit)
     """
 
-    def __init__(
-        self, commit: "Commit", markdown_config: Optional[MarkdownConfig] = None
-    ):
+    def __init__(self, commit: "Commit", markdown_config: MarkdownConfig | None = None):
         """Initialize EnhancedCommit.
 
         Args:
@@ -189,7 +187,7 @@ class EnhancedCommit:
         return getattr(self._commit, name)
 
     @property
-    def commit_url(self) -> Optional[str]:
+    def commit_url(self) -> str | None:
         """Get the URL to this commit on GitHub.
 
         Returns:
@@ -371,7 +369,7 @@ class CommitSerializationConfig:
         )
 
     @classmethod
-    def from_list(cls, fields: List[str]) -> "CommitSerializationConfig":
+    def from_list(cls, fields: list[str]) -> "CommitSerializationConfig":
         """Create config from a list of field names.
 
         Args:
@@ -392,7 +390,7 @@ class CommitSerializationConfig:
             include_parents="parents" in fields,
         )
 
-    def to_list(self) -> List[str]:
+    def to_list(self) -> list[str]:
         """Convert config to list of enabled field names."""
         fields = []
         if self.include_hexsha:
@@ -460,9 +458,7 @@ def _short_sha(sha: str) -> str:
     return sha[:11]
 
 
-def _commit_to_dict(
-    commit: "Commit", config: CommitSerializationConfig
-) -> Union[dict, str]:
+def _commit_to_dict(commit: "Commit", config: CommitSerializationConfig) -> dict | str:
     """Serialize a git Commit based on config.
 
     Args:
@@ -523,10 +519,10 @@ class ConflictContext:
     ours_commit_sha: str
     theirs_commit_sha: str
     base_commit_sha: str
-    files: List[str]
-    conflict_types: Dict[str, str]
-    diffs: Optional[Dict[str, str]] = None
-    their_commits_shas: Optional[Dict[str, List[str]]] = None
+    files: list[str]
+    conflict_types: dict[str, str]
+    diffs: dict[str, str] | None = None
+    their_commits_shas: dict[str, list[str]] | None = None
 
     # Cached repo reference (not serialized)
     _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
@@ -587,7 +583,7 @@ class ConflictContext:
             raise RuntimeError("Repo not bound. Call bind_repo() first.")
         return self._repo.commit(self.base_commit_sha)
 
-    def get_their_commits(self, file_path: str) -> List["Commit"]:
+    def get_their_commits(self, file_path: str) -> list["Commit"]:
         """Get list of their commits for a specific file.
 
         Args:
@@ -704,9 +700,9 @@ class MergeContext:
     """
 
     merge_commit_sha: str
-    merged_commits_shas: List[str]
-    important_files_modified: List[str]
-    auto_merged: Optional[Dict[str, Any]] = None
+    merged_commits_shas: list[str]
+    important_files_modified: list[str]
+    auto_merged: dict[str, Any] | None = None
 
     # Cached repo reference (not serialized)
     _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
@@ -750,7 +746,7 @@ class MergeContext:
         return self._repo.commit(self.merge_commit_sha)
 
     @property
-    def merged_commits(self) -> List["Commit"]:
+    def merged_commits(self) -> list["Commit"]:
         """Get list of all merged commit objects. Requires repo to be bound."""
         if self._repo is None:
             raise RuntimeError("Repo not bound. Call bind_repo() first.")
@@ -840,13 +836,13 @@ class MergaiNote:
 
     merge_info: MergeInfo
     mergai_version: str
-    conflict_context: Optional[ConflictContext] = None
-    merge_context: Optional[MergeContext] = None
-    solutions: Optional[List[dict]] = None
-    pr_comments: Optional[List[dict]] = None
-    user_comment: Optional[dict] = None  # Dict with user, email, date, body
-    merge_description: Optional[dict] = None
-    note_index: Optional[List[dict]] = None
+    conflict_context: ConflictContext | None = None
+    merge_context: MergeContext | None = None
+    solutions: list[dict] | None = None
+    pr_comments: list[dict] | None = None
+    user_comment: dict | None = None  # Dict with user, email, date, body
+    merge_description: dict | None = None
+    note_index: list[dict] | None = None
 
     # Cached repo reference (not serialized)
     _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
@@ -912,7 +908,7 @@ class MergaiNote:
     @classmethod
     def combine_from_dicts(
         cls: type[T],
-        commits_with_notes: List[Tuple[Any, Optional[dict]]],
+        commits_with_notes: list[tuple[Any, dict | None]],
         repo: "Repo" = None,
     ) -> T:
         """Build a combined note from multiple commit notes.
@@ -941,7 +937,7 @@ class MergaiNote:
         from .version import __version__
 
         # Always use current version when combining notes
-        combined: Dict[str, Any] = {"mergai_version": __version__}
+        combined: dict[str, Any] = {"mergai_version": __version__}
 
         for _, git_note in commits_with_notes:
             if git_note is None:
@@ -1107,7 +1103,7 @@ class MergaiNote:
         self.solutions = None
         return self
 
-    def set_pr_comments(self, comments: List[dict]) -> "MergaiNote":
+    def set_pr_comments(self, comments: list[dict]) -> "MergaiNote":
         """Set pr_comments.
 
         Args:
@@ -1143,7 +1139,7 @@ class MergaiNote:
         self.merge_description = description
         return self
 
-    def add_note_index_entry(self, sha: str, fields: List[str]) -> "MergaiNote":
+    def add_note_index_entry(self, sha: str, fields: list[str]) -> "MergaiNote":
         """Add an entry to note_index.
 
         Args:
@@ -1313,15 +1309,15 @@ class MergaiNote:
             return committed
 
         for entry in self.note_index:
-            for field in entry.get("fields", []):
+            for field_name in entry.get("fields", []):
                 # Match "solutions[N]" pattern
-                match = re.match(r"solutions\[(\d+)\]", field)
+                match = re.match(r"solutions\[(\d+)\]", field_name)
                 if match:
                     committed.add(int(match.group(1)))
 
         return committed
 
-    def get_uncommitted_solution(self) -> Optional[Tuple[int, dict]]:
+    def get_uncommitted_solution(self) -> tuple[int, dict] | None:
         """Get the last uncommitted solution with its index.
 
         Returns:
@@ -1337,7 +1333,7 @@ class MergaiNote:
                 return (i, self.solutions[i])
         return None
 
-    def get_uncommitted_fields(self) -> List[str]:
+    def get_uncommitted_fields(self) -> list[str]:
         """Get list of fields that are present in the note but not in note_index.
 
         Returns:

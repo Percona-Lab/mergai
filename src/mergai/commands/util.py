@@ -1,12 +1,12 @@
-import click
 import json
+
+import click
 import git
-from ..utils import git_utils
-from ..utils import util
-from ..utils.output import OutputFormat, format_option
-from ..utils import formatters
+
 from ..app import AppContext
-from ..models import ConflictContext, MergeInfo, MergeContext, MergaiNote
+from ..models import ConflictContext, MergaiNote, MergeContext, MergeInfo
+from ..utils import formatters, git_utils, util
+from ..utils.output import OutputFormat, format_option
 
 
 @click.command()
@@ -589,8 +589,7 @@ def strip_comment_lines(edited: str) -> str:
 
 
 def now_utc_iso() -> str:
-    from datetime import datetime
-    from datetime import timezone
+    from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -606,7 +605,7 @@ def get_comment_from_cli(body: str, file: str) -> str:
     if body:
         parts.append(body)
     if file:
-        with open(file, "r") as f:
+        with open(file) as f:
             parts.append("```")
             parts.append(f.read())
             parts.append("```")

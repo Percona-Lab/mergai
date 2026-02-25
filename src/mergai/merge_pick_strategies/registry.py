@@ -4,15 +4,14 @@ This module provides a central registry for all merge-pick strategies and
 a factory function to create strategy instances from configuration data.
 """
 
-from typing import Optional, Dict, Tuple, Type
 import logging
 
 from .base import MergePickStrategy
-from .huge_commit import HugeCommitStrategyConfig, HugeCommitStrategy
-from .important_files import ImportantFilesStrategyConfig, ImportantFilesStrategy
-from .branching_point import BranchingPointStrategyConfig, BranchingPointStrategy
-from .conflict import ConflictStrategyConfig, ConflictStrategy
-from .most_recent import MostRecentStrategyConfig, MostRecentStrategy
+from .branching_point import BranchingPointStrategy, BranchingPointStrategyConfig
+from .conflict import ConflictStrategy, ConflictStrategyConfig
+from .huge_commit import HugeCommitStrategy, HugeCommitStrategyConfig
+from .important_files import ImportantFilesStrategy, ImportantFilesStrategyConfig
+from .most_recent import MostRecentStrategy, MostRecentStrategyConfig
 
 log = logging.getLogger(__name__)
 
@@ -21,7 +20,7 @@ log = logging.getLogger(__name__)
 # 1. Create the strategy module with Config, Result, and Strategy classes
 # 2. Import them here
 # 3. Add an entry to STRATEGY_REGISTRY
-STRATEGY_REGISTRY: Dict[str, Tuple[Type, Type[MergePickStrategy]]] = {
+STRATEGY_REGISTRY: dict[str, tuple[type, type[MergePickStrategy]]] = {
     "huge_commit": (HugeCommitStrategyConfig, HugeCommitStrategy),
     "important_files": (ImportantFilesStrategyConfig, ImportantFilesStrategy),
     "branching_point": (BranchingPointStrategyConfig, BranchingPointStrategy),
@@ -30,7 +29,7 @@ STRATEGY_REGISTRY: Dict[str, Tuple[Type, Type[MergePickStrategy]]] = {
 }
 
 
-def create_strategy(strategy_type: str, data) -> Optional[MergePickStrategy]:
+def create_strategy(strategy_type: str, data) -> MergePickStrategy | None:
     """Create a strategy instance from config data.
 
     Args:

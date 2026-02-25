@@ -1,28 +1,27 @@
-import git
-import click
+import contextlib
+import json
 import logging
+import tempfile
 import textwrap
-from .utils import git_utils
-from .utils import util
-from .agents.factory import create_agent
-from .utils.state_store import StateStore
-from .config import MergaiConfig
-from .models import (
-    ConflictContext,
-    MergeContext,
-    MergaiNote,
-)
+
+import click
+import git
 import github
 from github import Repository as GithubRepository
-import json
-from typing import Optional, Tuple, List
-import tempfile
+
+from .agent_executor import AgentExecutionError, AgentExecutor
 from .agents.base import Agent
+from .agents.factory import create_agent
+from .config import MergaiConfig
+from .context_builder import ContextBuilder
+from .models import (
+    MergaiNote,
+)
+from .prompt_builder import PromptBuilder
+from .utils import git_utils, util
 from .utils.branch_name_builder import BranchNameBuilder
 from .utils.pr_title_builder import PRTitleBuilder
-from .prompt_builder import PromptBuilder
-from .context_builder import ContextBuilder
-from .agent_executor import AgentExecutor, AgentExecutionError
+from .utils.state_store import StateStore
 
 log = logging.getLogger(__name__)
 
@@ -32,10 +31,10 @@ class AppContext:
         self.config: MergaiConfig = config if config is not None else MergaiConfig()
         self.repo: git.Repo = git.Repo(".")
         self.state: StateStore = StateStore(self.repo.working_tree_dir)
-        self.gh_repo_str: Optional[str] = None
+        self.gh_repo_str: str | None = None
         gh_token = util.gh_auth_token()
         self.gh = github.Github(gh_token) if gh_token else None
-        self._note: Optional[MergaiNote] = None
+        self._note: MergaiNote | None = None
 
     def _require_note(self) -> MergaiNote:
         """Load note and raise ClickException if missing.
@@ -77,7 +76,7 @@ class AppContext:
         """
         return self._require_note()
 
-    def load_note(self) -> Optional[MergaiNote]:
+    def load_note(self) -> MergaiNote | None:
         """Load note from storage without caching.
 
         Returns:
@@ -123,7 +122,7 @@ class AppContext:
                 f"  - Either %(merge_commit_sha) or %(merge_commit_short_sha)\n"
                 f"  - Either %(target_branch_sha) or %(target_branch_short_sha)\n\n"
                 f"Current format: {self.config.branch.name_format}"
-            )
+            ) from e
 
     @property
     def commit_footer(self) -> str:
@@ -146,13 +145,15 @@ class AppContext:
         """
         return PRTitleBuilder.from_config(self.config.pr, self.note.merge_info)
 
-    def get_note_from_commit(self, commit: str) -> Optional[dict]:
+    def get_note_from_commit(self, commit: str) -> dict | None:
         try:
             return git_utils.get_note_from_commit_as_dict(self.repo, "mergai", commit)
         except Exception as e:
-            raise click.ClickException(f"Failed to get note for commit {commit}: {e}")
+            raise click.ClickException(
+                f"Failed to get note for commit {commit}: {e}"
+            ) from e
 
-    def try_get_note_from_commit(self, commit: str) -> Optional[MergaiNote]:
+    def try_get_note_from_commit(self, commit: str) -> MergaiNote | None:
         try:
             note_dict = git_utils.get_note_from_commit_as_dict(
                 self.repo, "mergai", commit
@@ -160,7 +161,7 @@ class AppContext:
             if note_dict is None:
                 return None
             return MergaiNote.from_dict(note_dict, self.repo)
-        except Exception as e:
+        except Exception:
             return None
 
     @property
@@ -252,7 +253,7 @@ class AppContext:
                 validator=executor.validate_solution_files,
             )
         except AgentExecutionError as e:
-            raise Exception(str(e))
+            raise Exception(str(e)) from e
 
         # Add solution to solutions array
         if uncommitted is not None and force:
@@ -312,7 +313,7 @@ class AppContext:
                 validator=executor.create_describe_validator(was_dirty_before),
             )
         except AgentExecutionError as e:
-            raise Exception(str(e))
+            raise Exception(str(e)) from e
 
         self.note.set_merge_description(description)
         self.save_note(self.note)
@@ -331,7 +332,7 @@ class AppContext:
             commit,
         )
 
-    def add_selective_note(self, commit: str, fields: List[str]):
+    def add_selective_note(self, commit: str, fields: list[str]):
         """Add a git note containing only merge_info and specified fields.
 
         Creates a git note attached to the specified commit containing merge_info
@@ -449,7 +450,7 @@ class AppContext:
         resolved_files = solution["response"].get("resolved", {})
         if resolved_files:
             message += "Resolved:\n"
-            for file_path in resolved_files.keys():
+            for file_path in resolved_files:
                 message += f"\t{file_path}\n"
             message += "\n"
 
@@ -457,12 +458,12 @@ class AppContext:
         unresolved_files = solution["response"].get("unresolved", {})
         if unresolved_files:
             # Mark conflict markers as unresolved and stage the files
-            for file_path in unresolved_files.keys():
+            for file_path in unresolved_files:
                 git_utils.mark_conflict_markers_unresolved(file_path)
                 self.repo.index.add([file_path])
 
             message += "Unresolved (contains conflict markers):\n"
-            for file_path in unresolved_files.keys():
+            for file_path in unresolved_files:
                 message += f"\t{file_path}\n"
             message += "\n"
 
@@ -548,7 +549,7 @@ class AppContext:
 
     def _collect_commits_for_squash(
         self, target_sha: str
-    ) -> List[Tuple[git.Commit, Optional[dict]]]:
+    ) -> list[tuple[git.Commit, dict | None]]:
         """Collect commits from HEAD to target_sha with their notes.
 
         Iterates from HEAD backwards until reaching target_sha (exclusive),
@@ -586,7 +587,7 @@ class AppContext:
     def _build_squash_commit_message(
         self,
         merge_info: dict,
-        commits_with_notes: List[Tuple[git.Commit, Optional[dict]]],
+        commits_with_notes: list[tuple[git.Commit, dict | None]],
         combined_note: dict,
     ) -> str:
         """Build the commit message for the squashed merge commit.
@@ -830,7 +831,7 @@ class AppContext:
             raise click.ClickException("No commits found to finalize.")
 
         # Print validation summary
-        click.echo(f"Finalize mode: keep (commits preserved)")
+        click.echo("Finalize mode: keep (commits preserved)")
         click.echo(f"Commits from HEAD to {git_utils.short_sha(target_branch_sha)}:\n")
         for commit, note in commits_with_notes:
             short_sha = git_utils.short_sha(commit.hexsha)
@@ -840,7 +841,7 @@ class AppContext:
                 fields = self._get_note_fields_summary(note)
                 click.echo(f"              note: {fields}")
             else:
-                click.echo(f"              note: (none)")
+                click.echo("              note: (none)")
 
         click.echo(f"\nTotal: {len(commits_with_notes)} commit(s)")
         click.echo("No changes made (keep mode).")
@@ -952,7 +953,7 @@ class AppContext:
 
         self.repo.git.reset("--hard", second_parent_sha)
 
-        click.echo(f"\nSuccessfully removed merge commit.")
+        click.echo("\nSuccessfully removed merge commit.")
         click.echo(f"HEAD is now at {short_second_parent_sha}")
 
     def rebuild_note_from_commits(self) -> MergaiNote:
@@ -986,10 +987,8 @@ class AppContext:
         target_sha = None
         if parsed:
             # Mergai branch - we know the target SHA
-            try:
+            with contextlib.suppress(Exception):
                 target_sha = self.repo.commit(parsed.target_branch_sha).hexsha
-            except Exception:
-                pass
 
         # Collect commits and their notes
         commits_with_notes = []
@@ -1055,16 +1054,14 @@ class AppContext:
                         )
 
             # Handle conflict_context (at most one)
-            if "conflict_context" in git_note:
-                if "conflict_context" not in note_dict:
-                    note_dict["conflict_context"] = git_note["conflict_context"]
-                    fields_for_this_commit.append("conflict_context")
+            if "conflict_context" in git_note and "conflict_context" not in note_dict:
+                note_dict["conflict_context"] = git_note["conflict_context"]
+                fields_for_this_commit.append("conflict_context")
 
             # Handle merge_context (at most one)
-            if "merge_context" in git_note:
-                if "merge_context" not in note_dict:
-                    note_dict["merge_context"] = git_note["merge_context"]
-                    fields_for_this_commit.append("merge_context")
+            if "merge_context" in git_note and "merge_context" not in note_dict:
+                note_dict["merge_context"] = git_note["merge_context"]
+                fields_for_this_commit.append("merge_context")
 
             # Handle solution (singular in git note -> add to solutions array)
             # Handle solutions array
@@ -1075,22 +1072,19 @@ class AppContext:
                     fields_for_this_commit.append(f"solutions[{idx}]")
 
             # Handle merge_description
-            if "merge_description" in git_note:
-                if "merge_description" not in note_dict:
-                    note_dict["merge_description"] = git_note["merge_description"]
-                    fields_for_this_commit.append("merge_description")
+            if "merge_description" in git_note and "merge_description" not in note_dict:
+                note_dict["merge_description"] = git_note["merge_description"]
+                fields_for_this_commit.append("merge_description")
 
             # Handle pr_comments
-            if "pr_comments" in git_note:
-                if "pr_comments" not in note_dict:
-                    note_dict["pr_comments"] = git_note["pr_comments"]
-                    fields_for_this_commit.append("pr_comments")
+            if "pr_comments" in git_note and "pr_comments" not in note_dict:
+                note_dict["pr_comments"] = git_note["pr_comments"]
+                fields_for_this_commit.append("pr_comments")
 
             # Handle user_comment
-            if "user_comment" in git_note:
-                if "user_comment" not in note_dict:
-                    note_dict["user_comment"] = git_note["user_comment"]
-                    fields_for_this_commit.append("user_comment")
+            if "user_comment" in git_note and "user_comment" not in note_dict:
+                note_dict["user_comment"] = git_note["user_comment"]
+                fields_for_this_commit.append("user_comment")
 
             # Add to note_index if we collected any fields
             if fields_for_this_commit:
@@ -1156,7 +1150,7 @@ class AppContext:
 
     def get_unsynced_commits(
         self, force: bool = False
-    ) -> List[Tuple[git.Commit, bool]]:
+    ) -> list[tuple[git.Commit, bool]]:
         """Get commits that need syncing (don't have solutions attached).
 
         Iterates from HEAD backwards to target_branch_sha and identifies
@@ -1337,7 +1331,7 @@ class AppContext:
 
         # Perform the sync
         synced_count = 0
-        for commit, has_existing_note in commits_to_sync:
+        for commit, _has_existing_note in commits_to_sync:
             short_sha = git_utils.short_sha(commit.hexsha)
             first_line = commit.message.split("\n")[0].strip()
 

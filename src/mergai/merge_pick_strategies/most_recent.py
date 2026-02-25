@@ -1,12 +1,12 @@
 """Most recent commit fallback strategy - selects the newest unmerged commit."""
 
 from dataclasses import dataclass
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
-from .base import MergePickStrategy, MergePickStrategyResult, MergePickStrategyContext
+from .base import MergePickStrategy, MergePickStrategyContext, MergePickStrategyResult
 
 if TYPE_CHECKING:
-    from git import Repo, Commit
+    from git import Commit, Repo
 
 
 @dataclass
@@ -75,7 +75,7 @@ class MostRecentStrategy(MergePickStrategy):
 
     def check(
         self, repo: "Repo", commit: "Commit", context: MergePickStrategyContext
-    ) -> Optional[MostRecentResult]:
+    ) -> MostRecentResult | None:
         """Check if commit matches this strategy.
 
         This strategy always returns a match - it's a fallback strategy

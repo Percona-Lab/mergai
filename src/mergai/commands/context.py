@@ -8,7 +8,6 @@ This module provides commands for creating and managing merge context:
 """
 
 import click
-from typing import Optional
 
 from ..app import AppContext
 from ..utils import git_utils
@@ -116,8 +115,8 @@ def _try_rebuild_note_from_commits(app: AppContext, header: str) -> bool:
 
 def _resolve_merge_commit_sha(
     app: AppContext,
-    commit: Optional[str],
-    parsed: Optional[ParsedBranchName],
+    commit: str | None,
+    parsed: ParsedBranchName | None,
 ) -> str:
     """Resolve the merge commit SHA from various sources.
 
@@ -137,7 +136,9 @@ def _resolve_merge_commit_sha(
             resolved = app.repo.commit(commit)
             return resolved.hexsha
         except Exception as e:
-            raise click.ClickException(f"Invalid commit reference '{commit}': {e}")
+            raise click.ClickException(
+                f"Invalid commit reference '{commit}': {e}"
+            ) from e
     elif parsed is not None:
         try:
             resolved = app.repo.commit(parsed.merge_commit_sha)
@@ -145,14 +146,14 @@ def _resolve_merge_commit_sha(
         except Exception as e:
             raise click.ClickException(
                 f"Cannot resolve commit from branch name '{parsed.merge_commit_sha}': {e}"
-            )
+            ) from e
     else:
         raise click.ClickException("COMMIT is required when not on a mergai branch.")
 
 
 def _resolve_target_branch(
-    target: Optional[str],
-    parsed: Optional[ParsedBranchName],
+    target: str | None,
+    parsed: ParsedBranchName | None,
     current_branch: str,
 ) -> str:
     """Determine target branch from various sources.
@@ -209,8 +210,8 @@ def context():
 )
 def init(
     app: AppContext,
-    commit: Optional[str],
-    target: Optional[str],
+    commit: str | None,
+    target: str | None,
     force: bool,
 ):
     """Initialize merge context with commit and target branch info.
@@ -269,7 +270,7 @@ def init(
     try:
         target_branch_sha = git_utils.resolve_ref_sha(app.repo, target_branch)
     except ValueError as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
 
     # Check if note already exists with merge_info
     if app.has_note and not force:
@@ -278,7 +279,7 @@ def init(
         )
 
     # Create and save the note
-    from ..models import MergeInfo, MergaiNote
+    from ..models import MergaiNote, MergeInfo
 
     merge_info = MergeInfo(
         target_branch=target_branch,
@@ -456,7 +457,7 @@ def create_merge(app: AppContext, force: bool, from_stdin: bool, strategy: str):
             else:
                 click.echo("  auto_merged.files: (none)")
     except Exception as e:
-        raise click.ClickException(str(e))
+        raise click.ClickException(str(e)) from e
 
 
 @context.command()
@@ -483,7 +484,7 @@ def create_merge(app: AppContext, force: bool, from_stdin: bool, strategy: str):
     default=False,
     help="When dropping solution, drop all solutions including committed ones.",
 )
-def drop(app: AppContext, part: Optional[str], drop_all_solutions: bool):
+def drop(app: AppContext, part: str | None, drop_all_solutions: bool):
     """Drop all or part of the stored context.
 
     Without arguments, drops all context (removes the entire note).

@@ -9,9 +9,10 @@ branch names used in the merge conflict resolution workflow:
 """
 
 import click
+
 from ..app import AppContext
-from ..utils.branch_name_builder import BranchType
 from ..utils import git_utils
+from ..utils.branch_name_builder import BranchType
 
 BRANCH_ALL = "all"
 
@@ -112,7 +113,7 @@ def create(app: AppContext, type: str):
         app.repo.git.checkout("-b", branch_name)
         click.echo(f"Created and checked out branch: {branch_name}")
     except Exception as e:
-        raise click.ClickException(f"Failed to create branch: {e}")
+        raise click.ClickException(f"Failed to create branch: {e}") from e
 
 
 @branch.command()
@@ -179,7 +180,7 @@ def delete(
             except Exception as e:
                 raise click.ClickException(
                     f"Failed to delete local branch '{branch_name}': {e}"
-                )
+                ) from e
         elif not ignore_missing and not remote:
             # Only require local branch when not deleting remote; with -r we allow remote-only delete
             raise click.ClickException(f"Local branch '{branch_name}' does not exist")
@@ -196,7 +197,7 @@ def delete(
                 except Exception as e:
                     raise click.ClickException(
                         f"Failed to delete remote branch 'origin/{branch_name}': {e}"
-                    )
+                    ) from e
             elif not ignore_missing:
                 raise click.ClickException(
                     f"Remote branch 'origin/{branch_name}' does not exist"
@@ -270,7 +271,7 @@ def push(
             except Exception as e:
                 raise click.ClickException(
                     f"Failed to push branch '{branch_name}': {e}"
-                )
+                ) from e
         elif not ignore_missing:
             raise click.ClickException(f"Local branch '{branch_name}' does not exist")
         else:
@@ -321,4 +322,4 @@ def switch(app: AppContext, type: str):
         app.repo.git.checkout(branch_name)
         click.echo(f"Switched to branch: {branch_name}")
     except Exception as e:
-        raise click.ClickException(f"Failed to switch to branch: {e}")
+        raise click.ClickException(f"Failed to switch to branch: {e}") from e

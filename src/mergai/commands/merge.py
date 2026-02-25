@@ -6,11 +6,12 @@ using the SHA from merge_info.
 
 import click
 from git.exc import GitCommandError
+
 from ..app import AppContext
 from ..config import (
     MERGE_DESCRIBE_ALWAYS,
-    MERGE_DESCRIBE_SUCCESS,
     MERGE_DESCRIBE_CONFLICT,
+    MERGE_DESCRIBE_SUCCESS,
 )
 from ..utils import git_utils
 
@@ -34,9 +35,7 @@ def _maybe_run_describe(app: AppContext, merge_outcome: str):
     # TODO: Add CLI flag (--describe/--no-describe) to override config setting
     describe_setting = app.config.merge.describe
 
-    should_describe = (
-        describe_setting == MERGE_DESCRIBE_ALWAYS or describe_setting == merge_outcome
-    )
+    should_describe = describe_setting in (MERGE_DESCRIBE_ALWAYS, merge_outcome)
 
     if not should_describe:
         return
@@ -200,7 +199,7 @@ def merge(app: AppContext, no_context: bool, force: bool):
                     blobs_map = app.repo.index.unmerged_blobs()
                     if blobs_map:
                         click.echo("Conflicting files:")
-                        for file_path in blobs_map.keys():
+                        for file_path in blobs_map:
                             click.echo(f"  {file_path}")
                 except Exception:
                     pass
@@ -247,15 +246,15 @@ def merge(app: AppContext, no_context: bool, force: bool):
 
                 _maybe_run_describe(app, MERGE_DESCRIBE_CONFLICT)
 
-            raise SystemExit(EXIT_CONFLICT)
+            raise SystemExit(EXIT_CONFLICT) from e
         else:
             # Other git errors (e.g., invalid ref, not a git repo)
             click.echo(f"Error: Git merge failed with status {e.status}")
             if e.stderr:
                 click.echo(e.stderr)
-            raise SystemExit(EXIT_ERROR)
+            raise SystemExit(EXIT_ERROR) from e
 
     except Exception as e:
         # Any other unexpected error
         click.echo(f"Error: {e}")
-        raise SystemExit(EXIT_ERROR)
+        raise SystemExit(EXIT_ERROR) from e

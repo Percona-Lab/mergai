@@ -5,17 +5,17 @@ This module provides the config command for configuring:
 - Shell completion (bash, zsh, fish)
 """
 
-import click
-from typing import Optional, Tuple, Dict, List
 from pathlib import Path
 
-from ..config import MergaiConfig, InitConfig
+import click
+
+from ..config import InitConfig
 
 # Constant for notes display ref - not configurable, only whether to set it
 NOTES_DISPLAY_REF = "refs/notes/mergai-marker"
 
 
-def get_git_config_value(repo, key: str, global_scope: bool) -> Optional[str]:
+def get_git_config_value(repo, key: str, global_scope: bool) -> str | None:
     """Get current value of a git config key.
 
     Args:
@@ -51,7 +51,7 @@ def configure_git(
     config: InitConfig,
     global_scope: bool,
     dry_run: bool,
-) -> Tuple[int, int]:
+) -> tuple[int, int]:
     """Configure git settings for mergai.
 
     Args:
@@ -125,14 +125,12 @@ def get_completion_script_content(shell: str) -> str:
     # Click provides built-in shell completion via environment variable
     env_var = "_MERGAI_COMPLETE"
 
-    if shell == "bash":
-        return f'eval "$({env_var}=bash_source mergai)"'
-    elif shell == "zsh":
-        return f'eval "$({env_var}=zsh_source mergai)"'
-    elif shell == "fish":
-        return f"{env_var}=fish_source mergai | source"
-    else:
-        return f'eval "$({env_var}={shell}_source mergai)"'
+    shell_scripts = {
+        "bash": f'eval "$({env_var}=bash_source mergai)"',
+        "zsh": f'eval "$({env_var}=zsh_source mergai)"',
+        "fish": f"{env_var}=fish_source mergai | source",
+    }
+    return shell_scripts.get(shell, f'eval "$({env_var}={shell}_source mergai)"')
 
 
 def get_shell_rc_file(shell: str) -> str:
@@ -161,7 +159,7 @@ def get_shell_rc_file(shell: str) -> str:
 
 def setup_completion(
     config: InitConfig,
-    shell_override: Optional[str],
+    shell_override: str | None,
     dry_run: bool,
 ) -> None:
     """Set up shell completion for mergai.
@@ -192,7 +190,7 @@ def setup_completion(
 
 def check_git_status(
     repo, config: InitConfig, global_scope: bool
-) -> Dict[str, Tuple[Optional[str], str, bool]]:
+) -> dict[str, tuple[str | None, str, bool]]:
     """Check current git configuration status.
 
     Args:
@@ -314,7 +312,7 @@ def config(
     dry_run: bool,
     configure_git_flag: bool,
     configure_completion: bool,
-    completion_shell: Optional[str],
+    completion_shell: str | None,
     show_status_flag: bool,
 ):
     """Configure mergai environment and settings.

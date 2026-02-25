@@ -3,14 +3,15 @@
 This module handles loading and parsing the .mergai/config.yml configuration file.
 """
 
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Dict, Any, List
-import logging
+from typing import Any, Optional
+
 import yaml
 
+from .merge_pick_strategies import ImportantFilesStrategy, MergePickStrategy
 from .models import CommitSerializationConfig, ContextSerializationConfig
-from .merge_pick_strategies import MergePickStrategy, ImportantFilesStrategy
 
 log = logging.getLogger(__name__)
 
@@ -30,9 +31,9 @@ class ForkConfig:
         merge_picks: Configuration for commit prioritization in fork merge-pick.
     """
 
-    upstream_url: Optional[str] = None
+    upstream_url: str | None = None
     upstream_branch: str = "master"
-    upstream_remote: Optional[str] = None
+    upstream_remote: str | None = None
     merge_picks: Optional["MergePicksConfig"] = None
 
     @classmethod
@@ -148,7 +149,7 @@ class PRTypeConfig:
     """
 
     title_format: str = ""
-    labels: List[str] = field(default_factory=list)
+    labels: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict, default_title_format: str = "") -> "PRTypeConfig":
@@ -380,7 +381,7 @@ class PromptConfig:
             - author
     """
 
-    commit_fields: List[str] = field(
+    commit_fields: list[str] = field(
         default_factory=lambda: DEFAULT_COMMIT_FIELDS.copy()
     )
 
@@ -452,7 +453,7 @@ class MergePicksConfig:
             when no other strategy finds a match.
     """
 
-    strategies: List[MergePickStrategy] = field(default_factory=list)
+    strategies: list[MergePickStrategy] = field(default_factory=list)
     most_recent_fallback: bool = False
 
     @classmethod
@@ -694,10 +695,10 @@ class MergaiConfig:
     finalize: FinalizeConfig = field(default_factory=FinalizeConfig)
     merge: MergeConfig = field(default_factory=MergeConfig)
     config: InitConfig = field(default_factory=InitConfig)
-    _raw: Dict[str, Any] = field(default_factory=dict)
+    _raw: dict[str, Any] = field(default_factory=dict)
 
     @property
-    def important_files(self) -> List[str]:
+    def important_files(self) -> list[str]:
         """Get the list of important files from the merge_picks config, if set."""
         if self.fork and self.fork.merge_picks:
             for strategy in self.fork.merge_picks.strategies:
@@ -705,7 +706,7 @@ class MergaiConfig:
                     return strategy.config.files
         return []
 
-    def get_section(self, name: str) -> Dict[str, Any]:
+    def get_section(self, name: str) -> dict[str, Any]:
         """Get a configuration section by name.
 
         This allows commands to access their own config sections without
@@ -800,7 +801,7 @@ class MergaiConfig:
         )
 
 
-def load_config(config_path: Optional[str] = None) -> MergaiConfig:
+def load_config(config_path: str | None = None) -> MergaiConfig:
     """Load configuration from a YAML file.
 
     If config_path is explicitly provided and the file doesn't exist, raises an error.
@@ -827,10 +828,10 @@ def load_config(config_path: Optional[str] = None) -> MergaiConfig:
         return MergaiConfig()
 
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with open(path, encoding="utf-8") as f:
             data = yaml.safe_load(f)
     except yaml.YAMLError as e:
-        raise yaml.YAMLError(f"Invalid YAML in config file {path}: {e}")
+        raise yaml.YAMLError(f"Invalid YAML in config file {path}: {e}") from e
 
     # Handle empty file or file with only comments
     if data is None:

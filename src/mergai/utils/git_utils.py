@@ -1,16 +1,16 @@
-from git import Repo, Commit, Blob
-import re
 import json
-from typing import Iterator, Tuple, Optional, List
+import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import logging
-from pathlib import Path
 from enum import StrEnum
+from pathlib import Path
+
+from git import Blob, Commit, Repo
 
 log = logging.getLogger(__name__)
 
-BlobsMapType = dict[str, list[Tuple[int, Blob]]]
+BlobsMapType = dict[str, list[tuple[int, Blob]]]
 
 
 class ConflictType(StrEnum):
@@ -60,7 +60,9 @@ def resolve_ref_sha(repo: Repo, ref: str, try_remote: bool = True) -> str:
         return repo.commit(ref).hexsha
     except Exception as direct_error:
         if not try_remote:
-            raise ValueError(f"Cannot resolve ref '{ref}': {direct_error}")
+            raise ValueError(
+                f"Cannot resolve ref '{ref}': {direct_error}"
+            ) from direct_error
 
         # Try with origin/ prefix for remote-only branches
         try:
@@ -68,7 +70,7 @@ def resolve_ref_sha(repo: Repo, ref: str, try_remote: bool = True) -> str:
         except Exception as remote_error:
             raise ValueError(
                 f"Cannot resolve ref '{ref}' (tried both local and origin/{ref}): {remote_error}"
-            )
+            ) from remote_error
 
 
 def author_to_dict(author):
@@ -397,13 +399,13 @@ def merge_has_conflicts(repo: Repo, parent1: Commit, parent2: Commit) -> bool:
     try:
         # Try to perform a dry-run merge to see if there are conflicts
         repo.git.merge_tree(parent1, parent2)
-    except Exception as e:
+    except Exception:
         return True
 
 
 def commit_would_conflict(
     repo: Repo, commit: Commit, target_ref: str
-) -> Tuple[bool, List[str]]:
+) -> tuple[bool, list[str]]:
     """Check if merging a commit would cause conflicts without modifying working tree.
 
     Uses `git merge-tree --write-tree` which performs a merge simulation without
@@ -494,15 +496,15 @@ def commit_would_conflict(
         return (True, [])
 
 
-def get_note_from_commit(repo: Repo, ref: str, commit: str) -> Optional[str]:
+def get_note_from_commit(repo: Repo, ref: str, commit: str) -> str | None:
     try:
         note = repo.git.notes("--ref", ref, "show", repo.commit(commit).hexsha)
         return note
-    except Exception as e:
+    except Exception:
         return None
 
 
-def get_note_from_commit_as_dict(repo: Repo, ref: str, commit: str) -> Optional[dict]:
+def get_note_from_commit_as_dict(repo: Repo, ref: str, commit: str) -> dict | None:
     note_str = get_note_from_commit(repo, ref, commit)
     if not note_str:
         return None
@@ -510,7 +512,7 @@ def get_note_from_commit_as_dict(repo: Repo, ref: str, commit: str) -> Optional[
     return json.loads(note_str)
 
 
-def find_remote_by_url(repo: Repo, url: str) -> Optional[str]:
+def find_remote_by_url(repo: Repo, url: str) -> str | None:
     """Find a remote by its URL.
 
     Iterates through all remotes in the repository and returns the name
@@ -573,14 +575,14 @@ class GitMergeOutput:
         raw_output: The original unparsed output.
     """
 
-    auto_merged_files: List[str]
+    auto_merged_files: list[str]
     conflicting_files: dict[str, str]  # file -> conflict type (e.g., "content")
     success: bool
-    strategy: Optional[str]
+    strategy: str | None
     raw_output: str
 
 
-def parse_git_merge_output(output: str, repo: Optional[Repo] = None) -> GitMergeOutput:
+def parse_git_merge_output(output: str, repo: Repo | None = None) -> GitMergeOutput:
     """Parse the output of a git merge command.
 
     Extracts information about:
@@ -680,11 +682,11 @@ class ForkStatus:
         fork_ref: str,
         upstream_ref: str,
         commits_behind: int,
-        last_merged_commit: Optional[Commit],
-        first_unmerged_commit: Optional[Commit],
-        last_unmerged_commit: Optional[Commit],
-        merge_base_commit: Optional[Commit],
-        unmerged_commit_shas: List[str],
+        last_merged_commit: Commit | None,
+        first_unmerged_commit: Commit | None,
+        last_unmerged_commit: Commit | None,
+        merge_base_commit: Commit | None,
+        unmerged_commit_shas: list[str],
         files_affected: int,
         total_additions: int,
         total_deletions: int,
@@ -698,13 +700,13 @@ class ForkStatus:
         self.last_unmerged_commit = last_unmerged_commit
         self.merge_base_commit = merge_base_commit
         self._unmerged_commit_shas = unmerged_commit_shas
-        self._unmerged_commits_cache: Optional[List[Commit]] = None
+        self._unmerged_commits_cache: list[Commit] | None = None
         self.files_affected = files_affected
         self.total_additions = total_additions
         self.total_deletions = total_deletions
 
     @property
-    def unmerged_commit_shas(self) -> List[str]:
+    def unmerged_commit_shas(self) -> list[str]:
         """Get the list of unmerged commit SHAs (newest first).
 
         This is efficient as it doesn't require loading full Commit objects.
@@ -712,7 +714,7 @@ class ForkStatus:
         return self._unmerged_commit_shas
 
     @property
-    def unmerged_commits(self) -> List[Commit]:
+    def unmerged_commits(self) -> list[Commit]:
         """Get the list of unmerged commits (newest first).
 
         Note: This loads all Commit objects on first access. For better
@@ -754,7 +756,7 @@ class ForkStatus:
         return (now - last_merged_date).days
 
     @property
-    def unmerged_date_range(self) -> Optional[Tuple[datetime, datetime]]:
+    def unmerged_date_range(self) -> tuple[datetime, datetime] | None:
         """Get the date range of unmerged commits (first, last)."""
         if not self.first_unmerged_commit or not self.last_unmerged_commit:
             return None
@@ -793,12 +795,12 @@ class CommitStats:
     lines_added: int
     lines_deleted: int
     total_lines: int
-    files_modified: List[str]
+    files_modified: list[str]
     num_of_dirs: int
 
 
 def get_batch_commit_stats(
-    repo: Repo, commit_shas: List[str]
+    repo: Repo, commit_shas: list[str]
 ) -> dict[str, CommitStats]:
     """Batch calculate stats for multiple commits in a single git call.
 
@@ -950,7 +952,7 @@ def get_commit_stats(repo: Repo, commit: Commit) -> CommitStats:
     )
 
 
-def get_commit_modified_files(repo: Repo, commit: Commit) -> List[str]:
+def get_commit_modified_files(repo: Repo, commit: Commit) -> list[str]:
     """Get list of files modified by a commit.
 
     This is a lightweight version that only returns file paths without
@@ -981,7 +983,7 @@ def get_commit_modified_files(repo: Repo, commit: Commit) -> List[str]:
 
 def get_file_content_at_commit(
     repo: Repo, commit_sha: str, file_path: str
-) -> Optional[str]:
+) -> str | None:
     """Get file content at a specific commit.
 
     Args:
@@ -1056,7 +1058,7 @@ def get_merged_commits(
     repo: Repo,
     target_branch: str,
     merge_commit: str,
-) -> List[str]:
+) -> list[str]:
     """Get list of commit hashes being merged.
 
     Finds the merge base between target_branch and merge_commit,
@@ -1135,7 +1137,7 @@ def get_batch_branching_points(
 
 def is_branching_point(
     repo: Repo, commit: Commit, upstream_ref: str
-) -> Tuple[bool, int]:
+) -> tuple[bool, int]:
     """Check if a commit is a branching point.
 
     A commit is considered a branching point if it has multiple children
