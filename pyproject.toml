@@ -7,13 +7,10 @@ name = "mergai"
 dynamic = ["version"]
 dependencies = [
     "click==8.3.1",
-    "pyaml==25.7.0",
+    "PyYAML>=6.0.0",
     "jinja2==3.1.6",
     "GitPython==3.1.45",
-    "langchain==1.1.0",
-    "langchain_google_genai==3.2.0",
     "python-dotenv==1.2.1",
-    "tiktoken==0.7.0",
     "rich==14.2.0",
     "pygithub==2.8.1",
     "simpleeval==1.0.3",
@@ -45,6 +42,7 @@ dev = [
     "mypy>=1.10.0",
     "types-PyYAML>=6.0.0",
     "pip-audit>=2.7.0",
+    "deptry>=0.12.0",
 ]
 
 [tool.black]
@@ -92,3 +90,8 @@ exclude = [
     "venv",
     ".venv",
 ]
+
+[tool.deptry]
+# Ignore dev tools that are CLI-based and not imported in code
+[tool.deptry.per_rule_ignores]
+DEP002 = ["pre-commit", "ruff", "mypy", "types-PyYAML", "pip-audit", "deptry"]
