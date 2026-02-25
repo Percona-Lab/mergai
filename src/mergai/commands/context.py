@@ -13,31 +13,34 @@ from ..app import AppContext
 from ..utils import git_utils
 from ..utils.branch_name_builder import BranchNameBuilder, ParsedBranchName
 
+# CLI flags for conflict context creation.
+# Defaults are None to allow config values to be used when not specified.
+# These flags are used by 'mergai context create conflict' command.
 CREATE_CONFLICT_CONTEXT_FLAGS = [
     click.option(
         "--use-diffs/--no-diffs",
         "use_diffs",
-        default=True,
-        help="Include diffs in the conflict context.",
+        default=None,
+        help="Include diffs in the conflict context. [default: from config]",
     ),
     click.option(
         "--diff-lines-of-context",  # TODO: requires use_diffs=True
         "diff_lines_of_context",
-        default=0,
+        default=None,
         type=int,
-        help="Number of lines of context to include in diffs.",
+        help="Number of lines of context to include in diffs. [default: from config]",
     ),
     click.option(
         "--use-compressed-diffs/--no-compressed-diffs",
         "use_compressed_diffs",
-        default=True,
-        help="Use compressed diffs to limit size.",
+        default=None,
+        help="Use compressed diffs to limit size. [default: from config]",
     ),
     click.option(
         "--use-their-commits/--no-their-commits",
         "use_their_commits",
-        default=True,
-        help="Include their commits in the conflict context.",
+        default=None,
+        help="Include their commits in the conflict context. [default: from config]",
     ),
 ]
 
@@ -320,10 +323,10 @@ def create():
 )
 def create_conflict(
     app: AppContext,
-    use_diffs: bool,
-    diff_lines_of_context: int,
-    use_compressed_diffs: bool,
-    use_their_commits: bool,
+    use_diffs: bool | None,
+    diff_lines_of_context: int | None,
+    use_compressed_diffs: bool | None,
+    use_their_commits: bool | None,
     force: bool,
 ):
     """Create conflict context from current merge state.
@@ -333,6 +336,9 @@ def create_conflict(
 
     This command should be run when a merge has resulted in conflicts
     and you want to capture the context for AI-assisted resolution.
+
+    Default values for the conflict context options come from the
+    config file (context.conflict section). CLI flags override config values.
 
     \b
     Examples:
@@ -357,11 +363,19 @@ def create_conflict(
                 "Conflict context already exists in the note. Use -f/--force to overwrite."
             )
 
+        # Use config values as defaults, CLI flags override if explicitly set
+        ctx_config = app.config.context.conflict.with_overrides(
+            use_diffs=use_diffs,
+            diff_lines_of_context=diff_lines_of_context,
+            use_compressed_diffs=use_compressed_diffs,
+            use_their_commits=use_their_commits,
+        )
+
         context = app.context_builder.create_conflict_context(
-            use_diffs,
-            diff_lines_of_context,
-            use_compressed_diffs,
-            use_their_commits,
+            ctx_config.use_diffs,
+            ctx_config.diff_lines_of_context,
+            ctx_config.use_compressed_diffs,
+            ctx_config.use_their_commits,
         )
         app.note.set_conflict_context(context)
         app.save_note(app.note)

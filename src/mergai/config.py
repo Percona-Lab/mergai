@@ -360,6 +360,138 @@ class MergeConfig:
 
 
 @dataclass
+class ConflictContextConfig:
+    """Configuration for conflict context creation.
+
+    These settings control what information is captured in the conflict_context,
+    which is used by AI agents to understand and resolve merge conflicts.
+
+    These settings are used by:
+    - The 'mergai merge' command when automatically creating conflict_context
+      after merge conflicts are detected
+    - The 'mergai context create conflict' command as defaults (CLI flags can
+      override these values)
+
+    Attributes:
+        use_diffs: Include diffs in the conflict context.
+        diff_lines_of_context: Number of context lines around diff hunks.
+        use_compressed_diffs: Use compressed diffs to limit size.
+        use_their_commits: Include their commits in the conflict context.
+
+    Example YAML config:
+        context:
+          conflict:
+            use_diffs: true
+            diff_lines_of_context: 0
+            use_compressed_diffs: true
+            use_their_commits: true
+    """
+
+    use_diffs: bool = True
+    diff_lines_of_context: int = 0
+    use_compressed_diffs: bool = True
+    use_their_commits: bool = True
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ConflictContextConfig":
+        """Create a ConflictContextConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            ConflictContextConfig instance with values from data.
+        """
+        return cls(
+            use_diffs=data.get("use_diffs", cls.use_diffs),
+            diff_lines_of_context=data.get(
+                "diff_lines_of_context", cls.diff_lines_of_context
+            ),
+            use_compressed_diffs=data.get(
+                "use_compressed_diffs", cls.use_compressed_diffs
+            ),
+            use_their_commits=data.get("use_their_commits", cls.use_their_commits),
+        )
+
+    def with_overrides(
+        self,
+        use_diffs: bool | None = None,
+        diff_lines_of_context: int | None = None,
+        use_compressed_diffs: bool | None = None,
+        use_their_commits: bool | None = None,
+    ) -> "ConflictContextConfig":
+        """Create a new config with optional overrides.
+
+        Returns a new ConflictContextConfig where any non-None parameter
+        overrides the corresponding value from this config.
+
+        Args:
+            use_diffs: Override for use_diffs, or None to keep current value.
+            diff_lines_of_context: Override for diff_lines_of_context.
+            use_compressed_diffs: Override for use_compressed_diffs.
+            use_their_commits: Override for use_their_commits.
+
+        Returns:
+            New ConflictContextConfig with overrides applied.
+        """
+        return ConflictContextConfig(
+            use_diffs=use_diffs if use_diffs is not None else self.use_diffs,
+            diff_lines_of_context=(
+                diff_lines_of_context
+                if diff_lines_of_context is not None
+                else self.diff_lines_of_context
+            ),
+            use_compressed_diffs=(
+                use_compressed_diffs
+                if use_compressed_diffs is not None
+                else self.use_compressed_diffs
+            ),
+            use_their_commits=(
+                use_their_commits
+                if use_their_commits is not None
+                else self.use_their_commits
+            ),
+        )
+
+
+@dataclass
+class ContextConfig:
+    """Configuration for context creation.
+
+    Contains settings for creating various types of merge context.
+
+    Attributes:
+        conflict: Configuration for conflict context creation.
+
+    Example YAML config:
+        context:
+          conflict:
+            use_diffs: true
+            diff_lines_of_context: 0
+    """
+
+    conflict: ConflictContextConfig = field(default_factory=ConflictContextConfig)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ContextConfig":
+        """Create a ContextConfig from a dictionary.
+
+        Args:
+            data: Dictionary with configuration values.
+
+        Returns:
+            ContextConfig instance with values from data.
+        """
+        conflict_data = data.get("conflict", {})
+        conflict_config = (
+            ConflictContextConfig.from_dict(conflict_data)
+            if conflict_data
+            else ConflictContextConfig()
+        )
+        return cls(conflict=conflict_config)
+
+
+@dataclass
 class PromptConfig:
     """Configuration for prompt generation.
 
@@ -682,6 +814,7 @@ class MergaiConfig:
         pr: Configuration for pull request titles.
         finalize: Configuration for the finalize command.
         merge: Configuration for the merge command.
+        context: Configuration for context creation (conflict context, etc.).
         config: Configuration for the 'mergai config' command.
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
@@ -694,6 +827,7 @@ class MergaiConfig:
     pr: PRConfig = field(default_factory=PRConfig)
     finalize: FinalizeConfig = field(default_factory=FinalizeConfig)
     merge: MergeConfig = field(default_factory=MergeConfig)
+    context: ContextConfig = field(default_factory=ContextConfig)
     config: InitConfig = field(default_factory=InitConfig)
     _raw: dict[str, Any] = field(default_factory=dict)
 
@@ -780,6 +914,12 @@ class MergaiConfig:
             MergeConfig.from_dict(merge_data) if merge_data else MergeConfig()
         )
 
+        # Parse context section if present
+        context_data = data.get("context", {})
+        context_config = (
+            ContextConfig.from_dict(context_data) if context_data else ContextConfig()
+        )
+
         # Parse config section if present (for 'mergai config' command)
         config_section_data = data.get("config", {})
         config_config = (
@@ -797,6 +937,7 @@ class MergaiConfig:
             pr=pr_config,
             finalize=finalize_config,
             merge=merge_config,
+            context=context_config,
             config=config_config,
             _raw=data,
         )

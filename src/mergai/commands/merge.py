@@ -225,6 +225,7 @@ def merge(app: AppContext, no_context: bool, force: bool):
                     click.echo(f"Warning: Failed to create merge_context: {ctx_err}")
 
                 # Create conflict context
+                # Settings come from config.context.conflict section
                 try:
                     if not git_utils.is_merge_conflict_style_diff3(app.repo):
                         click.echo(
@@ -232,11 +233,12 @@ def merge(app: AppContext, no_context: bool, force: bool):
                             "Consider setting 'merge.conflictstyle' to 'diff3'."
                         )
                     if not app.note.has_conflict_context or force:
+                        ctx_config = app.config.context.conflict
                         conflict_context = app.context_builder.create_conflict_context(
-                            use_diffs=True,
-                            diff_lines_of_context=0,
-                            use_compressed_diffs=True,
-                            use_their_commits=True,
+                            use_diffs=ctx_config.use_diffs,
+                            diff_lines_of_context=ctx_config.diff_lines_of_context,
+                            use_compressed_diffs=ctx_config.use_compressed_diffs,
+                            use_their_commits=ctx_config.use_their_commits,
                         )
                         app.note.set_conflict_context(conflict_context)
                         app.save_note(app.note)
