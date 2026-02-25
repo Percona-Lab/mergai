@@ -65,14 +65,15 @@ class PRTitleBuilder:
             "merge_commit_short_sha": git_utils.short_sha(mi.merge_commit_sha),
         }
 
-        def replace_token(match: re.Match) -> str:
+        def replace_token(match: re.Match[str]) -> str:
             token = match.group(1)
             if token in values:
                 return values[token]
             # Keep unknown tokens as-is for future extensibility
             return match.group(0)
 
-        return self.TOKEN_PATTERN.sub(replace_token, format_str)
+        result: str = self.TOKEN_PATTERN.sub(replace_token, format_str)
+        return result
 
     @property
     def main_title(self) -> str:

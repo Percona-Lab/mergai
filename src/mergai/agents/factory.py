@@ -1,7 +1,7 @@
 from .base import Agent
 from .gemini_cli import GeminiCLIAgent
 
-REGISTRY: dict[str, type[Agent]] = {
+REGISTRY: dict[str, type[GeminiCLIAgent]] = {
     "gemini-cli": GeminiCLIAgent,
 }
 

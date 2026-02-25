@@ -28,7 +28,8 @@ def get_git_config_value(repo, key: str, global_scope: bool) -> str | None:
     """
     try:
         scope_flag = "--global" if global_scope else "--local"
-        return repo.git.config(scope_flag, "--get", key)
+        result: str = repo.git.config(scope_flag, "--get", key)
+        return result
     except Exception:
         return None
 

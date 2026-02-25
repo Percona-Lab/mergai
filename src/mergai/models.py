@@ -248,7 +248,7 @@ class MergeInfo:
     _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
 
     @classmethod
-    def from_dict(cls, data: dict, repo: "Repo" = None) -> "MergeInfo":
+    def from_dict(cls, data: dict, repo: "Repo | None" = None) -> "MergeInfo":
         """Create MergeInfo from note.json data.
 
         Args:
@@ -436,7 +436,7 @@ class ContextSerializationConfig:
 
     @classmethod
     def prompt(
-        cls, commit_config: CommitSerializationConfig = None
+        cls, commit_config: CommitSerializationConfig | None = None
     ) -> "ContextSerializationConfig":
         """Create config for prompt mode (AI prompts with configurable fields).
 
@@ -481,7 +481,7 @@ def _commit_to_dict(commit: "Commit", config: CommitSerializationConfig) -> dict
     ):
         return commit.hexsha
 
-    result = {}
+    result: dict[str, Any] = {}
     if config.include_hexsha:
         result["hexsha"] = commit.hexsha
     if config.include_short_sha:
@@ -528,7 +528,7 @@ class ConflictContext:
     _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
 
     @classmethod
-    def from_dict(cls, data: dict, repo: "Repo" = None) -> "ConflictContext":
+    def from_dict(cls, data: dict, repo: "Repo | None" = None) -> "ConflictContext":
         """Create ConflictContext from note.json data.
 
         Args:
@@ -601,7 +601,7 @@ class ConflictContext:
             return []
         return [self._repo.commit(sha) for sha in self.their_commits_shas[file_path]]
 
-    def to_dict(self, config: ContextSerializationConfig = None) -> dict:
+    def to_dict(self, config: ContextSerializationConfig | None = None) -> dict:
         """Serialize based on configuration.
 
         Args:
@@ -708,7 +708,7 @@ class MergeContext:
     _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
 
     @classmethod
-    def from_dict(cls, data: dict, repo: "Repo" = None) -> "MergeContext":
+    def from_dict(cls, data: dict, repo: "Repo | None" = None) -> "MergeContext":
         """Create MergeContext from note.json data.
 
         Args:
@@ -752,7 +752,7 @@ class MergeContext:
             raise RuntimeError("Repo not bound. Call bind_repo() first.")
         return [self._repo.commit(sha) for sha in self.merged_commits_shas]
 
-    def to_dict(self, config: ContextSerializationConfig = None) -> dict:
+    def to_dict(self, config: ContextSerializationConfig | None = None) -> dict:
         """Serialize based on configuration.
 
         Args:
@@ -775,7 +775,7 @@ class MergeContext:
 
     def _to_storage_dict(self) -> dict:
         """Minimal dict for note.json storage."""
-        result = {
+        result: dict[str, Any] = {
             "merge_commit": self.merge_commit_sha,
             "merged_commits": self.merged_commits_shas,
             "important_files_modified": self.important_files_modified,
@@ -850,7 +850,7 @@ class MergaiNote:
     # --- Factory Methods ---
 
     @classmethod
-    def from_dict(cls, data: dict, repo: "Repo" = None) -> "MergaiNote":
+    def from_dict(cls, data: dict, repo: "Repo | None" = None) -> "MergaiNote":
         """Create MergaiNote from a note.json dict.
 
         Args:
@@ -889,7 +889,7 @@ class MergaiNote:
         return note
 
     @classmethod
-    def create(cls, merge_info: MergeInfo, repo: "Repo" = None) -> "MergaiNote":
+    def create(cls, merge_info: MergeInfo, repo: "Repo | None" = None) -> "MergaiNote":
         """Create a new MergaiNote with the given merge_info.
 
         Sets mergai_version to the current version of mergai.
@@ -909,7 +909,7 @@ class MergaiNote:
     def combine_from_dicts(
         cls: type[T],
         commits_with_notes: list[tuple[Any, dict | None]],
-        repo: "Repo" = None,
+        repo: "Repo | None" = None,
     ) -> T:
         """Build a combined note from multiple commit notes.
 
@@ -974,7 +974,10 @@ class MergaiNote:
             if "user_comment" in git_note and "user_comment" not in combined:
                 combined["user_comment"] = git_note["user_comment"]
 
-        return cls.from_dict(combined, repo)
+        # Cast the result since from_dict returns MergaiNote, but cls is type[T]
+        # where T is bound to MergaiNote
+        note = cls.from_dict(combined, repo)
+        return note  # type: ignore[return-value]
 
     # --- has_* Properties ---
 
@@ -1186,7 +1189,7 @@ class MergaiNote:
         if self.has_merge_context:
             all_fields.append("merge_context")
 
-        if self.has_solutions:
+        if self.has_solutions and self.solutions is not None:
             for idx in range(len(self.solutions)):
                 all_fields.append(f"solutions[{idx}]")
 
@@ -1270,7 +1273,7 @@ class MergaiNote:
             # Drop all solutions
             self.clear_solutions()
             # Also remove solutions entries from note_index
-            if self.has_note_index:
+            if self.has_note_index and self.note_index is not None:
                 self.note_index = [
                     entry
                     for entry in self.note_index
@@ -1283,7 +1286,7 @@ class MergaiNote:
         else:
             # Only drop uncommitted solutions
             committed_indices = self._get_committed_solution_indices()
-            if committed_indices:
+            if committed_indices and self.solutions is not None:
                 # Keep only committed solutions
                 self.solutions = [
                     self.solutions[i]
@@ -1296,7 +1299,7 @@ class MergaiNote:
 
         return self
 
-    def _get_committed_solution_indices(self) -> set:
+    def _get_committed_solution_indices(self) -> set[int]:
         """Get indices of solutions that have been committed.
 
         Returns:
@@ -1304,8 +1307,8 @@ class MergaiNote:
         """
         import re
 
-        committed = set()
-        if not self.has_note_index:
+        committed: set[int] = set()
+        if not self.has_note_index or self.note_index is None:
             return committed
 
         for entry in self.note_index:
@@ -1323,7 +1326,7 @@ class MergaiNote:
         Returns:
             Tuple of (index, solution_dict) or None if no uncommitted solution exists.
         """
-        if not self.has_solutions:
+        if not self.has_solutions or self.solutions is None:
             return None
 
         committed = self._get_committed_solution_indices()
@@ -1343,7 +1346,7 @@ class MergaiNote:
 
         # Get all committed fields from note_index
         committed_fields = set()
-        if self.has_note_index:
+        if self.has_note_index and self.note_index is not None:
             for entry in self.note_index:
                 committed_fields.update(entry.get("fields", []))
 
@@ -1354,7 +1357,7 @@ class MergaiNote:
         if self.has_merge_context and "merge_context" not in committed_fields:
             uncommitted.append("merge_context")
 
-        if self.has_solutions:
+        if self.has_solutions and self.solutions is not None:
             committed_solution_indices = self._get_committed_solution_indices()
             for idx in range(len(self.solutions)):
                 if idx not in committed_solution_indices:

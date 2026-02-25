@@ -3,17 +3,18 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from enum import StrEnum
+from enum import Enum
+from os import PathLike
 from pathlib import Path
 
 from git import Blob, Commit, Repo
 
 log = logging.getLogger(__name__)
 
-BlobsMapType = dict[str, list[tuple[int, Blob]]]
+BlobsMapType = dict[str | PathLike[str], list[tuple[int, Blob]]]
 
 
-class ConflictType(StrEnum):
+class ConflictType(str, Enum):
     BOTH_MODIFIED = "both modified"
     BOTH_ADDED = "both added"
     DELETED_BY_THEM = "deleted by them"
@@ -360,7 +361,7 @@ def get_conflict_context(
         - their_commits: dict[str, list[str]] (file -> list of hexsha)
     """
     if not is_merge_in_progress(repo):
-        return None
+        return {}
 
     blobs_map = repo.index.unmerged_blobs()
 
@@ -399,6 +400,7 @@ def merge_has_conflicts(repo: Repo, parent1: Commit, parent2: Commit) -> bool:
     try:
         # Try to perform a dry-run merge to see if there are conflicts
         repo.git.merge_tree(parent1, parent2)
+        return False
     except Exception:
         return True
 
@@ -498,7 +500,7 @@ def commit_would_conflict(
 
 def get_note_from_commit(repo: Repo, ref: str, commit: str) -> str | None:
     try:
-        note = repo.git.notes("--ref", ref, "show", repo.commit(commit).hexsha)
+        note: str = repo.git.notes("--ref", ref, "show", repo.commit(commit).hexsha)
         return note
     except Exception:
         return None
@@ -509,7 +511,8 @@ def get_note_from_commit_as_dict(repo: Repo, ref: str, commit: str) -> dict | No
     if not note_str:
         return None
 
-    return json.loads(note_str)
+    result: dict = json.loads(note_str)
+    return result
 
 
 def find_remote_by_url(repo: Repo, url: str) -> str | None:
@@ -535,7 +538,7 @@ def find_remote_by_url(repo: Repo, url: str) -> str | None:
 
 def is_merge_conflict_style_diff3(repo: Repo) -> bool:
     try:
-        merge_conflict_style = repo.git.config("merge.conflictstyle")
+        merge_conflict_style: str = repo.git.config("merge.conflictstyle")
         return merge_conflict_style.lower() == "diff3"
     except Exception:
         return False
@@ -555,7 +558,7 @@ def get_merge_strategy(repo: Repo) -> str:
         The merge strategy name (e.g., 'ort', 'recursive').
     """
     try:
-        strategy = repo.git.config("pull.twohead")
+        strategy: str = repo.git.config("pull.twohead")
         return strategy
     except Exception:
         # Default strategy in modern git is 'ort'
@@ -827,11 +830,11 @@ def get_batch_commit_stats(
             "--numstat", "--format=COMMIT_START %H", "--no-walk", *commit_shas
         )
 
-        current_sha = None
-        current_files = []
+        current_sha: str | None = None
+        current_files: list[str] = []
         current_additions = 0
         current_deletions = 0
-        current_dirs = set()
+        current_dirs: set[str] = set()
 
         for line in output.split("\n"):
             line = line.strip()
@@ -935,12 +938,12 @@ def get_commit_stats(repo: Repo, commit: Commit) -> CommitStats:
         log.warning(f"Failed to get numstat for commit {commit.hexsha}: {e}")
 
     # Calculate unique directories from file paths
-    unique_dirs = set()
+    unique_dirs: set[str] = set()
     for file_path in files_modified:
         # Get parent directory (or '.' for root-level files)
-        parent = str(Path(file_path).parent)
-        if parent != ".":
-            unique_dirs.add(parent)
+        parent_dir = str(Path(file_path).parent)
+        if parent_dir != ".":
+            unique_dirs.add(parent_dir)
 
     return CommitStats(
         files_changed=len(files_modified),
@@ -997,7 +1000,8 @@ def get_file_content_at_commit(
     try:
         commit = repo.commit(commit_sha)
         blob = commit.tree / file_path
-        return blob.data_stream.read().decode("utf-8", errors="replace")
+        content: str = blob.data_stream.read().decode("utf-8", errors="replace")
+        return content
     except (KeyError, Exception):
         return None
 
@@ -1107,7 +1111,7 @@ def get_batch_branching_points(
         Dictionary mapping commit SHA to child count for commits with >1 child.
         Only commits with multiple children are included in the result.
     """
-    result = {}
+    result: dict[str, int] = {}
 
     try:
         # git rev-list --children base..upstream gives:

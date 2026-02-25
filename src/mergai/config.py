@@ -718,7 +718,8 @@ class MergaiConfig:
         Returns:
             Dictionary with the section's configuration, or empty dict if not found.
         """
-        return self._raw.get(name, {})
+        result: dict[str, Any] = self._raw.get(name, {})
+        return result
 
     @classmethod
     def from_dict(cls, data: dict) -> "MergaiConfig":

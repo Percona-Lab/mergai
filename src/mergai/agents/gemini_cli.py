@@ -24,7 +24,7 @@ def extract_json_block(text: str) -> str | None:
     return match.group(1).strip()
 
 
-def fix_response_json(result_json: dict) -> str:
+def fix_response_json(result_json: dict) -> dict:
     if "response" not in result_json:
         raise AgentError(
             AgentErrorType.PARSING_RESULT, "invalid response: 'response' field missing"
@@ -71,7 +71,7 @@ class GeminiCLIAgent(CliAgent):
 
         return result.stdout.strip()
 
-    def read_session(self, session_id: str) -> dict:
+    def read_session(self, session_id: str) -> dict | None:
         gemini_tmp_dir = Path.home() / ".gemini" / "tmp"
 
         for file in gemini_tmp_dir.iterdir():
@@ -80,7 +80,7 @@ class GeminiCLIAgent(CliAgent):
                 for chat_file in chats_dir.iterdir():
                     try:
                         with open(chat_file) as f:
-                            chat_data = json.load(f)
+                            chat_data: dict = json.load(f)
                             if chat_data.get("sessionId") == session_id:
                                 return chat_data
                     except Exception:
@@ -88,7 +88,7 @@ class GeminiCLIAgent(CliAgent):
         return None
 
     def parse_stats(self, session_data: dict) -> dict:
-        models = {}
+        models: dict[str, dict] = {}
         for msg in session_data.get("messages", []):
             if "tokens" not in msg:
                 continue
@@ -139,8 +139,10 @@ class GeminiCLIAgent(CliAgent):
             env=os.environ.copy(),
         )
 
-        result = {}
+        result: dict = {}
         response = ""
+        if proc.stdout is None:
+            raise AgentError(AgentErrorType.AGENT_EXECUTION, "stdout is None")
         for line in proc.stdout:
             click.echo(f"gemini-cli: {line}", nl=False)
             event = json.loads(line)
@@ -161,8 +163,10 @@ class GeminiCLIAgent(CliAgent):
         result["response"] = response
 
         if self.session_id is not None:
-            result["session"] = self.read_session(self.session_id)
-            result["stats"] = self.parse_stats(result["session"])
+            session = self.read_session(self.session_id)
+            result["session"] = session
+            if session is not None:
+                result["stats"] = self.parse_stats(session)
 
         rc = proc.wait()
         if rc != 0:

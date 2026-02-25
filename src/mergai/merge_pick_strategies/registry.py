@@ -5,6 +5,7 @@ a factory function to create strategy instances from configuration data.
 """
 
 import logging
+from typing import Any
 
 from .base import MergePickStrategy
 from .branching_point import BranchingPointStrategy, BranchingPointStrategyConfig
@@ -20,7 +21,7 @@ log = logging.getLogger(__name__)
 # 1. Create the strategy module with Config, Result, and Strategy classes
 # 2. Import them here
 # 3. Add an entry to STRATEGY_REGISTRY
-STRATEGY_REGISTRY: dict[str, tuple[type, type[MergePickStrategy]]] = {
+STRATEGY_REGISTRY: dict[str, tuple[Any, type[MergePickStrategy]]] = {
     "huge_commit": (HugeCommitStrategyConfig, HugeCommitStrategy),
     "important_files": (ImportantFilesStrategyConfig, ImportantFilesStrategy),
     "branching_point": (BranchingPointStrategyConfig, BranchingPointStrategy),
@@ -29,7 +30,7 @@ STRATEGY_REGISTRY: dict[str, tuple[type, type[MergePickStrategy]]] = {
 }
 
 
-def create_strategy(strategy_type: str, data) -> MergePickStrategy | None:
+def create_strategy(strategy_type: str, data: Any) -> MergePickStrategy | None:
     """Create a strategy instance from config data.
 
     Args:
@@ -44,4 +45,4 @@ def create_strategy(strategy_type: str, data) -> MergePickStrategy | None:
         return None
     config_cls, strategy_cls = STRATEGY_REGISTRY[strategy_type]
     config = config_cls.from_dict(data)
-    return strategy_cls(config)
+    return strategy_cls(config)  # type: ignore[call-arg]

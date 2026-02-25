@@ -123,7 +123,7 @@ class ContextBuilder:
                 set(self.important_files) & all_modified_files
             )
 
-        context_dict = {
+        context_dict: dict = {
             "merge_commit": merge_commit_hexsha,
             "merged_commits": merged_commits,
             "important_files_modified": important_files_modified,

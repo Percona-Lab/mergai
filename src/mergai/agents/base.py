@@ -1,9 +1,26 @@
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .error import AgentResult
+
+
 class Agent:
     def __init__(self, model: str):
         self._model = model
 
     def get_model(self) -> str:
         return self._model
+
+    def run(self, prompt: str) -> "AgentResult":
+        """Run the agent with the given prompt.
+
+        Args:
+            prompt: The prompt to send to the agent.
+
+        Returns:
+            AgentResult with the result or error.
+        """
+        raise NotImplementedError("Subclasses must implement run()")
 
     def is_cli(self) -> bool:
         return isinstance(self, CliAgent)

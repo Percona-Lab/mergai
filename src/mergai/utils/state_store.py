@@ -27,4 +27,5 @@ class StateStore:
 
     def load_note(self) -> dict:
         with open(self.note_path()) as f:
-            return json.load(f)
+            result: dict = json.load(f)
+            return result

@@ -27,10 +27,11 @@ log = logging.getLogger(__name__)
 
 
 class AppContext:
-    def __init__(self, config: MergaiConfig = None):
+    def __init__(self, config: MergaiConfig | None = None):
         self.config: MergaiConfig = config if config is not None else MergaiConfig()
         self.repo: git.Repo = git.Repo(".")
-        self.state: StateStore = StateStore(self.repo.working_tree_dir)
+        working_dir = self.repo.working_tree_dir
+        self.state: StateStore = StateStore(str(working_dir) if working_dir else ".")
         self.gh_repo_str: str | None = None
         gh_token = util.gh_auth_token()
         self.gh = github.Github(gh_token) if gh_token else None
@@ -197,7 +198,7 @@ class AppContext:
         self.state.remove_note()
         self._note = None
 
-    def get_agent(self, agent_desc: str = None, yolo: bool = False) -> "Agent":
+    def get_agent(self, agent_desc: str | None = None, yolo: bool = False) -> "Agent":
         """Get an agent instance for conflict resolution.
 
         Args:
@@ -213,7 +214,7 @@ class AppContext:
             agent_desc = self.config.resolve.agent
 
         agent_type = agent_desc.split(":")[0]
-        model = agent_desc.split(":")[1] if ":" in agent_desc else None
+        model = agent_desc.split(":")[1] if ":" in agent_desc else ""
 
         return create_agent(agent_type, model, yolo=yolo)
 
@@ -266,7 +267,7 @@ class AppContext:
 
         self.save_note(self.note)
 
-    def describe(self, force: bool, max_attempts: int = None):
+    def describe(self, force: bool, max_attempts: int | None = None):
         """Generate a description of the merge using an AI agent.
 
         This method runs an agent to analyze the merge context and generate
@@ -363,7 +364,11 @@ class AppContext:
             match = re.match(r"solutions\[(\d+)\]", field)
             if match:
                 idx = int(match.group(1))
-                if self.note.has_solutions and idx < len(self.note.solutions):
+                if (
+                    self.note.has_solutions
+                    and self.note.solutions is not None
+                    and idx < len(self.note.solutions)
+                ):
                     # Store as "solutions" array with single element
                     selective_note["solutions"] = [self.note.solutions[idx]]
             elif field == "conflict_context" and self.note.has_conflict_context:
@@ -664,7 +669,12 @@ class AppContext:
         for commit, _ in commits_with_notes:
             short_sha = git_utils.short_sha(commit.hexsha)
             # Get first line of commit message
-            first_line = commit.message.split("\n")[0].strip()
+            commit_message = (
+                commit.message
+                if isinstance(commit.message, str)
+                else commit.message.decode("utf-8", errors="replace")
+            )
+            first_line = commit_message.split("\n")[0].strip()
             message += f"\t{short_sha} {first_line}\n"
         message += "\n"
 
@@ -767,7 +777,7 @@ class AppContext:
             f"Successfully squashed {len(commits_with_notes)} commit(s) into {git_utils.short_sha(new_commit_sha)}"
         )
 
-    def finalize(self, mode: str = None):
+    def finalize(self, mode: str | None = None):
         """Finalize the solution PR based on configured mode.
 
         This method is typically called after a solution PR is merged into the
@@ -1017,7 +1027,7 @@ class AppContext:
         commits_with_notes.reverse()
 
         # Build the new note as a dict first
-        note_dict = {
+        note_dict: dict = {
             "solutions": [],
             "note_index": [],
         }
@@ -1226,15 +1236,15 @@ class AppContext:
         modified_files = git_utils.get_commit_modified_files(self.repo, commit)
 
         # Determine which files were previously unresolved
-        previously_unresolved = set()
-        if self.note.has_solutions:
+        previously_unresolved: set[str] = set()
+        if self.note.has_solutions and self.note.solutions is not None:
             for solution in self.note.solutions:
                 unresolved = solution.get("response", {}).get("unresolved", {})
                 previously_unresolved.update(unresolved.keys())
 
         # Also check conflict_context for original conflicting files
-        conflict_files = set()
-        if self.note.has_conflict_context:
+        conflict_files: set[str] = set()
+        if self.note.has_conflict_context and self.note.conflict_context is not None:
             conflict_files = set(self.note.conflict_context.files)
 
         # Categorize files as resolved, unresolved, or modified
@@ -1263,7 +1273,12 @@ class AppContext:
                     modified[file_path] = "Modified by human"
 
         # Parse commit message
-        message_lines = commit.message.strip().split("\n")
+        commit_message = (
+            commit.message
+            if isinstance(commit.message, str)
+            else commit.message.decode("utf-8", errors="replace")
+        )
+        message_lines = commit_message.strip().split("\n")
         summary = message_lines[0] if message_lines else "Human changes"
         review_notes = (
             "\n".join(message_lines[1:]).strip() if len(message_lines) > 1 else ""
@@ -1313,7 +1328,12 @@ class AppContext:
             click.echo("\nDry run - showing what would be synced:\n")
             for commit, has_existing_note in commits_to_sync:
                 short_sha = git_utils.short_sha(commit.hexsha)
-                first_line = commit.message.split("\n")[0].strip()
+                commit_message = (
+                    commit.message
+                    if isinstance(commit.message, str)
+                    else commit.message.decode("utf-8", errors="replace")
+                )
+                first_line = commit_message.split("\n")[0].strip()
                 status = " (has note, will overwrite)" if has_existing_note else ""
                 click.echo(f"  {short_sha} {first_line}{status}")
 
@@ -1333,7 +1353,12 @@ class AppContext:
         synced_count = 0
         for commit, _has_existing_note in commits_to_sync:
             short_sha = git_utils.short_sha(commit.hexsha)
-            first_line = commit.message.split("\n")[0].strip()
+            commit_message = (
+                commit.message
+                if isinstance(commit.message, str)
+                else commit.message.decode("utf-8", errors="replace")
+            )
+            first_line = commit_message.split("\n")[0].strip()
 
             click.echo(f"Syncing {short_sha} {first_line}...")
 

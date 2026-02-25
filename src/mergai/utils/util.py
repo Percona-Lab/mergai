@@ -19,7 +19,7 @@ from rich.theme import Theme
 from . import git_utils
 
 
-def gh_auth_token() -> str:
+def gh_auth_token() -> str | None:
     import os
 
     token = os.getenv("GITHUB_TOKEN")
@@ -103,8 +103,9 @@ def print_or_page(text: str, format: str = "text"):
     proc = subprocess.Popen(pager, shell=True, stdin=subprocess.PIPE)
 
     try:
-        proc.stdin.write(text.encode("utf-8"))
-        proc.stdin.close()
+        if proc.stdin is not None:
+            proc.stdin.write(text.encode("utf-8"))
+            proc.stdin.close()
     except BrokenPipeError:
         pass
     proc.wait()

@@ -375,9 +375,10 @@ def init(app: AppContext, upstream_url: str | None):
             raise SystemExit(1)
     else:
         # Check if any other remote has this URL
-        remote_name = git_utils.find_remote_by_url(app.repo, url)
+        found_remote = git_utils.find_remote_by_url(app.repo, url)
 
-        if remote_name is not None:
+        if found_remote is not None:
+            remote_name = found_remote
             click.echo(f"Remote '{remote_name}' already configured with URL: {url}")
             if remote_name != desired_remote_name:
                 click.echo(

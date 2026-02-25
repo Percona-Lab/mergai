@@ -21,7 +21,7 @@ class AgentResult:
     def success(self) -> bool:
         return self._error is None
 
-    def error(self) -> AgentError:
+    def error(self) -> AgentError | None:
         return self._error
 
     def result(self) -> dict | None:

@@ -418,7 +418,7 @@ def convert_note_to_text_summary(note: dict) -> str:
 def convert_note(
     note: dict,
     format: str,
-    repo: git.Repo = None,
+    repo: git.Repo | None = None,
     pretty: bool = False,
     show_context: bool = True,
     show_solution: bool = True,
@@ -528,7 +528,9 @@ def log(app: AppContext, ref: str):
             output_str += formatters.commit_to_summary_str(commit)
 
         # Show log until the merge commit is reached
-        if git_utils.is_merge_commit_parent(commit, merge_commit):
+        if merge_commit is not None and git_utils.is_merge_commit_parent(
+            commit, merge_commit
+        ):
             break
 
     util.print_or_page(output_str, format="text")
@@ -627,7 +629,7 @@ def get_comment_from_cli(body: str, file: str) -> str:
 def comment(app: AppContext, file: str, force: bool, body: str):
     # TODO: support multiple comments
     cur_comment = ""
-    if app.note.has_user_comment:
+    if app.note.has_user_comment and app.note.user_comment is not None:
         cur_comment = get_cur_comment(app.note.user_comment)
 
     if (body or file) and app.note.has_user_comment and not force:

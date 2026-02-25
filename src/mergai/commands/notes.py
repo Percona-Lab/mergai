@@ -2,6 +2,7 @@ import contextlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import click
 from git import Repo
@@ -83,7 +84,8 @@ def get_note_content(repo: Repo, ref: str, commit_sha: str) -> dict | None:
     """
     try:
         content = repo.git.notes("--ref", ref, "show", commit_sha)
-        return json.loads(content)
+        result: dict[str, Any] | None = json.loads(content)
+        return result
     except Exception:
         return None
 
@@ -754,8 +756,13 @@ def status(app: AppContext, verbose: bool):
             # Try to get commit info
             try:
                 commit = app.repo.commit(commit_sha)
-                commit_msg = commit.summary[:50]
-                if len(commit.summary) > 50:
+                summary = (
+                    commit.summary
+                    if isinstance(commit.summary, str)
+                    else commit.summary.decode("utf-8", errors="replace")
+                )
+                commit_msg = summary[:50]
+                if len(summary) > 50:
                     commit_msg += "..."
                 click.echo(f"  {short_sha(commit_sha)} - {commit_msg}")
             except Exception:
@@ -818,7 +825,12 @@ def remove(app: AppContext, commit: str, remove_marker: bool):
 
     # Show what will be removed
     click.echo(f"Commit: {short_sha(commit_sha)}")
-    click.echo(f"  Message: {resolved_commit.summary}")
+    commit_summary = (
+        resolved_commit.summary
+        if isinstance(resolved_commit.summary, str)
+        else resolved_commit.summary.decode("utf-8", errors="replace")
+    )
+    click.echo(f"  Message: {commit_summary}")
 
     if has_main_note:
         click.echo(f"  Note fields: {format_note_summary(note_content)}")

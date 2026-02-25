@@ -123,22 +123,22 @@ class PromptBuilder:
             self.prompt_config.to_prompt_serialization_config()
         )
 
-        result = {"merge_info": self.note.merge_info.to_dict()}
+        result: dict = {"merge_info": self.note.merge_info.to_dict()}
 
-        if self.note.has_conflict_context:
+        if self.note.has_conflict_context and self.note.conflict_context is not None:
             result["conflict_context"] = self.note.conflict_context.to_dict(
                 prompt_serialization_config
             )
 
-        if self.note.has_merge_context:
+        if self.note.has_merge_context and self.note.merge_context is not None:
             result["merge_context"] = self.note.merge_context.to_dict(
                 prompt_serialization_config
             )
 
-        if self.note.has_pr_comments:
+        if self.note.has_pr_comments and self.note.pr_comments is not None:
             result["pr_comments"] = self.note.pr_comments
 
-        if self.note.has_user_comment:
+        if self.note.has_user_comment and self.note.user_comment is not None:
             result["user_comment"] = self.note.user_comment
 
         return result

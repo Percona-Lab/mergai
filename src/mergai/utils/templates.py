@@ -74,7 +74,7 @@ def load_template(format: str, name: str):
 def render_template(
     format: str,
     name: str,
-    format_sha: Callable[[str], str] | None = None,
+    format_sha: Callable[..., str] | None = None,
     **context: Any,
 ) -> str:
     """Render a template with the given context.
@@ -94,12 +94,14 @@ def render_template(
     template = load_template(format, name)
 
     # Add default format_sha if not provided
-    if format_sha is None:
+    actual_format_sha = format_sha
+    if actual_format_sha is None:
 
-        def format_sha(sha, use_short=False):
+        def actual_format_sha(sha: str, use_short: bool = False) -> str:
             return sha[:11] if use_short else sha
 
-    return template.render(format_sha=format_sha, **context)
+    result: str = template.render(format_sha=actual_format_sha, **context)
+    return result
 
 
 def render_to_format(

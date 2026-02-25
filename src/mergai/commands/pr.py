@@ -146,19 +146,21 @@ def _build_solutions_pr_body(app: AppContext) -> str:
 
     body = formatters.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
-    body += formatters.merge_context_to_markdown(
-        app.note.merge_context, markdown_config
-    )
-    body += "\n\n"
-    if app.note.has_merge_description:
+    if app.note.has_merge_context and app.note.merge_context is not None:
+        body += formatters.merge_context_to_markdown(
+            app.note.merge_context, markdown_config
+        )
+        body += "\n\n"
+    if app.note.has_merge_description and app.note.merge_description is not None:
         body += formatters.merge_description_to_markdown(app.note.merge_description)
         body += "\n\n"
-    if app.note.has_conflict_context:
+    if app.note.has_conflict_context and app.note.conflict_context is not None:
         body += formatters.conflict_context_to_markdown(
             app.note.conflict_context, markdown_config
         )
         body += "\n\n"
-    body += formatters.solutions_to_markdown(app.note.solutions)
+    if app.note.has_solutions and app.note.solutions is not None:
+        body += formatters.solutions_to_markdown(app.note.solutions)
     body += "\n\n"
     body += f"---\n\n*note created with mergai {app.note.mergai_version}*\n"
 
@@ -170,11 +172,12 @@ def _build_merge_pr_body(app: AppContext) -> str:
 
     body = formatters.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
-    body += formatters.merge_context_to_markdown(
-        app.note.merge_context, markdown_config
-    )
-    body += "\n\n"
-    if app.note.has_merge_description:
+    if app.note.has_merge_context and app.note.merge_context is not None:
+        body += formatters.merge_context_to_markdown(
+            app.note.merge_context, markdown_config
+        )
+        body += "\n\n"
+    if app.note.has_merge_description and app.note.merge_description is not None:
         body += formatters.merge_description_to_markdown(app.note.merge_description)
         body += "\n\n"
     body += f"---\n\n*note created with mergai {app.note.mergai_version}*\n"
@@ -191,7 +194,11 @@ def _create_solution_pr(
 ) -> None:
     """Create a PR from the current branch (with existing solution commits) to the conflict branch."""
 
-    if not app.note.has_solutions or len(app.note.solutions) == 0:
+    if (
+        not app.note.has_solutions
+        or app.note.solutions is None
+        or len(app.note.solutions) == 0
+    ):
         raise click.ClickException("No solutions found. Run 'mergai resolve' first.")
 
     if app.note.get_uncommitted_solution() is not None:

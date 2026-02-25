@@ -53,7 +53,7 @@ class AgentExecutor:
         agent: Agent,
         state_dir: Path,
         max_attempts: int = 3,
-        repo: git.Repo = None,
+        repo: git.Repo | None = None,
     ):
         """Initialize AgentExecutor.
 
@@ -114,7 +114,7 @@ class AgentExecutor:
     def run_with_retry(
         self,
         prompt: str,
-        validator: Callable[[dict], str | None] = None,
+        validator: Callable[[dict], str | None] | None = None,
     ) -> dict:
         """Run agent with retry logic and optional result validation.
 
@@ -170,7 +170,7 @@ class AgentExecutor:
     def _execute_with_retry(
         self,
         prompt_path: Path,
-        validator: Callable[[dict], str | None] = None,
+        validator: Callable[[dict], str | None] | None = None,
     ) -> dict:
         """Execute the agent with retry logic.
 
@@ -214,7 +214,7 @@ class AgentExecutor:
             result = agent_result.result()
 
             # Run validator if provided
-            if validator is not None:
+            if validator is not None and result is not None:
                 validation_error = validator(result)
                 if validation_error is not None:
                     click.echo(f"Validation failed: {validation_error}")
@@ -228,7 +228,7 @@ class AgentExecutor:
         if result is None:
             raise AgentExecutionError("Failed to obtain a valid result from the agent.")
 
-        return result
+        return result  # type: ignore[return-value]
 
     def validate_solution_files(self, solution: dict) -> str | None:
         """Validate that solution files have been modified in the repo.

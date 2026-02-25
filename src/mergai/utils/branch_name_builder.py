@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import Enum
 
 from ..config import BranchConfig
 from ..models import MergeInfo
@@ -31,10 +31,10 @@ class ParsedBranchName:
 
     def is_standard_type(self) -> bool:
         """Check if the branch type is one of the standard BranchType values."""
-        return self.branch_type in [t.value for t in BranchType]
+        return self.branch_type in [t.value for t in list(BranchType)]
 
 
-class BranchType(StrEnum):
+class BranchType(str, Enum):
     """Standard branch types for merge conflict resolution workflow.
 
     Attributes:
@@ -305,14 +305,15 @@ class BranchNameBuilder:
             "type": branch_type,
         }
 
-        def replace_token(match: re.Match) -> str:
+        def replace_token(match: re.Match[str]) -> str:
             token = match.group(1)
             if token in values:
                 return values[token]
             # Keep unknown tokens as-is for future extensibility
             return match.group(0)
 
-        return self.TOKEN_PATTERN.sub(replace_token, self._name_format)
+        result: str = self.TOKEN_PATTERN.sub(replace_token, self._name_format)
+        return result
 
     def get_branch_name(self, branch_type: str) -> str:
         """Get branch name for a custom type string.

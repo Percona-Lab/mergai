@@ -78,8 +78,8 @@ def format_solution_author(solution: dict) -> str:
         return f"Agent ({agent_type} v{version})"
     elif "author" in solution:
         author = solution["author"]
-        name = author.get("name", "Unknown")
-        email = author.get("email", "")
+        name: str = author.get("name", "Unknown")
+        email: str = author.get("email", "")
         if email:
             return f"{name} <{email}>"
         return name
@@ -107,7 +107,7 @@ def get_comments_stats(comments: dict) -> dict:
     Returns:
         Dict mapping user names to comment counts.
     """
-    stats = {}
+    stats: dict[str, int] = {}
     for comment in comments.values():
         stats.setdefault(comment["user"], 0)
         stats[comment["user"]] += 1
@@ -648,8 +648,13 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
         output_str += f"{note['user_comment'].get('body', '')}\n"
         output_str += "\n"
 
+    message = (
+        commit.message
+        if isinstance(commit.message, str)
+        else commit.message.decode("utf-8", errors="replace")
+    )
     output_str += (
-        f"Message:\n    {commit.message.strip().replace(chr(10), chr(10) + '    ')}\n"
+        f"Message:\n    {message.strip().replace(chr(10), chr(10) + '    ')}\n"
     )
 
     # mergai version at the end
@@ -671,10 +676,17 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
     Returns:
         Formatted markdown string.
     """
+    message = (
+        commit.message
+        if isinstance(commit.message, str)
+        else commit.message.decode("utf-8", errors="replace")
+    )
     output_str = f"- Commit: `{commit.hexsha}`\n"
     output_str += f"- Author: {commit.author.name} <{commit.author.email}>\n"
     output_str += f"- Date:   {commit.authored_datetime}\n"
-    output_str += f"- Message:\n\n    {commit.message.strip().replace(chr(10), chr(10) + '    ')}\n"
+    output_str += (
+        f"- Message:\n\n    {message.strip().replace(chr(10), chr(10) + '    ')}\n"
+    )
     output_str += "- Content:\n"
     if "merge_info" in note:
         output_str += (
@@ -722,14 +734,19 @@ def commit_note_to_summary_json(
     Returns:
         JSON formatted string.
     """
-    summary = {
+    message = (
+        commit.message
+        if isinstance(commit.message, str)
+        else commit.message.decode("utf-8", errors="replace")
+    )
+    summary: dict = {
         "commit": commit.hexsha,
         "author": {
             "name": commit.author.name,
             "email": commit.author.email,
         },
         "date": str(commit.authored_datetime),
-        "message": commit.message.strip(),
+        "message": message.strip(),
         "content": {},
     }
 
@@ -787,13 +804,18 @@ def commit_to_summary_str(commit: git.Commit) -> str:
     Returns:
         Formatted text string.
     """
+    message = (
+        commit.message
+        if isinstance(commit.message, str)
+        else commit.message.decode("utf-8", errors="replace")
+    )
     output_str = f"commit: {commit.hexsha}\n"
     output_str += f"Author: {commit.author.name} <{commit.author.email}>\n"
     output_str += f"Date:   {commit.authored_datetime}\n"
     output_str += "Content:\n"
     output_str += "  (no note)\n"
     output_str += (
-        f"Message:\n    {commit.message.strip().replace(chr(10), chr(10) + '    ')}\n"
+        f"Message:\n    {message.strip().replace(chr(10), chr(10) + '    ')}\n"
     )
     output_str += "\n"
     return output_str

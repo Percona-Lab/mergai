@@ -199,8 +199,8 @@ def merge(app: AppContext, no_context: bool, force: bool):
                     blobs_map = app.repo.index.unmerged_blobs()
                     if blobs_map:
                         click.echo("Conflicting files:")
-                        for file_path in blobs_map:
-                            click.echo(f"  {file_path}")
+                        for blob_path in blobs_map:
+                            click.echo(f"  {str(blob_path)}")
                 except Exception:
                     pass
 
@@ -232,13 +232,13 @@ def merge(app: AppContext, no_context: bool, force: bool):
                             "Consider setting 'merge.conflictstyle' to 'diff3'."
                         )
                     if not app.note.has_conflict_context or force:
-                        context = app.context_builder.create_conflict_context(
+                        conflict_context = app.context_builder.create_conflict_context(
                             use_diffs=True,
                             diff_lines_of_context=0,
                             use_compressed_diffs=True,
                             use_their_commits=True,
                         )
-                        app.note.set_conflict_context(context)
+                        app.note.set_conflict_context(conflict_context)
                         app.save_note(app.note)
                         click.echo("Created conflict_context.")
                 except Exception as ctx_err:
