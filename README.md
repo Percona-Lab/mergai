@@ -48,6 +48,7 @@ Additionally, `.mergai/invariants.md` is appended to AI prompts when present. Us
 | `pr` | PR title formats and labels for main/solution PRs |
 | `prompt` | Commit fields included in AI prompts |
 | `finalize` | Post-merge finalization mode (squash/keep/fast-forward) |
+| `merge` | Merge command behavior (auto-describe after merge) |
 | `config` | Git settings (conflictstyle, notes display) |
 
 ### Example Configuration
@@ -97,6 +98,10 @@ finalize:
   # Available modes: squash, keep, fast-forward
   mode: fast-forward
 
+merge:
+  # When to auto-run 'describe' after merge: never, always, success, conflict
+  describe: never
+
 config:
   git:
     conflictstyle: diff3
@@ -135,6 +140,25 @@ The format must contain `%(target_branch)`, at least one of the target branch SH
 
 Example: `mergai/%(target_branch)-%(target_branch_short_sha)-%(merge_commit_short_sha)/%(type)` produces `mergai/release-8.0-abc12345678-def98765432/solution`.
 
+### Merge Configuration
+
+The `merge` section controls behavior of the `mergai merge` command.
+
+| Setting | Values | Description |
+|---------|--------|-------------|
+| `describe` | `never` (default), `always`, `success`, `conflict` | When to auto-run the describe command after merge |
+
+The `describe` command uses an AI agent to analyze the merge and generate a summary description stored as `merge_description` in the note. This description is included in PR bodies when available.
+
+| Value | Behavior |
+|-------|----------|
+| `never` | Don't run describe (default) |
+| `always` | Run describe after every merge, regardless of outcome |
+| `success` | Run describe only when merge succeeds (no conflicts) |
+| `conflict` | Run describe only when merge results in conflicts |
+
+Note: The describe command is only run when `--no-context` is NOT specified, since describe creates a field in the context.
+
 ### Notes Storage
 
 mergai stores context and solutions as git notes attached to commits. This allows metadata to travel with commits without modifying commit history.
@@ -150,6 +174,7 @@ mergai stores context and solutions as git notes attached to commits. This allow
 | `merge_info` | Merge metadata (target branch, merge commit SHA, target branch SHA) | `mergai context init` |
 | `merge_context` | Auto-merged files info, merge strategy | `mergai merge` (on success or conflict) |
 | `conflict_context` | Conflicting files with diffs and conflict markers | `mergai merge` (on conflict only) |
+| `merge_description` | AI-generated merge summary and review notes | `mergai describe`, `mergai merge` (if configured) |
 | `solutions` | AI or human resolutions with file changes | `mergai resolve`, `mergai commit sync` |
 
 **Commands:**
@@ -171,6 +196,7 @@ Notes are automatically attached when using `mergai commit` subcommands. Use `me
 | `mergai notes update` | Fetch and merge notes from remote |
 | `mergai notes push` | Push mergai notes to remote |
 | `mergai merge` | Attempt merge of the context commit |
+| `mergai describe` | Generate AI merge description (auto-runs based on `merge.describe` config) |
 | `mergai resolve` | Run AI conflict resolution (`-y` for yolo mode) |
 | `mergai commit` | Commit with note attached (subcommands: `merge`, `conflict`, `solution`, `sync`) |
 | `mergai branch create` | Create working branch (types: `main`, `conflict`, `solution`) |
