@@ -7,8 +7,9 @@ This module provides commands for creating and managing merge context:
 - create merge: Create context for successful automatic merges
 """
 
-import click
 import sys
+
+import click
 
 from ..app import AppContext
 from ..utils import git_utils
@@ -469,21 +470,25 @@ def create_merge(app: AppContext, force: bool, from_stdin: bool, strategy: str):
             click.echo("  auto_merged.files: (none)")
 
 
+# Mapping of drop part names to (method_name, message) tuples.
+# Used by the 'drop' command to dispatch to the appropriate MergaiNote method.
+_DROP_HANDLERS: dict[str, tuple[str, str]] = {
+    "conflict": ("drop_conflict_context", "Dropped conflict context."),
+    "pr_comments": ("drop_pr_comments", "Dropped PR comments."),
+    "user_comment": ("drop_user_comment", "Dropped user comment."),
+    "merge_context": ("drop_merge_context", "Dropped merge context."),
+    "merge_description": ("drop_merge_description", "Dropped merge description."),
+}
+
+# Valid choices for the drop command (handlers + special cases)
+_DROP_CHOICES = list(_DROP_HANDLERS.keys()) + ["solution", "merge_info"]
+
+
 @context.command()
 @click.pass_obj
 @click.argument(
     "part",
-    type=click.Choice(
-        [
-            "conflict",
-            "solution",
-            "pr_comments",
-            "user_comment",
-            "merge_info",
-            "merge_context",
-            "merge_description",
-        ]
-    ),
+    type=click.Choice(_DROP_CHOICES),
     required=False,
     default=None,
 )
@@ -533,28 +538,17 @@ def drop(app: AppContext, part: str | None, drop_all_solutions: bool):
         click.echo("No note found.")
         return
 
-    if part == "conflict":
-        app.note.drop_conflict_context()
-        click.echo("Dropped conflict context.")
-    elif part == "solution":
+    # Special case: solution has an extra parameter
+    if part == "solution":
         app.note.drop_solution(all=drop_all_solutions)
         if drop_all_solutions:
             click.echo("Dropped all solutions.")
         else:
             click.echo("Dropped uncommitted solutions.")
-    elif part == "pr_comments":
-        app.note.drop_pr_comments()
-        click.echo("Dropped PR comments.")
-    elif part == "user_comment":
-        app.note.drop_user_comment()
-        click.echo("Dropped user comment.")
-    elif part == "merge_context":
-        app.note.drop_merge_context()
-        click.echo("Dropped merge context.")
-    elif part == "merge_description":
-        app.note.drop_merge_description()
-        click.echo("Dropped merge description.")
     else:
-        raise click.ClickException(f"Invalid part: {part}")
+        # Use handler dispatch for standard cases
+        method_name, message = _DROP_HANDLERS[part]
+        getattr(app.note, method_name)()
+        click.echo(message)
 
     app.save_note(app.note)
