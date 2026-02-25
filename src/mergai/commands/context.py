@@ -486,6 +486,7 @@ def create_merge(app: AppContext, force: bool, from_stdin: bool, strategy: str):
             "user_comment",
             "merge_info",
             "merge_context",
+            "merge_description",
         ]
     ),
     required=False,
@@ -513,6 +514,7 @@ def drop(app: AppContext, part: str | None, drop_all_solutions: bool):
     - user_comment: User-provided comments
     - merge_info: Merge initialization info (target branch, commit)
     - merge_context: Merge context (list of merged commits, important files)
+    - merge_description: AI-generated merge description
 
     \b
     Examples:
@@ -555,6 +557,9 @@ def drop(app: AppContext, part: str | None, drop_all_solutions: bool):
         elif part == "merge_context":
             app.note.drop_merge_context()
             click.echo("Dropped merge context.")
+        elif part == "merge_description":
+            app.note.drop_merge_description()
+            click.echo("Dropped merge description.")
         else:
             raise Exception(f"Invalid part: {part}")
 
