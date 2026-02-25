@@ -1,5 +1,7 @@
 # mergai
 
+[![Format Check](https://github.com/Percona-Lab/mergai/actions/workflows/format-check.yml/badge.svg)](https://github.com/Percona-Lab/mergai/actions/workflows/format-check.yml) [![Lint](https://github.com/Percona-Lab/mergai/actions/workflows/lint.yml/badge.svg)](https://github.com/Percona-Lab/mergai/actions/workflows/lint.yml) [![Dependency Check](https://github.com/Percona-Lab/mergai/actions/workflows/deps-check.yml/badge.svg)](https://github.com/Percona-Lab/mergai/actions/workflows/deps-check.yml) [![Security Scan](https://github.com/Percona-Lab/mergai/actions/workflows/security.yml/badge.svg)](https://github.com/Percona-Lab/mergai/actions/workflows/security.yml)
+
 A CLI tool for AI-assisted merge conflict resolution, designed for maintaining long-running forks that regularly sync with upstream repositories.
 
 mergai automates the merge workflow by:
