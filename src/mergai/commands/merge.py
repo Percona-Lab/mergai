@@ -14,6 +14,7 @@ from ..config import (
     MERGE_DESCRIBE_SUCCESS,
 )
 from ..utils import git_utils
+from ..utils.git_utils import GitMergeOutput
 
 # Exit codes
 EXIT_SUCCESS = 0
@@ -21,7 +22,7 @@ EXIT_CONFLICT = 1
 EXIT_ERROR = 2
 
 
-def _maybe_run_describe(app: AppContext, merge_outcome: str):
+def _maybe_run_describe(app: AppContext, merge_outcome: str) -> None:
     """Run describe command if configured for the given merge outcome.
 
     Args:
@@ -32,7 +33,6 @@ def _maybe_run_describe(app: AppContext, merge_outcome: str):
         This function catches all exceptions and prints warnings instead of
         failing, so that the merge command can complete even if describe fails.
     """
-    # TODO: Add CLI flag (--describe/--no-describe) to override config setting
     describe_setting = app.config.merge.describe
 
     should_describe = describe_setting in (MERGE_DESCRIBE_ALWAYS, merge_outcome)
@@ -47,6 +47,237 @@ def _maybe_run_describe(app: AppContext, merge_outcome: str):
         click.echo("Created merge_description.")
     except Exception as e:
         click.echo(f"Warning: Failed to create merge_description: {e}")
+
+
+def _validate_pre_merge(app: AppContext, no_context: bool, force: bool) -> str:
+    """Validate preconditions before merge.
+
+    Checks that:
+    - merge_info exists in the note
+    - merge_commit is present in merge_info
+    - contexts don't already exist (unless force or no_context)
+
+    Args:
+        app: AppContext instance.
+        no_context: If True, skip context existence checks.
+        force: If True, allow overwriting existing contexts.
+
+    Returns:
+        The merge commit SHA to use.
+
+    Raises:
+        SystemExit: If validation fails.
+    """
+    if not app.has_note:
+        click.echo("Error: merge_info not found. Run 'mergai context init' first.")
+        raise SystemExit(EXIT_ERROR)
+
+    merge_commit_sha = app.note.merge_info.merge_commit_sha
+
+    if not merge_commit_sha:
+        click.echo("Error: merge_commit not found in merge_info.")
+        raise SystemExit(EXIT_ERROR)
+
+    # Pre-merge validation: check if contexts exist when force is not set
+    # This prevents leaving the repo in a merging state if context creation would fail
+    if not no_context and not force:
+        if app.note.has_merge_context:
+            click.echo(
+                "Error: merge_context already exists. "
+                "Use -f/--force to overwrite or --no-context to skip context creation."
+            )
+            raise SystemExit(EXIT_ERROR)
+        if app.note.has_conflict_context:
+            click.echo(
+                "Error: conflict_context already exists. "
+                "Use -f/--force to overwrite or --no-context to skip context creation."
+            )
+            raise SystemExit(EXIT_ERROR)
+
+    return merge_commit_sha
+
+
+def _create_and_save_merge_context(
+    app: AppContext,
+    parsed: GitMergeOutput,
+    force: bool,
+) -> bool:
+    """Create and save merge context from parsed git output.
+
+    Args:
+        app: AppContext instance.
+        parsed: Parsed git merge output containing auto-merged files and strategy.
+        force: If True, overwrite existing merge_context.
+
+    Returns:
+        True if context was created/saved, False otherwise.
+    """
+    try:
+        if not app.note.has_merge_context or force:
+            context = app.context_builder.create_merge_context(
+                auto_merged_files=parsed.auto_merged_files,
+                merge_strategy=parsed.strategy,
+            )
+            app.note.set_merge_context(context)
+            app.save_note(app.note)
+            click.echo("Created merge_context.")
+            if parsed.strategy:
+                click.echo(f"  strategy: {parsed.strategy}")
+            if parsed.auto_merged_files:
+                click.echo(f"  auto_merged: {len(parsed.auto_merged_files)} files")
+            return True
+    except Exception as e:
+        click.echo(f"Warning: Failed to create merge_context: {e}")
+    return False
+
+
+def _create_and_save_conflict_context(app: AppContext, force: bool) -> bool:
+    """Create and save conflict context.
+
+    Settings come from config.context.conflict section.
+
+    Args:
+        app: AppContext instance.
+        force: If True, overwrite existing conflict_context.
+
+    Returns:
+        True if context was created/saved, False otherwise.
+    """
+    try:
+        if not git_utils.is_merge_conflict_style_diff3(app.repo):
+            click.echo(
+                "Warning: Git is not configured to use diff3 for merges. "
+                "Consider setting 'merge.conflictstyle' to 'diff3'."
+            )
+        if not app.note.has_conflict_context or force:
+            ctx_config = app.config.context.conflict
+            conflict_context = app.context_builder.create_conflict_context(
+                use_diffs=ctx_config.use_diffs,
+                diff_lines_of_context=ctx_config.diff_lines_of_context,
+                use_compressed_diffs=ctx_config.use_compressed_diffs,
+                use_their_commits=ctx_config.use_their_commits,
+            )
+            app.note.set_conflict_context(conflict_context)
+            app.save_note(app.note)
+            click.echo("Created conflict_context.")
+            return True
+    except Exception as e:
+        click.echo(f"Warning: Failed to create conflict_context: {e}")
+    return False
+
+
+def _print_conflicting_files(
+    parsed: GitMergeOutput,
+    app: AppContext,
+) -> None:
+    """Print conflicting files from parsed output or git index.
+
+    Args:
+        parsed: Parsed git merge output.
+        app: AppContext instance (used as fallback to read from git index).
+    """
+    if parsed.conflicting_files:
+        click.echo("Conflicting files:")
+        for file_path, conflict_type in parsed.conflicting_files.items():
+            click.echo(f"  {file_path} ({conflict_type})")
+    else:
+        # Fallback: get conflicts from git index if parsing didn't find them
+        try:
+            blobs_map = app.repo.index.unmerged_blobs()
+            if blobs_map:
+                click.echo("Conflicting files:")
+                for blob_path in blobs_map:
+                    click.echo(f"  {str(blob_path)}")
+        except Exception:
+            pass
+
+
+def _handle_merge_success(
+    app: AppContext,
+    output: str,
+    no_context: bool,
+    force: bool,
+) -> None:
+    """Handle successful merge (no conflicts).
+
+    Parses git output, prints summary, optionally creates merge context,
+    and optionally runs describe.
+
+    Args:
+        app: AppContext instance.
+        output: Raw git merge output.
+        no_context: If True, skip context creation.
+        force: If True, overwrite existing contexts.
+
+    Raises:
+        SystemExit: Always raises with EXIT_SUCCESS.
+    """
+    # Print git merge output first
+    if output:
+        click.echo(output)
+
+    # Merge succeeded without conflicts
+    parsed = git_utils.parse_git_merge_output(output, repo=app.repo)
+
+    # Print mergai summary
+    click.echo("")
+    click.echo("--- mergai summary ---")
+    click.echo("Merge successful (no conflicts).")
+
+    if not no_context:
+        _create_and_save_merge_context(app, parsed, force)
+        _maybe_run_describe(app, MERGE_DESCRIBE_SUCCESS)
+
+    raise SystemExit(EXIT_SUCCESS)
+
+
+def _handle_merge_conflict(
+    app: AppContext,
+    error: GitCommandError,
+    no_context: bool,
+    force: bool,
+) -> None:
+    """Handle merge with conflicts.
+
+    Parses git output from error, prints summary and conflicting files,
+    optionally creates merge and conflict contexts, and optionally runs describe.
+
+    Args:
+        app: AppContext instance.
+        error: GitCommandError from the failed merge.
+        no_context: If True, skip context creation.
+        force: If True, overwrite existing contexts.
+
+    Raises:
+        SystemExit: Always raises with EXIT_CONFLICT.
+    """
+    # Parse output from stderr (where git writes merge info)
+    output = error.stderr if error.stderr else (error.stdout if error.stdout else "")
+
+    # Print git merge output first
+    if output:
+        click.echo(output)
+
+    parsed = git_utils.parse_git_merge_output(output, repo=app.repo)
+
+    # Print mergai summary
+    click.echo("")
+    click.echo("--- mergai summary ---")
+    click.echo("Merge has conflicts.")
+
+    # Print conflicting files
+    _print_conflicting_files(parsed, app)
+
+    if not no_context:
+        # Create merge context with auto-merged files
+        _create_and_save_merge_context(app, parsed, force)
+
+        # Create conflict context
+        _create_and_save_conflict_context(app, force)
+
+        _maybe_run_describe(app, MERGE_DESCRIBE_CONFLICT)
+
+    raise SystemExit(EXIT_CONFLICT) from error
 
 
 @click.command()
@@ -104,151 +335,17 @@ def merge(app: AppContext, no_context: bool, force: bool):
             2) echo "Error occurred" ;;
         esac
     """
-    # Load note to get merge_info
-    if not app.has_note:
-        click.echo("Error: merge_info not found. Run 'mergai context init' first.")
-        raise SystemExit(EXIT_ERROR)
+    merge_commit_sha = _validate_pre_merge(app, no_context, force)
 
-    merge_commit_sha = app.note.merge_info.merge_commit_sha
-
-    if not merge_commit_sha:
-        click.echo("Error: merge_commit not found in merge_info.")
-        raise SystemExit(EXIT_ERROR)
-
-    # Pre-merge validation: check if contexts exist when force is not set
-    # This prevents leaving the repo in a merging state if context creation would fail
-    if not no_context and not force:
-        if app.note.has_merge_context:
-            click.echo(
-                "Error: merge_context already exists. "
-                "Use -f/--force to overwrite or --no-context to skip context creation."
-            )
-            raise SystemExit(EXIT_ERROR)
-        if app.note.has_conflict_context:
-            click.echo(
-                "Error: conflict_context already exists. "
-                "Use -f/--force to overwrite or --no-context to skip context creation."
-            )
-            raise SystemExit(EXIT_ERROR)
-
-    # Execute git merge --no-commit --no-ff <sha>
     try:
         output = app.repo.git.merge("--no-commit", "--no-ff", merge_commit_sha)
-
-        # Print git merge output first
-        if output:
-            click.echo(output)
-
-        # Merge succeeded without conflicts
-        parsed = git_utils.parse_git_merge_output(output, repo=app.repo)
-
-        # Print mergai summary
-        click.echo("")
-        click.echo("--- mergai summary ---")
-        click.echo("Merge successful (no conflicts).")
-
-        if not no_context:
-            try:
-                if not app.note.has_merge_context or force:
-                    context = app.context_builder.create_merge_context(
-                        auto_merged_files=parsed.auto_merged_files,
-                        merge_strategy=parsed.strategy,
-                    )
-                    app.note.set_merge_context(context)
-                    app.save_note(app.note)
-                    click.echo("Created merge_context.")
-                    if parsed.strategy:
-                        click.echo(f"  strategy: {parsed.strategy}")
-                    if parsed.auto_merged_files:
-                        click.echo(
-                            f"  auto_merged: {len(parsed.auto_merged_files)} files"
-                        )
-            except Exception as e:
-                click.echo(f"Warning: Failed to create merge_context: {e}")
-
-            _maybe_run_describe(app, MERGE_DESCRIBE_SUCCESS)
-
-        raise SystemExit(EXIT_SUCCESS)
+        _handle_merge_success(app, output, no_context, force)
 
     except GitCommandError as e:
         # GitCommandError is raised when merge has conflicts
         # Git returns exit code 1 for conflicts
         if e.status == 1:
-            # Parse output from stderr (where git writes merge info)
-            output = e.stderr if e.stderr else (e.stdout if e.stdout else "")
-
-            # Print git merge output first
-            if output:
-                click.echo(output)
-
-            parsed = git_utils.parse_git_merge_output(output, repo=app.repo)
-
-            # Print mergai summary
-            click.echo("")
-            click.echo("--- mergai summary ---")
-            click.echo("Merge has conflicts.")
-
-            # Print conflicting files
-            if parsed.conflicting_files:
-                click.echo("Conflicting files:")
-                for file_path, conflict_type in parsed.conflicting_files.items():
-                    click.echo(f"  {file_path} ({conflict_type})")
-            else:
-                # Fallback: get conflicts from git index if parsing didn't find them
-                try:
-                    blobs_map = app.repo.index.unmerged_blobs()
-                    if blobs_map:
-                        click.echo("Conflicting files:")
-                        for blob_path in blobs_map:
-                            click.echo(f"  {str(blob_path)}")
-                except Exception:
-                    pass
-
-            if not no_context:
-                # Create merge context with auto-merged files
-                try:
-                    if not app.note.has_merge_context or force:
-                        context = app.context_builder.create_merge_context(
-                            auto_merged_files=parsed.auto_merged_files,
-                            merge_strategy=parsed.strategy,
-                        )
-                        app.note.set_merge_context(context)
-                        app.save_note(app.note)
-                        click.echo("Created merge_context.")
-                        if parsed.strategy:
-                            click.echo(f"  strategy: {parsed.strategy}")
-                        if parsed.auto_merged_files:
-                            click.echo(
-                                f"  auto_merged: {len(parsed.auto_merged_files)} files"
-                            )
-                except Exception as ctx_err:
-                    click.echo(f"Warning: Failed to create merge_context: {ctx_err}")
-
-                # Create conflict context
-                # Settings come from config.context.conflict section
-                try:
-                    if not git_utils.is_merge_conflict_style_diff3(app.repo):
-                        click.echo(
-                            "Warning: Git is not configured to use diff3 for merges. "
-                            "Consider setting 'merge.conflictstyle' to 'diff3'."
-                        )
-                    if not app.note.has_conflict_context or force:
-                        ctx_config = app.config.context.conflict
-                        conflict_context = app.context_builder.create_conflict_context(
-                            use_diffs=ctx_config.use_diffs,
-                            diff_lines_of_context=ctx_config.diff_lines_of_context,
-                            use_compressed_diffs=ctx_config.use_compressed_diffs,
-                            use_their_commits=ctx_config.use_their_commits,
-                        )
-                        app.note.set_conflict_context(conflict_context)
-                        app.save_note(app.note)
-                        click.echo("Created conflict_context.")
-                except Exception as ctx_err:
-                    click.echo(f"Warning: Failed to create conflict_context: {ctx_err}")
-
-                _maybe_run_describe(app, MERGE_DESCRIBE_CONFLICT)
-
-            raise SystemExit(EXIT_CONFLICT) from e
+            _handle_merge_conflict(app, e, no_context, force)
         else:
             # Other git errors (e.g., invalid ref, not a git repo)
             click.echo(f"Error: Git merge failed with status {e.status}")
