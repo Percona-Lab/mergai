@@ -21,6 +21,12 @@ class MostRecentResult(MergePickStrategyResult):
         """Return a short description of the fallback match."""
         return "fallback - most recent unmerged"
 
+    def to_dict(self) -> dict:
+        """Return a dictionary representation for JSON serialization."""
+        return {
+            "fallback": True,
+        }
+
 
 @dataclass
 class MostRecentStrategyConfig:

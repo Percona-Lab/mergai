@@ -25,6 +25,12 @@ class ImportantFilesResult(MergePickStrategyResult):
             return self.matched_files[0]
         return f"{len(self.matched_files)} important files"
 
+    def to_dict(self) -> dict:
+        """Return a dictionary representation for JSON serialization."""
+        return {
+            "matched_files": self.matched_files,
+        }
+
 
 @dataclass
 class ImportantFilesStrategyConfig:

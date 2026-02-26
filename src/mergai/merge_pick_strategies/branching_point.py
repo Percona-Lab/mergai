@@ -23,6 +23,12 @@ class BranchingPointResult(MergePickStrategyResult):
         """Return a short description of the branching point match."""
         return f"{self.child_count} children in upstream"
 
+    def to_dict(self) -> dict:
+        """Return a dictionary representation for JSON serialization."""
+        return {
+            "child_count": self.child_count,
+        }
+
 
 @dataclass
 class BranchingPointStrategyConfig:

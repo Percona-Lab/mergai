@@ -89,6 +89,24 @@ def author_to_dict(author):
     }
 
 
+def commit_to_dict(commit: Commit) -> dict:
+    """Convert a git Commit to a JSON-serializable dict.
+
+    Args:
+        commit: GitPython Commit object.
+
+    Returns:
+        Dict with commit details including sha, date, author, and summary.
+    """
+    return {
+        "sha": commit.hexsha,
+        "short_sha": short_sha(commit.hexsha),
+        "date": commit.authored_datetime.isoformat(),
+        "author": author_to_dict(commit.author),
+        "summary": commit.summary,
+    }
+
+
 def is_merge_in_progress(repo: Repo) -> bool:
     merge_head = Path(repo.git_dir) / "MERGE_HEAD"
     return merge_head.exists()
@@ -779,6 +797,50 @@ class ForkStatus:
         if not date_range:
             return 0
         return (date_range[1] - date_range[0]).days
+
+    def to_dict(self) -> dict:
+        """Return a dictionary representation for JSON serialization.
+
+        Returns:
+            A dictionary with fork status details suitable for JSON output.
+        """
+        from typing import Any
+
+        result: dict[str, Any] = {
+            "fork_ref": self.fork_ref,
+            "upstream_ref": self.upstream_ref,
+            "is_up_to_date": self.is_up_to_date,
+        }
+
+        if not self.is_up_to_date:
+            # Add divergence info
+            divergence: dict[str, Any] = {
+                "commits_behind": self.commits_behind,
+                "days_behind": self.days_behind,
+                "files_affected": self.files_affected,
+                "total_additions": self.total_additions,
+                "total_deletions": self.total_deletions,
+            }
+
+            # Add date range if available
+            date_range = self.unmerged_date_range
+            if date_range:
+                divergence["date_range"] = {
+                    "first": date_range[0].isoformat(),
+                    "last": date_range[1].isoformat(),
+                }
+
+            result["divergence"] = divergence
+
+            # Add key commits
+            if self.last_merged_commit:
+                result["last_merged_commit"] = commit_to_dict(self.last_merged_commit)
+            if self.first_unmerged_commit:
+                result["first_unmerged_commit"] = commit_to_dict(
+                    self.first_unmerged_commit
+                )
+
+        return result
 
 
 @dataclass
