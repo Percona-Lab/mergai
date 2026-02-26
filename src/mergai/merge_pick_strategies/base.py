@@ -54,6 +54,17 @@ class MergePickStrategyResult(ABC):
         """
         pass
 
+    @abstractmethod
+    def to_dict(self) -> dict:
+        """Return a dictionary representation for JSON serialization.
+
+        This is used for JSON output format in CLI commands.
+
+        Returns:
+            A dictionary with strategy-specific match details.
+        """
+        pass
+
 
 class MergePickStrategy(ABC):
     """Abstract base class for merge-pick strategies.

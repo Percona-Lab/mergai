@@ -28,6 +28,13 @@ class HugeCommitResult(MergePickStrategyResult):
         vars_str = ", ".join(f"{k}={v}" for k, v in self.evaluated_vars.items())
         return f"({vars_str}) matched"
 
+    def to_dict(self) -> dict:
+        """Return a dictionary representation for JSON serialization."""
+        return {
+            "expression": self.expression,
+            "evaluated_vars": self.evaluated_vars,
+        }
+
 
 @dataclass
 class HugeCommitStrategyConfig:

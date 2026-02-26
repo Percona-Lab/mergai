@@ -1,3 +1,4 @@
+import json
 import logging
 
 import click
@@ -7,6 +8,7 @@ from ..app import AppContext
 from ..config import DEFAULT_CONFIG_PATH, MergePicksConfig
 from ..merge_pick_strategies import MergePickCommit, MergePickStrategyContext
 from ..utils import git_utils
+from ..utils.output import OutputFormat, format_option
 from ..utils.util import (
     format_commit_info,
     format_commit_info_oneline,
@@ -311,6 +313,55 @@ def format_commit_list(
     return output_lines
 
 
+def build_status_json(
+    app: AppContext,
+    fork_status,
+    upstream_ref: str,
+    prioritized: list[MergePickCommit] | None = None,
+    include_commits: bool = False,
+) -> dict:
+    """Build JSON representation of fork status.
+
+    Args:
+        app: Application context with config.
+        fork_status: ForkStatus object with divergence info.
+        upstream_ref: Resolved upstream ref string.
+        prioritized: Optional list of prioritized commits with strategy info.
+        include_commits: Whether to include the full list of unmerged commits.
+
+    Returns:
+        Dictionary suitable for JSON serialization.
+    """
+    from typing import Any
+
+    result: dict[str, Any] = {
+        "upstream_url": app.config.fork.upstream_url,
+        "upstream_branch": app.config.fork.upstream_branch,
+    }
+
+    # Add fork status info (includes divergence, key commits, etc.)
+    result.update(fork_status.to_dict())
+
+    # Add unmerged commits list if requested (-l flag)
+    if include_commits and not fork_status.is_up_to_date:
+        result["unmerged_commits"] = [
+            git_utils.commit_to_dict(c) for c in fork_status.unmerged_commits
+        ]
+
+    # Add merge picks if available (-p flag)
+    if prioritized:
+        result["merge_picks"] = [
+            {
+                "commit": git_utils.commit_to_dict(pc.commit),
+                "strategy_name": pc.strategy_name,
+                "result": pc.result.to_dict(),
+            }
+            for pc in prioritized
+        ]
+
+    return result
+
+
 @click.group()
 def fork():
     """Commands for managing forks and syncing with upstream repositories."""
@@ -405,6 +456,7 @@ def init(app: AppContext, upstream_url: str | None):
 
 
 @fork.command()
+@format_option(default=OutputFormat.TEXT)
 @click.pass_obj
 @click.argument(
     "upstream_ref",
@@ -438,16 +490,25 @@ def init(app: AppContext, upstream_url: str | None):
 )
 def status(
     app: AppContext,
+    format: str,
     upstream_ref: str | None,
     fork_ref: str,
     list_commits: bool,
     show_merge_picks: bool,
 ):
+    """Show fork status compared to upstream.
+
+    Displays divergence information including commits behind, files affected,
+    and key commits. Use -l to list unmerged commits and -p to show merge picks.
+
+    Supports --format text (default), --json for JSON output.
+    """
     log.info("getting fork status for:")
     log.info(f"  upstream_ref:{upstream_ref}")
     log.info(f"  fork_ref={fork_ref}")
     log.info(f"  list_commits={list_commits}")
     log.info(f"  show_merge_picks={show_merge_picks}")
+    log.info(f"  format={format}")
 
     upstream_ref = resolve_upstream_ref(app, upstream_ref)
 
@@ -477,7 +538,19 @@ def status(
             context,
         )
 
-    # Build status summary output
+    # Handle JSON output format
+    if format == OutputFormat.JSON.value:
+        output_dict = build_status_json(
+            app,
+            fork_status,
+            upstream_ref,
+            prioritized=prioritized if show_merge_picks else None,
+            include_commits=list_commits,
+        )
+        print(json.dumps(output_dict, indent=2, default=str))
+        return
+
+    # Build status summary output (text format)
     output_lines = build_status_summary(app, fork_status, upstream_ref)
 
     # Commit listing based on options:

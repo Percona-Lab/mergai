@@ -35,6 +35,12 @@ class ConflictResult(MergePickStrategyResult):
             return f"first conflict in {', '.join(self.conflicting_files)}"
         return f"first conflict in {count} files"
 
+    def to_dict(self) -> dict:
+        """Return a dictionary representation for JSON serialization."""
+        return {
+            "conflicting_files": self.conflicting_files,
+        }
+
 
 @dataclass
 class ConflictStrategyConfig:
