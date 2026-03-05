@@ -203,6 +203,7 @@ Notes are automatically attached when using `mergai commit` subcommands. Use `me
 | `mergai commit` | Commit with note attached (subcommands: `merge`, `conflict`, `solution`, `sync`) |
 | `mergai branch create` | Create working branch (types: `main`, `conflict`, `solution`) |
 | `mergai branch push` | Push branch to origin |
+| `mergai rebase` | Rebase current branch onto new base, preserving merge commits and notes |
 | `mergai finalize` | Finalize merge after solution PR is merged |
 | `mergai pr create` | Create pull request |
 | `mergai pr update` | Update PR body with current note data |
@@ -260,6 +261,34 @@ mergai branch push main                # Push main branch to origin
 mergai notes push                      # Push mergai notes to remote
 mergai pr --repo <repo> create main    # Open PR for the finalized merge
 ```
+
+### Rebasing onto Updated Upstream
+
+When upstream has new commits that you want to incorporate before your PR is merged:
+
+```bash
+mergai fork fetch                      # Fetch latest upstream changes
+mergai rebase upstream/master --dry-run # Preview the rebase
+mergai rebase upstream/master          # Rebase onto upstream/master
+mergai branch push -f main             # Force push rebased branch
+mergai notes push                      # Push updated notes to remote
+```
+
+If conflicts occur during rebase:
+
+```bash
+# Resolve conflicts in the working directory
+git add <resolved-files>
+mergai rebase --continue               # Continue rebasing
+# Or abort if needed:
+mergai rebase --abort                  # Abort and restore original state
+```
+
+The rebase command:
+
+- Preserves merge commits using `--rebase-merges`
+- Transfers all mergai notes to the rebased commits
+- Updates `merge_info.target_branch_sha` to the new base
 
 ## Manual Usage
 
