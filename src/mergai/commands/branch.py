@@ -212,6 +212,14 @@ def delete(
 @click.pass_obj
 @click.argument("type", type=click.Choice(PUSH_BRANCH_TYPES, case_sensitive=False))
 @click.option(
+    "--remote",
+    "-r",
+    type=str,
+    default="origin",
+    show_default=True,
+    help="Remote name to push to",
+)
+@click.option(
     "--force",
     "-f",
     is_flag=True,
@@ -227,19 +235,28 @@ def delete(
 def push(
     app: AppContext,
     type: str,
+    remote: str,
     force: bool,
     ignore_missing: bool,
 ):
-    """Push a merge-related branch to origin.
+    """Push a merge-related branch to a remote.
 
-    Pushes the specified branch type to origin.
+    Pushes the specified branch type to the specified remote (default: origin).
 
     TYPE is one of: main, conflict, solution, all
 
     The target branch is not supported.
 
+    \b
+    Examples:
+        mergai branch push main                  # Push main to origin
+        mergai branch push main --remote upstream  # Push main to upstream
+        mergai branch push -f main               # Force push main to origin
+        mergai branch push all                   # Push all branches to origin
+
     Use 'all' as TYPE to push all three branch types at once (only pushes
     branches that exist locally).
+    Use --remote to specify a different remote (default: origin).
     Use --force to force push using --force-with-lease.
     Use --ignore-missing to not fail if branch doesn't exist locally.
 
@@ -260,13 +277,13 @@ def push(
         local_exists = git_utils.branch_exists_locally(app.repo, branch_name)
         if local_exists:
             try:
-                push_args = ["origin", branch_name]
+                push_args = [remote, branch_name]
                 if force:
                     push_args.insert(1, "--force-with-lease")
                 app.repo.git.push(*push_args)
                 force_msg = " (force)" if force else ""
                 click.echo(
-                    f"Pushed branch{force_msg}: {branch_name} -> origin/{branch_name}"
+                    f"Pushed branch{force_msg}: {branch_name} -> {remote}/{branch_name}"
                 )
             except Exception as e:
                 raise click.ClickException(
