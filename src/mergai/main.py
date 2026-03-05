@@ -63,6 +63,10 @@ def register_commands(cli):
 
     cli.add_command(finalize)
 
+    from .commands.rebase import rebase
+
+    cli.add_command(rebase)
+
     from .commands.config_cmd import config
 
     cli.add_command(config)
