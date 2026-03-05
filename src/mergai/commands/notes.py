@@ -595,22 +595,240 @@ def update(
             raise click.ClickException(f"Failed to merge notes: {e}") from e
 
 
+def _get_context_commit_shas(app) -> list[str]:
+    """Get list of commit SHAs listed in the current context's note_index.
+
+    Returns commit SHAs from note_index entries. Note that this does not verify
+    that each commit actually has a note in the git notes ref - it only reads
+    the SHAs that are tracked in the local note.json file.
+    """
+    shas = set()
+
+    if not app.has_note:
+        return []
+
+    note = app.note
+
+    # Add commits from note_index (these are commits we've created with notes)
+    if note.has_note_index and note.note_index is not None:
+        for entry in note.note_index:
+            sha = entry.get("sha")
+            if sha:
+                shas.add(sha)
+
+    return list(shas)
+
+
+def _copy_notes_for_commits(
+    app, commit_shas: list[str], source_ref: str, target_ref: str
+) -> int:
+    """Copy notes for specific commits from source ref to target ref.
+
+    Args:
+        app: AppContext instance.
+        commit_shas: List of commit SHAs to copy notes for.
+        source_ref: Source notes ref name (e.g., "mergai").
+        target_ref: Target notes ref name (e.g., "mergai-push-tmp").
+
+    Returns:
+        Number of notes copied.
+    """
+    import os
+    import tempfile
+
+    copied = 0
+    for sha in commit_shas:
+        try:
+            # Get note content from source
+            content = app.repo.git.notes("--ref", source_ref, "show", sha)
+
+            # Write to temp file and add to target
+            with tempfile.NamedTemporaryFile(mode="w", delete=False) as f:
+                f.write(content)
+                temp_path = f.name
+
+            try:
+                app.repo.git.notes(
+                    "--ref", target_ref, "add", "-f", "-F", temp_path, sha
+                )
+                copied += 1
+            finally:
+                os.unlink(temp_path)
+        except Exception:
+            # Note doesn't exist for this commit - skip
+            pass
+
+    return copied
+
+
 @notes.command()
 @click.pass_obj
 @click.argument("remote", default="origin")
-def push(app: AppContext, remote: str):
+@click.option(
+    "--context",
+    "context_only",
+    is_flag=True,
+    default=False,
+    help="Push only notes for commits in the current context (note_index)",
+)
+@click.option(
+    "--dry-run",
+    "dry_run",
+    is_flag=True,
+    default=False,
+    help="Preview what would be pushed without making changes",
+)
+def push(app: AppContext, remote: str, context_only: bool, dry_run: bool):
     """Push local notes to remote.
+
+    By default, pushes all local notes. Use --context to push only notes
+    for commits in the current mergai context (from note_index). This is
+    useful after rebasing to avoid pushing orphaned notes.
 
     \b
     Examples:
-        mergai notes push           # Push to origin
-        mergai notes push upstream  # Push to upstream remote
+        mergai notes push              # Push all notes to origin
+        mergai notes push upstream     # Push all notes to upstream remote
+        mergai notes push --context    # Push only context notes to origin
+        mergai notes push --dry-run    # Preview what would be pushed
     """
+    if not context_only:
+        # Original behavior: push all notes
+        if dry_run:
+            click.echo("Would push all notes to remote.")
+            click.echo("Notes refs: refs/notes/mergai*")
+            return
+
+        try:
+            app.repo.git.push(remote, "refs/notes/mergai*:refs/notes/mergai*")
+            click.echo(f"Notes pushed to {remote}.")
+        except Exception as e:
+            raise click.ClickException(f"Failed to push notes: {e}") from e
+        return
+
+    # Context-only push
+    if not app.has_note:
+        raise click.ClickException(
+            "No note.json found. Cannot determine context commits.\n"
+            "Use 'mergai notes push' without --context to push all notes."
+        )
+
+    context_shas = _get_context_commit_shas(app)
+    if not context_shas:
+        click.echo("No commits in context to push notes for.")
+        return
+
+    click.echo(f"Found {len(context_shas)} commit(s) in context:")
+    for sha in context_shas:
+        click.echo(f"  - {short_sha(sha)}")
+
+    if dry_run:
+        click.echo("")
+        click.echo("Dry run - no changes made.")
+        click.echo("Would fetch remote notes, merge context notes, and push.")
+        return
+
+    # Strategy:
+    # 1. Fetch remote notes to a temp ref
+    # 2. Copy our context notes to the temp ref (overwriting any existing)
+    # 3. Push the temp ref to remote as the main notes ref
+    # 4. Update local ref to match
+    # 5. Clean up temp ref
+
+    temp_ref = "mergai-push-tmp"
+    temp_marker_ref = "mergai-marker-push-tmp"
+
     try:
-        app.repo.git.push(remote, "refs/notes/mergai*:refs/notes/mergai*")
-        click.echo(f"Notes pushed to {remote}.")
-    except Exception as e:
-        raise click.ClickException(f"Failed to push notes: {e}") from e
+        # Step 1: Fetch remote notes to temp ref
+        click.echo(f"Fetching remote notes from {remote}...")
+        has_remote_notes = False
+        has_remote_markers = False
+
+        try:
+            app.repo.git.fetch(remote, f"refs/notes/{NOTES_REF}:refs/notes/{temp_ref}")
+            has_remote_notes = True
+        except Exception:
+            # No remote notes exist - this is expected for repos without
+            # existing mergai notes
+            pass
+
+        # Warn user about potential data loss when remote has notes
+        if has_remote_notes:
+            click.echo(
+                click.style("Note: ", fg="yellow")
+                + "Remote has existing notes. Only context notes will be preserved."
+            )
+            click.echo(
+                "Notes for commits outside the current context will be retained on the remote."
+            )
+
+        try:
+            app.repo.git.fetch(
+                remote, f"refs/notes/{NOTES_MARKER_REF}:refs/notes/{temp_marker_ref}"
+            )
+            has_remote_markers = True
+        except Exception:
+            # No remote marker notes exist - this is expected for repos without
+            # existing mergai marker notes
+            pass
+
+        # Step 2: Copy our context notes to temp ref
+        click.echo("Copying context notes...")
+        notes_copied = _copy_notes_for_commits(app, context_shas, NOTES_REF, temp_ref)
+        markers_copied = _copy_notes_for_commits(
+            app, context_shas, NOTES_MARKER_REF, temp_marker_ref
+        )
+
+        click.echo(f"  Copied {notes_copied} note(s), {markers_copied} marker(s)")
+
+        # Skip push if nothing was copied and there are no remote notes to preserve
+        if (
+            notes_copied == 0
+            and markers_copied == 0
+            and not has_remote_notes
+            and not has_remote_markers
+        ):
+            click.echo("")
+            click.echo("No notes to push (no local context notes found).")
+            return
+
+        # Step 3: Push temp ref to remote as main notes ref
+        click.echo(f"Pushing to {remote}...")
+
+        # Only push if we have notes to push (either copied or need to preserve remote)
+        if notes_copied > 0 or has_remote_notes:
+            app.repo.git.push(remote, f"refs/notes/{temp_ref}:refs/notes/{NOTES_REF}")
+
+        if markers_copied > 0 or has_remote_markers:
+            app.repo.git.push(
+                remote, f"refs/notes/{temp_marker_ref}:refs/notes/{NOTES_MARKER_REF}"
+            )
+
+        # Step 4: Update local ref to match what we pushed
+        # This ensures local and remote are in sync
+        if notes_copied > 0:
+            with contextlib.suppress(Exception):
+                app.repo.git.update_ref(
+                    f"refs/notes/{NOTES_REF}", f"refs/notes/{temp_ref}"
+                )
+
+        if markers_copied > 0:
+            with contextlib.suppress(Exception):
+                app.repo.git.update_ref(
+                    f"refs/notes/{NOTES_MARKER_REF}", f"refs/notes/{temp_marker_ref}"
+                )
+
+        click.echo("")
+        click.echo(
+            click.style("Success! ", fg="green") + f"Context notes pushed to {remote}."
+        )
+
+    finally:
+        # Step 5: Clean up temp refs
+        with contextlib.suppress(Exception):
+            app.repo.git.update_ref("-d", f"refs/notes/{temp_ref}")
+        with contextlib.suppress(Exception):
+            app.repo.git.update_ref("-d", f"refs/notes/{temp_marker_ref}")
 
 
 @notes.command("merge")

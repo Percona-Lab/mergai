@@ -179,7 +179,7 @@ mergai stores context and solutions as git notes attached to commits. This allow
 
 **Commands:**
 - `mergai notes update` - Fetch and merge notes from remote
-- `mergai notes push` - Push notes to remote
+- `mergai notes push` - Push notes to remote (use `--context` to push only context notes)
 - `mergai show <commit>` - View note contents
 - `mergai context drop` - Remove note pieces
 
@@ -269,7 +269,7 @@ mergai fork fetch                      # Fetch latest upstream changes
 mergai rebase upstream/master --dry-run # Preview the rebase
 mergai rebase upstream/master          # Rebase onto upstream/master
 mergai branch push -f main             # Force push rebased branch
-mergai notes push                      # Push updated notes to remote
+mergai notes push --context            # Push only notes for context commits
 ```
 
 If conflicts occur during rebase:
