@@ -420,8 +420,64 @@ def show_prs(prs):
 
 @pr.command()
 @click.pass_obj
-def show(app: AppContext):
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Force show even if PR doesn't match current branch context.",
+)
+@click.argument("pr_number", type=int, required=False)
+def show(app: AppContext, pr_number: int | None, force: bool):
+    """Show pull request details.
+
+    Without arguments, shows open PRs for the current branch.
+    With a PR number, shows details for that specific PR.
+
+    \b
+    Arguments:
+        PR_NUMBER   Optional PR number to show directly.
+
+    \b
+    Options:
+        --force, -f   Show the PR even if it doesn't match the current branch.
+
+    \b
+    Examples:
+        mergai pr --repo owner/name show           # Show PRs for current branch
+        mergai pr --repo owner/name show 123       # Show PR #123
+        mergai pr --repo owner/name show 123 -f    # Show PR #123 even if branch mismatch
+    """
     try:
+        if pr_number is not None:
+            # Fetch PR directly by number
+            try:
+                pr = app.gh_repo.get_pull(pr_number)
+            except GithubException as e:
+                msg = (
+                    e.data.get("message", str(e))
+                    if isinstance(e.data, dict)
+                    else str(e)
+                )
+                raise click.ClickException(
+                    f"Failed to fetch PR #{pr_number}: {msg}"
+                ) from e
+
+            # Validate context (only branch check for show)
+            warnings = _validate_pr_context(app, pr)
+            if warnings:
+                if not force:
+                    msg = "\n".join(f"  - {w}" for w in warnings)
+                    raise click.ClickException(
+                        f"PR #{pr_number} context mismatch:\n{msg}\n\nUse --force to show anyway."
+                    )
+                for w in warnings:
+                    click.echo(f"Warning: {w}", err=True)
+
+            show_prs([pr])
+            return
+
+        # Original behavior: show PRs for current branch
         prs = get_prs_for_current_branch(app)
         if len(prs) == 0:
             click.echo("No open pull requests found for the current branch.")
@@ -430,8 +486,9 @@ def show(app: AppContext):
         if len(prs) > 1:
             click.echo("Multiple open pull requests found for the current branch:")
 
-        else:
-            show_prs(prs)
+        show_prs(prs)
+    except click.ClickException:
+        raise
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
@@ -465,6 +522,61 @@ def _detect_pr_type_from_branch(app: AppContext) -> str | None:
     return None
 
 
+def _validate_pr_context(
+    app: AppContext,
+    pr: GithubPullRequest.PullRequest,
+    pr_type: str | None = None,
+) -> list[str]:
+    """Validate that a PR matches the expected context from the note.
+
+    Checks if the PR's head and base branches match the expected branches
+    based on the PR type and the current mergai note.
+
+    Args:
+        app: AppContext with config, repo, and note.
+        pr: The GitHub PR to validate.
+        pr_type: The PR type ('main' or 'solution'). If None, validation
+                 only checks against the current git branch.
+
+    Returns:
+        List of warning messages. Empty list if PR matches context.
+    """
+    warnings = []
+
+    # Check against current git branch
+    current_branch = git_utils.get_current_branch(app.repo)
+    if pr.head.ref != current_branch:
+        warnings.append(
+            f"PR head branch '{pr.head.ref}' doesn't match current branch '{current_branch}'"
+        )
+
+    # If we have a pr_type and note, validate against expected branches
+    if pr_type is not None:
+        try:
+            if pr_type.lower() == "solution":
+                expected_head = app.branches.solution_branch
+                expected_base = app.branches.conflict_branch
+            else:  # main
+                expected_head = app.branches.main_branch
+                expected_base = app.branches.target_branch
+
+            if pr.head.ref != expected_head:
+                warnings.append(
+                    f"PR head branch '{pr.head.ref}' doesn't match expected '{expected_head}' for {pr_type} PR"
+                )
+            if pr.base.ref != expected_base:
+                warnings.append(
+                    f"PR base branch '{pr.base.ref}' doesn't match expected '{expected_base}' for {pr_type} PR"
+                )
+        except click.ClickException:
+            # Note or branches not available - skip branch validation
+            warnings.append(
+                "Cannot validate PR branches: mergai note not found or incomplete"
+            )
+
+    return warnings
+
+
 def _find_pr_for_branch(
     app: AppContext, head_branch: str, base_branch: str
 ) -> GithubPullRequest.PullRequest | None:
@@ -493,32 +605,56 @@ def _find_pr_for_branch(
     default=False,
     help="Show the new body without updating the PR.",
 )
+@click.option(
+    "--force",
+    "-f",
+    is_flag=True,
+    default=False,
+    help="Force update even if PR doesn't match current context.",
+)
+@click.argument("pr_number", type=int, required=False)
 @click.argument(
     "pr_type",
     type=click.Choice(["main", "solution"], case_sensitive=False),
     required=False,
 )
-def update(app: AppContext, pr_type: str | None, dry_run: bool):
+def update(
+    app: AppContext,
+    pr_number: int | None,
+    pr_type: str | None,
+    dry_run: bool,
+    force: bool,
+):
     """Update an existing pull request's body.
 
-    PR_TYPE specifies which PR to update. If not provided, it will be auto-detected
-    from the current branch name:
-    - If on a 'main' branch -> updates the main PR
-    - If on a 'solution' branch -> updates the solution PR
+    Without arguments, finds the PR by branch names and auto-detects the PR type.
+    With a PR number, updates that specific PR directly.
+
+    PR_TYPE specifies which type of body to generate ('main' or 'solution').
+    If not provided, it will be auto-detected from the current branch name.
 
     The PR body is rebuilt using the current note data, including any solutions
     added after the PR was created (e.g., human solutions from 'mergai commit sync').
 
     \b
+    Arguments:
+        PR_NUMBER   Optional PR number to update directly.
+        PR_TYPE     Optional type of PR body to generate ('main' or 'solution').
+
+    \b
     Options:
-        --dry-run   Show the new body without updating the PR.
+        --dry-run     Show the new body without updating the PR.
+        --force, -f   Update even if PR doesn't match current context.
 
     \b
     Examples:
-        mergai pr --repo owner/name update           # Auto-detect PR type from branch
-        mergai pr --repo owner/name update main      # Update main PR body
-        mergai pr --repo owner/name update solution  # Update solution PR body
-        mergai pr --repo owner/name update --dry-run # Preview new body
+        mergai pr --repo owner/name update              # Auto-detect PR from branch
+        mergai pr --repo owner/name update main         # Update main PR body
+        mergai pr --repo owner/name update solution     # Update solution PR body
+        mergai pr --repo owner/name update 123          # Update PR #123
+        mergai pr --repo owner/name update 123 main     # Update PR #123 with main body
+        mergai pr --repo owner/name update 123 -f       # Update PR #123 even if mismatch
+        mergai pr --repo owner/name update --dry-run    # Preview new body
     """
     # Auto-detect PR type if not provided
     if pr_type is None:
@@ -530,7 +666,7 @@ def update(app: AppContext, pr_type: str | None, dry_run: bool):
             )
         click.echo(f"Auto-detected PR type: {pr_type}")
 
-    # Determine branches based on PR type
+    # Determine branches and body based on PR type
     if pr_type.lower() == "solution":
         head_branch = app.branches.solution_branch
         base_branch = app.branches.conflict_branch
@@ -540,20 +676,50 @@ def update(app: AppContext, pr_type: str | None, dry_run: bool):
         base_branch = app.branches.target_branch
         body = _build_main_pr_body(app)
 
+    # If PR number is provided, fetch directly by number
+    if pr_number is not None:
+        try:
+            pr = app.gh_repo.get_pull(pr_number)
+        except GithubException as e:
+            msg = e.data.get("message", str(e)) if isinstance(e.data, dict) else str(e)
+            raise click.ClickException(f"Failed to fetch PR #{pr_number}: {msg}") from e
+
+        # Validate context
+        warnings = _validate_pr_context(app, pr, pr_type)
+        if warnings:
+            if not force:
+                msg = "\n".join(f"  - {w}" for w in warnings)
+                raise click.ClickException(
+                    f"PR #{pr_number} context mismatch:\n{msg}\n\nUse --force to update anyway."
+                )
+            for w in warnings:
+                click.echo(f"Warning: {w}", err=True)
+
+        head_branch = pr.head.ref
+        base_branch = pr.base.ref
+    else:
+        # Original behavior: find PR by branches
+        if dry_run:
+            click.echo(f"Would update PR from {head_branch} to {base_branch}")
+            click.echo("--- new body ---")
+            click.echo(body)
+            click.echo("--- end ---")
+            return
+
+        pr = _find_pr_for_branch(app, head_branch, base_branch)
+        if pr is None:
+            raise click.ClickException(
+                f"No open PR found from '{head_branch}' to '{base_branch}'. "
+                f"Create one first with 'mergai pr create {pr_type}'."
+            )
+
+    # Handle dry-run for PR number case
     if dry_run:
-        click.echo(f"Would update PR from {head_branch} to {base_branch}")
+        click.echo(f"Would update PR #{pr.number} from {head_branch} to {base_branch}")
         click.echo("--- new body ---")
         click.echo(body)
         click.echo("--- end ---")
         return
-
-    # Find the PR
-    pr = _find_pr_for_branch(app, head_branch, base_branch)
-    if pr is None:
-        raise click.ClickException(
-            f"No open PR found from '{head_branch}' to '{base_branch}'. "
-            f"Create one first with 'mergai pr create {pr_type}'."
-        )
 
     click.echo(f"Updating PR #{pr.number}: {pr.title}")
     click.echo(f"  from: {head_branch}")
