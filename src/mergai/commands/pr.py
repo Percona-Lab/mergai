@@ -421,32 +421,35 @@ def show_prs(prs):
 @pr.command()
 @click.pass_obj
 @click.option(
+    "--pr-number",
+    "-n",
+    type=int,
+    default=None,
+    help="PR number to show directly instead of searching by branch.",
+)
+@click.option(
     "--force",
     "-f",
     is_flag=True,
     default=False,
     help="Force show even if PR doesn't match current branch context.",
 )
-@click.argument("pr_number", type=int, required=False)
 def show(app: AppContext, pr_number: int | None, force: bool):
     """Show pull request details.
 
     Without arguments, shows open PRs for the current branch.
-    With a PR number, shows details for that specific PR.
-
-    \b
-    Arguments:
-        PR_NUMBER   Optional PR number to show directly.
+    With --pr-number, shows details for that specific PR.
 
     \b
     Options:
-        --force, -f   Show the PR even if it doesn't match the current branch.
+        --pr-number, -n   PR number to show directly.
+        --force, -f       Show the PR even if it doesn't match the current branch.
 
     \b
     Examples:
-        mergai pr --repo owner/name show           # Show PRs for current branch
-        mergai pr --repo owner/name show 123       # Show PR #123
-        mergai pr --repo owner/name show 123 -f    # Show PR #123 even if branch mismatch
+        mergai pr --repo owner/name show              # Show PRs for current branch
+        mergai pr --repo owner/name show -n 123       # Show PR #123
+        mergai pr --repo owner/name show -n 123 -f    # Show PR #123 even if branch mismatch
     """
     try:
         if pr_number is not None:
@@ -606,13 +609,19 @@ def _find_pr_for_branch(
     help="Show the new body without updating the PR.",
 )
 @click.option(
+    "--pr-number",
+    "-n",
+    type=int,
+    default=None,
+    help="PR number to update directly instead of searching by branch.",
+)
+@click.option(
     "--force",
     "-f",
     is_flag=True,
     default=False,
     help="Force update even if PR doesn't match current context.",
 )
-@click.argument("pr_number", type=int, required=False)
 @click.argument(
     "pr_type",
     type=click.Choice(["main", "solution"], case_sensitive=False),
@@ -628,7 +637,7 @@ def update(
     """Update an existing pull request's body.
 
     Without arguments, finds the PR by branch names and auto-detects the PR type.
-    With a PR number, updates that specific PR directly.
+    With --pr-number, updates that specific PR directly.
 
     PR_TYPE specifies which type of body to generate ('main' or 'solution').
     If not provided, it will be auto-detected from the current branch name.
@@ -638,22 +647,22 @@ def update(
 
     \b
     Arguments:
-        PR_NUMBER   Optional PR number to update directly.
-        PR_TYPE     Optional type of PR body to generate ('main' or 'solution').
+        PR_TYPE       Optional type of PR body to generate ('main' or 'solution').
 
     \b
     Options:
-        --dry-run     Show the new body without updating the PR.
-        --force, -f   Update even if PR doesn't match current context.
+        --dry-run       Show the new body without updating the PR.
+        --pr-number, -n PR number to update directly.
+        --force, -f     Update even if PR doesn't match current context.
 
     \b
     Examples:
         mergai pr --repo owner/name update              # Auto-detect PR from branch
         mergai pr --repo owner/name update main         # Update main PR body
         mergai pr --repo owner/name update solution     # Update solution PR body
-        mergai pr --repo owner/name update 123          # Update PR #123
-        mergai pr --repo owner/name update 123 main     # Update PR #123 with main body
-        mergai pr --repo owner/name update 123 -f       # Update PR #123 even if mismatch
+        mergai pr --repo owner/name update -n 123       # Update PR #123
+        mergai pr --repo owner/name update -n 123 main  # Update PR #123 with main body
+        mergai pr --repo owner/name update -n 123 -f    # Update PR #123 even if mismatch
         mergai pr --repo owner/name update --dry-run    # Preview new body
     """
     # Auto-detect PR type if not provided
