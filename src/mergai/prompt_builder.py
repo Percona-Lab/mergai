@@ -5,11 +5,15 @@ for building prompts for AI agents from MergaiNote data.
 """
 
 import json
+from typing import TYPE_CHECKING
 
 from . import prompts
 from .config import PromptConfig
 from .models import MergaiNote
 from .utils import util
+
+if TYPE_CHECKING:
+    from .models import CheckAttempt
 
 
 class PromptBuilder:
@@ -142,6 +146,62 @@ class PromptBuilder:
             result["user_comment"] = self.note.user_comment
 
         return result
+
+    def build_check_fix_prompt(
+        self,
+        workflow_name: str,
+        workflow_run_url: str,
+        previous_attempts: list["CheckAttempt"] | None = None,
+    ) -> str:
+        """Build the prompt for fixing a CI check failure.
+
+        Constructs a complete prompt by combining:
+        - System prompt for check fixing
+        - Project invariants (if present)
+        - Workflow information (name and URL)
+        - Previous attempts (if any)
+
+        Args:
+            workflow_name: Name of the failing workflow.
+            workflow_run_url: URL to the failing workflow run.
+            previous_attempts: List of previous fix attempts for context.
+
+        Returns:
+            The complete prompt string for the AI agent.
+        """
+        system_prompt = prompts.load_system_prompt_check_fix()
+        project_invariants = util.load_if_exists(".mergai/invariants.md")
+
+        prompt = system_prompt + "\n\n"
+
+        if project_invariants:
+            prompt += "## Project Invariants\n\n"
+            prompt += project_invariants + "\n\n"
+
+        # Add workflow information
+        prompt += "## Workflow Information\n\n"
+        prompt += f"- **Workflow name**: {workflow_name}\n"
+        prompt += f"- **Workflow run URL**: {workflow_run_url}\n\n"
+        prompt += (
+            "Fetch the workflow run URL above to get the failure logs and "
+            "analyze the error messages.\n\n"
+        )
+
+        # Add previous attempts if any
+        if previous_attempts:
+            prompt += "## Previous Fix Attempts\n\n"
+            prompt += (
+                "The following attempts were made but did not resolve the issue. "
+                "Analyze what was tried before and try a different approach:\n\n"
+            )
+            for attempt in previous_attempts:
+                prompt += f"### Attempt {attempt.attempt_number}\n"
+                prompt += f"- **Resolution type**: {attempt.resolution_type}\n"
+                prompt += f"- **Summary**: {attempt.summary}\n"
+                prompt += f"- **Result**: {'Success' if attempt.success else 'Failed (CI still failing)'}\n"
+                prompt += f"- **Workflow run**: {attempt.workflow_run_url}\n\n"
+
+        return prompt
 
     @staticmethod
     def error_to_prompt(error: str) -> str:

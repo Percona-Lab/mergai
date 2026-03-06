@@ -816,6 +816,160 @@ class MergeContext:
 
 
 @dataclass
+class CheckAttempt:
+    """Record of a single fix attempt for a CI check.
+
+    Stores information about one attempt to fix a failing CI workflow,
+    including the workflow run URL, resolution type, and outcome.
+
+    Attributes:
+        attempt_number: Sequential number of this attempt (1-based).
+        workflow_run_url: URL to the GitHub workflow run that triggered this fix.
+        resolution_type: How the fix was attempted ('command' or 'agent').
+        summary: Human-readable summary of what was done.
+        success: Whether the fix attempt was successful.
+        timestamp: ISO format timestamp of when the attempt was made.
+    """
+
+    attempt_number: int
+    workflow_run_url: str
+    resolution_type: str  # "command" | "agent"
+    summary: str
+    success: bool = False
+    timestamp: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CheckAttempt":
+        """Create CheckAttempt from dict.
+
+        Args:
+            data: Dictionary with attempt data.
+
+        Returns:
+            CheckAttempt instance.
+        """
+        return cls(
+            attempt_number=data["attempt_number"],
+            workflow_run_url=data["workflow_run_url"],
+            resolution_type=data["resolution_type"],
+            summary=data["summary"],
+            success=data.get("success", False),
+            timestamp=data.get("timestamp", ""),
+        )
+
+    def to_dict(self) -> dict:
+        """Serialize to dict for storage.
+
+        Returns:
+            Dictionary suitable for JSON serialization.
+        """
+        return {
+            "attempt_number": self.attempt_number,
+            "workflow_run_url": self.workflow_run_url,
+            "resolution_type": self.resolution_type,
+            "summary": self.summary,
+            "success": self.success,
+            "timestamp": self.timestamp,
+        }
+
+
+@dataclass
+class CheckContext:
+    """Context for CI check handling.
+
+    Tracks the state of fixing a failing CI workflow, including all
+    previous attempts and the current run URL.
+
+    Attributes:
+        workflow_name: Name of the workflow (must match GitHub workflow name).
+        current_run_url: URL to the latest failing workflow run.
+        attempts: List of previous fix attempts.
+        resolved: Whether the check has been successfully resolved.
+    """
+
+    workflow_name: str
+    current_run_url: str
+    attempts: list[CheckAttempt] = field(default_factory=list)
+    resolved: bool = False
+
+    @property
+    def attempt_count(self) -> int:
+        """Get the number of fix attempts made."""
+        return len(self.attempts)
+
+    @property
+    def last_attempt(self) -> CheckAttempt | None:
+        """Get the most recent fix attempt, or None if no attempts."""
+        return self.attempts[-1] if self.attempts else None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "CheckContext":
+        """Create CheckContext from dict.
+
+        Args:
+            data: Dictionary with check context data.
+
+        Returns:
+            CheckContext instance.
+        """
+        attempts_data = data.get("attempts", [])
+        attempts = [CheckAttempt.from_dict(a) for a in attempts_data]
+
+        return cls(
+            workflow_name=data["workflow_name"],
+            current_run_url=data["current_run_url"],
+            attempts=attempts,
+            resolved=data.get("resolved", False),
+        )
+
+    def to_dict(self) -> dict:
+        """Serialize to dict for storage.
+
+        Returns:
+            Dictionary suitable for JSON serialization.
+        """
+        result: dict[str, Any] = {
+            "workflow_name": self.workflow_name,
+            "current_run_url": self.current_run_url,
+            "attempts": [a.to_dict() for a in self.attempts],
+        }
+        if self.resolved:
+            result["resolved"] = self.resolved
+        return result
+
+    def add_attempt(
+        self,
+        workflow_run_url: str,
+        resolution_type: str,
+        summary: str,
+        success: bool = False,
+    ) -> CheckAttempt:
+        """Add a new fix attempt.
+
+        Args:
+            workflow_run_url: URL to the workflow run being fixed.
+            resolution_type: Type of resolution ('command' or 'agent').
+            summary: Summary of what was done.
+            success: Whether the attempt was successful.
+
+        Returns:
+            The newly created CheckAttempt.
+        """
+        from datetime import datetime
+
+        attempt = CheckAttempt(
+            attempt_number=len(self.attempts) + 1,
+            workflow_run_url=workflow_run_url,
+            resolution_type=resolution_type,
+            summary=summary,
+            success=success,
+            timestamp=datetime.utcnow().isoformat() + "Z",
+        )
+        self.attempts.append(attempt)
+        return attempt
+
+
+@dataclass
 class MergaiNote:
     """A MergAI note containing merge information and optional context data.
 
@@ -832,6 +986,7 @@ class MergaiNote:
         user_comment: Optional user-provided comment.
         merge_description: Optional AI-generated merge description.
         note_index: Optional index tracking which commits have which fields.
+        check_contexts: Optional dict mapping workflow names to CheckContext.
     """
 
     merge_info: MergeInfo
@@ -843,6 +998,7 @@ class MergaiNote:
     user_comment: dict | None = None  # Dict with user, email, date, body
     merge_description: dict | None = None
     note_index: list[dict] | None = None
+    check_contexts: dict[str, CheckContext] | None = None  # keyed by workflow name
 
     # Cached repo reference (not serialized)
     _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
@@ -866,6 +1022,15 @@ class MergaiNote:
         if "mergai_version" not in data:
             raise ValueError("Note missing required field 'mergai_version'")
 
+        # Parse check_contexts if present
+        check_contexts_data = data.get("check_contexts")
+        check_contexts = None
+        if check_contexts_data:
+            check_contexts = {
+                name: CheckContext.from_dict(ctx_data)
+                for name, ctx_data in check_contexts_data.items()
+            }
+
         note = cls(
             merge_info=MergeInfo.from_dict(data["merge_info"], repo),
             mergai_version=data["mergai_version"],
@@ -884,6 +1049,7 @@ class MergaiNote:
             user_comment=data.get("user_comment"),
             merge_description=data.get("merge_description"),
             note_index=data.get("note_index"),
+            check_contexts=check_contexts,
             _repo=repo,
         )
         return note
@@ -974,6 +1140,33 @@ class MergaiNote:
             if "user_comment" in git_note and "user_comment" not in combined:
                 combined["user_comment"] = git_note["user_comment"]
 
+            # check_contexts - merge all contexts, combining attempts
+            if "check_contexts" in git_note:
+                if "check_contexts" not in combined:
+                    combined["check_contexts"] = {}
+                for workflow_name, ctx_data in git_note["check_contexts"].items():
+                    if workflow_name not in combined["check_contexts"]:
+                        combined["check_contexts"][workflow_name] = ctx_data
+                    else:
+                        # Merge attempts from multiple commits for same workflow
+                        existing = combined["check_contexts"][workflow_name]
+                        existing_attempts = existing.get("attempts", [])
+                        new_attempts = ctx_data.get("attempts", [])
+                        # Add new attempts that aren't already present (by attempt_number)
+                        existing_nums = {a["attempt_number"] for a in existing_attempts}
+                        for attempt in new_attempts:
+                            if attempt["attempt_number"] not in existing_nums:
+                                existing_attempts.append(attempt)
+                        existing["attempts"] = existing_attempts
+                        # Update current_run_url to the most recent
+                        existing["current_run_url"] = ctx_data.get(
+                            "current_run_url", existing.get("current_run_url", "")
+                        )
+                        # Update resolved status
+                        existing["resolved"] = ctx_data.get(
+                            "resolved", existing.get("resolved", False)
+                        )
+
         # Cast the result since from_dict returns MergaiNote, but cls is type[T]
         # where T is bound to MergaiNote
         note = cls.from_dict(combined, repo)
@@ -1015,6 +1208,11 @@ class MergaiNote:
     def has_note_index(self) -> bool:
         """Check if note_index is present."""
         return self.note_index is not None and len(self.note_index) > 0
+
+    @property
+    def has_check_contexts(self) -> bool:
+        """Check if check_contexts is present."""
+        return self.check_contexts is not None and len(self.check_contexts) > 0
 
     # --- Repo Binding ---
 
@@ -1157,6 +1355,42 @@ class MergaiNote:
         self.note_index.append({"sha": sha, "fields": fields})
         return self
 
+    def get_check_context(self, workflow_name: str) -> CheckContext | None:
+        """Get check context for a workflow.
+
+        Args:
+            workflow_name: Name of the workflow.
+
+        Returns:
+            CheckContext if found, None otherwise.
+        """
+        if self.check_contexts is None:
+            return None
+        return self.check_contexts.get(workflow_name)
+
+    def set_check_context(self, context: CheckContext) -> "MergaiNote":
+        """Set or update check context for a workflow.
+
+        Args:
+            context: CheckContext to set.
+
+        Returns:
+            Self for method chaining.
+        """
+        if self.check_contexts is None:
+            self.check_contexts = {}
+        self.check_contexts[context.workflow_name] = context
+        return self
+
+    def clear_check_contexts(self) -> "MergaiNote":
+        """Clear all check contexts.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.check_contexts = None
+        return self
+
     def clear_note_index(self) -> "MergaiNote":
         """Clear the note_index.
 
@@ -1201,6 +1435,10 @@ class MergaiNote:
 
         if self.has_user_comment:
             all_fields.append("user_comment")
+
+        if self.has_check_contexts and self.check_contexts is not None:
+            for workflow_name in self.check_contexts:
+                all_fields.append(f"check_contexts[{workflow_name}]")
 
         if all_fields:
             self.note_index = [{"sha": commit_sha, "fields": all_fields}]
@@ -1408,4 +1646,8 @@ class MergaiNote:
             result["merge_description"] = self.merge_description
         if self.note_index:
             result["note_index"] = self.note_index
+        if self.check_contexts:
+            result["check_contexts"] = {
+                name: ctx.to_dict() for name, ctx in self.check_contexts.items()
+            }
         return result

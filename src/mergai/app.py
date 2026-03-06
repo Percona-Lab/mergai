@@ -381,6 +381,22 @@ class AppContext:
                 selective_note["user_comment"] = self.note.user_comment
             elif field == "merge_description" and self.note.has_merge_description:
                 selective_note["merge_description"] = self.note.merge_description
+            else:
+                # Handle check_contexts[workflow_name] format
+                check_match = re.match(r"check_contexts\[(.+)\]", field)
+                if check_match:
+                    workflow_name = check_match.group(1)
+                    if (
+                        self.note.has_check_contexts
+                        and self.note.check_contexts is not None
+                        and workflow_name in self.note.check_contexts
+                    ):
+                        # Store the single check context
+                        if "check_contexts" not in selective_note:
+                            selective_note["check_contexts"] = {}
+                        selective_note["check_contexts"][workflow_name] = (
+                            self.note.check_contexts[workflow_name].to_dict()
+                        )
 
         # Write selective note to temp file and attach as git note
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
