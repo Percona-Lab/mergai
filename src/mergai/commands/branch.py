@@ -42,7 +42,7 @@ PUSH_ALL_BRANCH_TYPES = COMMON_BRANCH_TYPES
 SWITCH_BRANCH_TYPES = COMMON_BRANCH_TYPES + [BranchType.TARGET.value]
 
 # Valid token names for the info command
-TOKEN_NAMES = ["target_branch", "target_branch_sha", "merge_commit_sha", "type"]
+TOKEN_NAMES = ["target_branch", "merge_commit_sha", "type"]
 
 
 @click.group()
@@ -68,7 +68,7 @@ def branch():
     - switch
 
     Branch names are generated using the format from .mergai/config.yml:
-    branch.name_format (default: "mergai/%(target_branch)-%(merge_commit_short_sha)-%(target_branch_short_sha)/%(type)")
+    branch.name_format (default: "mergai/%(target_branch)-%(merge_commit_short_sha)/%(type)")
     """
     pass
 

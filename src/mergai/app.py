@@ -1,4 +1,3 @@
-import contextlib
 import json
 import logging
 import tempfile
@@ -120,8 +119,10 @@ class AppContext:
                 f"Invalid branch name format in config: {e}\n\n"
                 f"The format string must contain:\n"
                 f"  - %(target_branch)\n"
-                f"  - Either %(merge_commit_sha) or %(merge_commit_short_sha)\n"
-                f"  - Either %(target_branch_sha) or %(target_branch_short_sha)\n\n"
+                f"  - Either %(merge_commit_sha) or %(merge_commit_short_sha)\n\n"
+                f"Optional tokens:\n"
+                f"  - %(target_branch_sha) or %(target_branch_short_sha)\n"
+                f"  - %(type)\n\n"
                 f"Current format: {self.config.branch.name_format}"
             ) from e
 
@@ -1006,15 +1007,14 @@ class AppContext:
                                   or cannot determine scan range.
         """
         current_branch = git_utils.get_current_branch(self.repo)
-        parsed = BranchNameBuilder.parse_branch_name_with_config(
+        # Parse branch name to validate we're on a mergai branch (may be useful for
+        # future enhancements), but target_branch_sha is not included in branch names,
+        # so we rely on finding it from merge_info in git notes (see below)
+        BranchNameBuilder.parse_branch_name_with_config(
             current_branch, self.config.branch
         )
 
         target_sha = None
-        if parsed:
-            # Mergai branch - we know the target SHA
-            with contextlib.suppress(Exception):
-                target_sha = self.repo.commit(parsed.target_branch_sha).hexsha
 
         # Collect commits and their notes
         commits_with_notes = []

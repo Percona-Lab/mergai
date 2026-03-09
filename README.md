@@ -76,7 +76,7 @@ resolve:
   max_attempts: 3
 
 branch:
-  name_format: "mergai/%(target_branch)-%(target_branch_short_sha)-%(merge_commit_short_sha)/%(type)"
+  name_format: "mergai/%(target_branch)-%(merge_commit_short_sha)/%(type)"
 
 commit:
   footer: "Note: commit created by mergai"
@@ -132,15 +132,13 @@ The `branch.name_format` setting controls how mergai names branches. Available t
 | Token | Description | Required |
 |-------|-------------|----------|
 | `%(target_branch)` | Target branch name | yes |
-| `%(target_branch_sha)` | Full SHA of target branch (40 chars) | one of these |
-| `%(target_branch_short_sha)` | Short SHA of target branch (11 chars) | one of these |
 | `%(merge_commit_sha)` | Full SHA of merge commit (40 chars) | one of these |
 | `%(merge_commit_short_sha)` | Short SHA of merge commit (11 chars) | one of these |
 | `%(type)` | Branch type: `main`, `conflict`, or `solution` | no |
 
-The format must contain `%(target_branch)`, at least one of the target branch SHA tokens, and at least one of the merge commit SHA tokens.
+The format must contain `%(target_branch)` and at least one of the merge commit SHA tokens.
 
-Example: `mergai/%(target_branch)-%(target_branch_short_sha)-%(merge_commit_short_sha)/%(type)` produces `mergai/release-8.0-abc12345678-def98765432/solution`.
+Example: `mergai/%(target_branch)-%(merge_commit_short_sha)/%(type)` produces `mergai/release-8.0-def98765432/solution`.
 
 ### Merge Configuration
 
