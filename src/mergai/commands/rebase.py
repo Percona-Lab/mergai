@@ -7,10 +7,16 @@ a new base commit while preserving:
 - The note.json local state
 
 After rebasing, merge_info.target_branch_sha is updated to reflect the new base.
+
+Additionally, this module supports auto-resolution of conflicts during rebase
+by extracting resolved file content from previous solution commits and applying
+them automatically when the same conflict is encountered.
 """
 
 import json
-from dataclasses import dataclass
+import os
+import re
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import click
@@ -34,6 +40,13 @@ class RebaseCommitInfo:
     has_marker_note: bool
     mergai_note_content: str | None  # Raw JSON string
     marker_note_content: str | None  # Raw text
+
+    # Auto-resolution tracking (populated by _link_merges_to_solutions)
+    conflict_files: list[str] | None = None  # Files that had conflicts
+    solution_commit_sha: str | None = None  # Commit that resolved this merge
+    resolved_files: list[str] = field(
+        default_factory=list
+    )  # Files actually resolved (not unresolved)
 
 
 def _get_rebase_state_path(app: AppContext) -> Path:
@@ -138,7 +151,157 @@ def _collect_commits_info(app: AppContext, base_sha: str) -> list[RebaseCommitIn
 
     # Reverse to get oldest first
     commits_info.reverse()
+
+    # Link merge commits to their solution commits for auto-resolution
+    commits_info = _link_merges_to_solutions(commits_info)
+
     return commits_info
+
+
+def _link_merges_to_solutions(
+    commits_info: list[RebaseCommitInfo],
+) -> list[RebaseCommitInfo]:
+    """Link each merge commit with conflicts to its corresponding solution commit.
+
+    Parses mergai notes to find conflict_context and note_index, then links
+    each merge commit to the solution commit that resolved its conflicts.
+
+    Args:
+        commits_info: List of RebaseCommitInfo with raw note content.
+
+    Returns:
+        Updated list with conflict_files, solution_commit_sha, and resolved_files populated.
+    """
+    # First pass: extract conflict_files from notes with conflict_context
+    # and build a map of solution commit SHAs to their resolved files
+    solution_data: dict[str, dict] = {}  # solution_sha -> {resolved_files, ...}
+
+    for info in commits_info:
+        if not info.mergai_note_content:
+            continue
+
+        try:
+            note_dict = json.loads(info.mergai_note_content)
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+        # Extract conflict_context if present
+        if "conflict_context" in note_dict:
+            cc = note_dict["conflict_context"]
+            info.conflict_files = cc.get("files", [])
+
+        # Extract solutions and note_index to find solution commits
+        solutions = note_dict.get("solutions", [])
+        note_index = note_dict.get("note_index", [])
+
+        # Build map from note_index: find which commit has which solution
+        for entry in note_index:
+            entry_sha = entry.get("sha")
+            entry_fields = entry.get("fields", [])
+
+            for field_name in entry_fields:
+                # Match "solutions[N]" pattern
+                match = re.match(r"solutions\[(\d+)\]", field_name)
+                if match:
+                    solution_idx = int(match.group(1))
+                    if solution_idx < len(solutions):
+                        solution = solutions[solution_idx]
+                        response = solution.get("response", {})
+                        resolved = response.get("resolved", {})
+                        unresolved = response.get("unresolved", {})
+
+                        solution_data[entry_sha] = {
+                            "resolved_files": list(resolved.keys()),
+                            "unresolved_files": list(unresolved.keys()),
+                        }
+
+    # Second pass: for each merge commit with conflicts, find the solution commit
+    # The solution can be either:
+    # 1. On the same commit (inline resolution - conflict_context and solutions[N] on same commit)
+    # 2. On a subsequent commit (separate solution commit)
+    for i, info in enumerate(commits_info):
+        if not info.conflict_files:
+            continue
+
+        # First, check if the solution is on the same commit (inline resolution)
+        if info.sha in solution_data:
+            data = solution_data[info.sha]
+            resolved_from_conflict = [
+                f for f in data["resolved_files"] if f in info.conflict_files
+            ]
+            if resolved_from_conflict:
+                info.solution_commit_sha = info.sha
+                info.resolved_files = resolved_from_conflict
+                continue  # Found inline solution, no need to look further
+
+        # Otherwise, look for a solution commit after this merge commit
+        # (commits_info is ordered oldest to newest)
+        for j in range(i + 1, len(commits_info)):
+            candidate = commits_info[j]
+            if candidate.sha in solution_data:
+                data = solution_data[candidate.sha]
+                # Check if this solution resolves files from our conflict
+                resolved_from_conflict = [
+                    f for f in data["resolved_files"] if f in info.conflict_files
+                ]
+                if resolved_from_conflict:
+                    info.solution_commit_sha = candidate.sha
+                    info.resolved_files = resolved_from_conflict
+                    break
+
+    return commits_info
+
+
+def _build_resolution_lookup(
+    commits_info: list[RebaseCommitInfo],
+) -> dict[str, dict]:
+    """Build lookup from (message_key, file_path) to resolution info.
+
+    Creates a serializable lookup structure that maps conflicting files
+    to their resolution information based on commit message matching.
+
+    The key is a tuple-like string: "message_firstline|file_path"
+
+    Args:
+        commits_info: List of RebaseCommitInfo with linked solution data.
+
+    Returns:
+        Dict mapping lookup_key -> FileResolutionInfo as dict.
+    """
+    lookup: dict[str, dict] = {}
+
+    for info in commits_info:
+        if not info.solution_commit_sha or not info.resolved_files:
+            continue
+
+        # Use first line of message for matching (more reliable during rebase)
+        message_firstline = info.message.split("\n")[0].strip()
+
+        for file_path in info.resolved_files:
+            # Create a lookup key that combines message and file path
+            lookup_key = _make_resolution_key(message_firstline, file_path)
+
+            lookup[lookup_key] = {
+                "original_merge_sha": info.sha,
+                "original_merge_message": message_firstline,
+                "solution_commit_sha": info.solution_commit_sha,
+                "file_path": file_path,
+            }
+
+    return lookup
+
+
+def _make_resolution_key(message_firstline: str, file_path: str) -> str:
+    """Create a lookup key for resolution matching.
+
+    Args:
+        message_firstline: First line of the commit message.
+        file_path: Path to the conflicting file.
+
+    Returns:
+        A string key for the resolution lookup.
+    """
+    return f"{message_firstline}|{file_path}"
 
 
 def _build_commit_mapping(
@@ -251,7 +414,6 @@ def _transfer_notes(
     Returns:
         Tuple of (notes_transferred, notes_failed).
     """
-    import os
     import tempfile
 
     notes_transferred = 0
@@ -355,6 +517,10 @@ def _serialize_commits_info(commits_info: list[RebaseCommitInfo]) -> list[dict]:
             "has_marker_note": info.has_marker_note,
             "mergai_note_content": info.mergai_note_content,
             "marker_note_content": info.marker_note_content,
+            # Auto-resolution fields
+            "conflict_files": info.conflict_files,
+            "solution_commit_sha": info.solution_commit_sha,
+            "resolved_files": info.resolved_files,
         }
         for info in commits_info
     ]
@@ -371,9 +537,231 @@ def _deserialize_commits_info(data: list[dict]) -> list[RebaseCommitInfo]:
             has_marker_note=item["has_marker_note"],
             mergai_note_content=item.get("mergai_note_content"),
             marker_note_content=item.get("marker_note_content"),
+            # Auto-resolution fields
+            conflict_files=item.get("conflict_files"),
+            solution_commit_sha=item.get("solution_commit_sha"),
+            resolved_files=item.get("resolved_files", []),
         )
         for item in data
     ]
+
+
+# =============================================================================
+# Auto-Resolution Functions
+# =============================================================================
+
+
+def _get_rebase_commit_message(app: AppContext) -> str | None:
+    """Get the commit message of the commit currently being rebased.
+
+    Reads from .git/rebase-merge/message to get the commit message
+    that git is currently trying to apply.
+
+    Args:
+        app: AppContext instance.
+
+    Returns:
+        The commit message (first line) or None if not in rebase or can't read.
+    """
+    git_dir = Path(app.repo.git_dir)
+    rebase_merge_dir = git_dir / "rebase-merge"
+
+    if not rebase_merge_dir.exists():
+        return None
+
+    # Try to read the message file
+    message_file = rebase_merge_dir / "message"
+    if message_file.exists():
+        try:
+            content = message_file.read_text(encoding="utf-8", errors="replace")
+            # Return first line only (for matching)
+            return content.split("\n")[0].strip()
+        except Exception:
+            pass
+
+    return None
+
+
+def _content_has_conflict_markers(content: str) -> bool:
+    """Check if content contains git conflict markers.
+
+    Args:
+        content: File content to check.
+
+    Returns:
+        True if conflict markers are found.
+    """
+    has_start = bool(re.search(r"^<{7}", content, re.MULTILINE))
+    has_end = bool(re.search(r"^>{7}", content, re.MULTILINE))
+    return has_start and has_end
+
+
+def _apply_file_resolution(
+    app: AppContext,
+    file_path: str,
+    resolution: dict,
+) -> bool:
+    """Apply a previous resolution to a conflicting file.
+
+    Extracts the resolved file content from the solution commit and
+    writes it to the working directory, then stages it.
+
+    Args:
+        app: AppContext instance.
+        file_path: Path to the conflicting file.
+        resolution: Dict with resolution info (from resolution_lookup).
+
+    Returns:
+        True if successfully applied, False otherwise.
+    """
+    solution_sha = resolution["solution_commit_sha"]
+
+    # Get resolved content from solution commit
+    content = git_utils.get_file_content_at_commit(app.repo, solution_sha, file_path)
+
+    if content is None:
+        return False
+
+    # Verify no conflict markers in the resolved content
+    if _content_has_conflict_markers(content):
+        return False
+
+    # Write to working directory
+    file_full_path = Path(app.repo.working_dir) / file_path
+    file_full_path.parent.mkdir(parents=True, exist_ok=True)
+    file_full_path.write_text(content, encoding="utf-8")
+
+    # Stage the file using git add command directly
+    # (GitPython's index.add() doesn't always clear unmerged entries properly)
+    try:
+        app.repo.git.add(file_path)
+    except Exception:
+        return False
+
+    return True
+
+
+def _try_auto_resolve_conflicts(
+    app: AppContext,
+    state: dict,
+) -> tuple[bool, int, int]:
+    """Attempt to auto-resolve conflicts using previous resolutions.
+
+    Checks the current conflicting files against the resolution lookup
+    and applies any matching resolutions.
+
+    Args:
+        app: AppContext instance.
+        state: Rebase state dict containing resolution_lookup.
+
+    Returns:
+        Tuple of (all_resolved, resolved_count, total_conflict_count).
+    """
+    # Get current conflicting files from git index
+    try:
+        blobs_map = app.repo.index.unmerged_blobs()
+    except Exception:
+        return (False, 0, 0)
+
+    conflict_files = [str(f) for f in blobs_map]
+
+    if not conflict_files:
+        return (True, 0, 0)
+
+    # Get current rebase commit message
+    current_message = _get_rebase_commit_message(app)
+    if not current_message:
+        click.echo("  Could not determine current rebase commit message.")
+        return (False, 0, len(conflict_files))
+
+    # Load resolution lookup from state
+    resolution_lookup = state.get("resolution_lookup", {})
+
+    if not resolution_lookup:
+        return (False, 0, len(conflict_files))
+
+    click.echo(
+        f"  Checking {len(conflict_files)} conflicting file(s) for auto-resolution..."
+    )
+
+    # Try to resolve each file
+    resolved_count = 0
+    for file_path in conflict_files:
+        # Create lookup key (message first line + file path)
+        lookup_key = _make_resolution_key(current_message, file_path)
+
+        if lookup_key in resolution_lookup:
+            resolution = resolution_lookup[lookup_key]
+            if _apply_file_resolution(app, file_path, resolution):
+                resolved_count += 1
+                click.echo(f"    Auto-resolved: {file_path}")
+            else:
+                click.echo(f"    Could not auto-resolve: {file_path}")
+        else:
+            click.echo(f"    No previous resolution for: {file_path}")
+
+    all_resolved = resolved_count == len(conflict_files)
+    return (all_resolved, resolved_count, len(conflict_files))
+
+
+def _handle_rebase_with_auto_resolution(app: AppContext, state: dict) -> None:
+    """Handle rebase conflicts with auto-resolution loop.
+
+    Continues rebasing as long as conflicts can be auto-resolved.
+    Stops when:
+    - Rebase completes successfully
+    - A conflict cannot be fully auto-resolved (some files remain)
+
+    Args:
+        app: AppContext instance.
+        state: Rebase state dict.
+
+    Raises:
+        SystemExit: If conflicts remain that cannot be auto-resolved.
+    """
+    max_iterations = 100  # Safety limit
+
+    for _ in range(max_iterations):
+        # Try auto-resolve current conflicts
+        all_resolved, resolved_count, total_count = _try_auto_resolve_conflicts(
+            app, state
+        )
+
+        if not all_resolved:
+            # Some conflicts remain - stop and prompt user
+            click.echo("")
+            if resolved_count > 0:
+                click.echo(
+                    f"Auto-resolved {resolved_count} of {total_count} conflicting file(s)."
+                )
+            click.echo("Please resolve the remaining conflicts manually, then run:")
+            click.echo("  mergai rebase --continue")
+            click.echo("")
+            click.echo("Or abort with:")
+            click.echo("  mergai rebase --abort")
+            raise SystemExit(1)
+
+        # All conflicts auto-resolved, try to continue
+        if total_count > 0:
+            click.echo(f"  All {total_count} conflict(s) auto-resolved, continuing...")
+            click.echo("")
+
+        try:
+            # Use GIT_EDITOR=true to avoid hanging on merge commit message editing
+            env = os.environ.copy()
+            env["GIT_EDITOR"] = "true"
+            app.repo.git.rebase("--continue", env=env)
+            # Rebase completed successfully
+            return
+        except Exception as e:
+            error_msg = str(e)
+            if "CONFLICT" in error_msg or "could not apply" in error_msg.lower():
+                # Another conflict - loop continues
+                continue
+            else:
+                raise
+
+    raise click.ClickException("Rebase auto-resolution exceeded maximum iterations")
 
 
 @click.command()
@@ -399,12 +787,19 @@ def _deserialize_commits_info(data: list[dict]) -> list[RebaseCommitInfo]:
     default=False,
     help="Abort an in-progress rebase",
 )
+@click.option(
+    "--no-auto-resolve",
+    is_flag=True,
+    default=False,
+    help="Disable automatic resolution of conflicts using previous solutions",
+)
 def rebase(
     app: AppContext,
     onto: str | None,
     dry_run: bool,
     do_continue: bool,
     do_abort: bool,
+    no_auto_resolve: bool,
 ):
     """Rebase the current branch onto a new base commit.
 
@@ -444,6 +839,9 @@ def rebase(
             err=True,
         )
 
+    # Determine if auto-resolution is enabled
+    auto_resolve = not no_auto_resolve
+
     # Handle --abort
     if do_abort:
         _handle_abort(app)
@@ -451,7 +849,7 @@ def rebase(
 
     # Handle --continue
     if do_continue:
-        _handle_continue(app)
+        _handle_continue(app, auto_resolve=auto_resolve)
         return
 
     # Starting a new rebase - ONTO is required
@@ -462,7 +860,7 @@ def rebase(
             "Example: mergai rebase upstream/master"
         )
 
-    _handle_rebase(app, onto, dry_run)
+    _handle_rebase(app, onto, dry_run, auto_resolve=auto_resolve)
 
 
 def _handle_abort(app: AppContext) -> None:
@@ -488,8 +886,13 @@ def _handle_abort(app: AppContext) -> None:
     click.echo("Rebase aborted successfully.")
 
 
-def _handle_continue(app: AppContext) -> None:
-    """Handle the --continue flag."""
+def _handle_continue(app: AppContext, auto_resolve: bool = True) -> None:
+    """Handle the --continue flag.
+
+    Args:
+        app: AppContext instance.
+        auto_resolve: Whether to attempt auto-resolution for subsequent conflicts.
+    """
     if not _rebase_state_exists(app):
         if _is_git_rebase_in_progress(app):
             raise click.ClickException(
@@ -508,17 +911,25 @@ def _handle_continue(app: AppContext) -> None:
     # Check if git rebase is still in progress
     if _is_git_rebase_in_progress(app):
         # Continue the git rebase
+        # Use GIT_EDITOR=true to avoid hanging on merge commit message editing
+        env = os.environ.copy()
+        env["GIT_EDITOR"] = "true"
+
         try:
-            app.repo.git.rebase("--continue")
+            app.repo.git.rebase("--continue", env=env)
         except Exception as e:
             error_msg = str(e)
             if "CONFLICT" in error_msg or "could not apply" in error_msg.lower():
-                click.echo("Conflicts remain. Please resolve them and run:")
-                click.echo("  mergai rebase --continue")
-                click.echo("")
-                click.echo("Or abort with:")
-                click.echo("  mergai rebase --abort")
-                raise SystemExit(1) from e
+                if auto_resolve:
+                    # Try auto-resolution for this new conflict
+                    _handle_rebase_with_auto_resolution(app, state)
+                else:
+                    click.echo("Conflicts remain. Please resolve them and run:")
+                    click.echo("  mergai rebase --continue")
+                    click.echo("")
+                    click.echo("Or abort with:")
+                    click.echo("  mergai rebase --abort")
+                    raise SystemExit(1) from e
             else:
                 raise click.ClickException(f"Git rebase --continue failed: {e}") from e
 
@@ -526,8 +937,17 @@ def _handle_continue(app: AppContext) -> None:
     _finalize_rebase(app, state)
 
 
-def _handle_rebase(app: AppContext, onto: str, dry_run: bool) -> None:
-    """Handle starting a new rebase."""
+def _handle_rebase(
+    app: AppContext, onto: str, dry_run: bool, auto_resolve: bool = True
+) -> None:
+    """Handle starting a new rebase.
+
+    Args:
+        app: AppContext instance.
+        onto: The target commit/branch to rebase onto.
+        dry_run: If True, only show what would happen.
+        auto_resolve: If True, attempt to auto-resolve conflicts using previous solutions.
+    """
     # Check for existing rebase
     if _is_git_rebase_in_progress(app):
         raise click.ClickException(
@@ -604,6 +1024,9 @@ def _handle_rebase(app: AppContext, onto: str, dry_run: bool) -> None:
     click.echo(f"  - {notes_count} commit(s) with mergai notes")
     click.echo("")
 
+    # Build resolution lookup for auto-resolution
+    resolution_lookup = _build_resolution_lookup(commits_info)
+
     # Dry run - show what would happen
     if dry_run:
         click.echo("Dry run - no changes will be made.")
@@ -618,14 +1041,46 @@ def _handle_rebase(app: AppContext, onto: str, dry_run: bool) -> None:
             merge_marker = " (merge)" if info.parent_count > 1 else ""
             note_marker = " [note]" if info.has_mergai_note else ""
             click.echo(f"  {short_sha}{merge_marker}{note_marker} {first_line}")
+
+        # Show auto-resolution info in dry-run
+        if resolution_lookup:
+            click.echo("")
+            click.echo("Auto-resolution available for:")
+            # Group by merge commit
+            from collections import defaultdict
+
+            by_merge: dict[str, list[str]] = defaultdict(list)
+            for _lookup_key, resolution_info in resolution_lookup.items():
+                by_merge[resolution_info["original_merge_sha"]].append(
+                    resolution_info["file_path"]
+                )
+
+            for merge_sha, files in by_merge.items():
+                # Find the commit info for this merge
+                commit_info = next(
+                    (c for c in commits_info if c.sha == merge_sha), None
+                )
+                if commit_info:
+                    msg = commit_info.message.split("\n")[0].strip()[:40]
+                    click.echo(f"  {git_utils.short_sha(merge_sha)}: {msg}")
+                    for f in files:
+                        click.echo(f"    - {f}")
         return
+
+    # Show auto-resolution info
+    if resolution_lookup and auto_resolve:
+        resolvable_files = len(resolution_lookup)
+        click.echo(
+            f"  - {resolvable_files} file(s) with previous resolutions available"
+        )
+        click.echo("")
 
     # Save state before starting rebase
     state = {
         "onto_sha": onto_sha,
         "original_base_sha": current_base_sha,
         "commits": _serialize_commits_info(commits_info),
-        "original_note": app.note.to_dict(),
+        "resolution_lookup": resolution_lookup,
     }
     _save_rebase_state(app, state)
 
@@ -639,16 +1094,22 @@ def _handle_rebase(app: AppContext, onto: str, dry_run: bool) -> None:
     except Exception as e:
         error_msg = str(e)
         if "CONFLICT" in error_msg or "could not apply" in error_msg.lower():
-            click.echo("Rebase stopped due to conflicts.")
-            click.echo("")
-            click.echo(
-                "Please resolve the conflicts, stage the resolved files, then run:"
-            )
-            click.echo("  mergai rebase --continue")
-            click.echo("")
-            click.echo("Or abort the rebase with:")
-            click.echo("  mergai rebase --abort")
-            raise SystemExit(1) from e
+            if auto_resolve and resolution_lookup:
+                # Attempt auto-resolution
+                click.echo("Conflict detected, attempting auto-resolution...")
+                _handle_rebase_with_auto_resolution(app, state)
+            else:
+                # No auto-resolution - prompt user
+                click.echo("Rebase stopped due to conflicts.")
+                click.echo("")
+                click.echo(
+                    "Please resolve the conflicts, stage the resolved files, then run:"
+                )
+                click.echo("  mergai rebase --continue")
+                click.echo("")
+                click.echo("Or abort the rebase with:")
+                click.echo("  mergai rebase --abort")
+                raise SystemExit(1) from e
         else:
             # Unexpected error - clean up state
             _remove_rebase_state(app)
