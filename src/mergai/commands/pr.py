@@ -686,6 +686,7 @@ def update(
         body = _build_main_pr_body(app)
 
     # If PR number is provided, fetch directly by number
+    pr: GithubPullRequest.PullRequest | None = None
     if pr_number is not None:
         try:
             pr = app.gh_repo.get_pull(pr_number)
