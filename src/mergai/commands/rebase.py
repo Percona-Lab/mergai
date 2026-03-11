@@ -210,10 +210,16 @@ def _link_merges_to_solutions(
                         resolved = response.get("resolved", {})
                         unresolved = response.get("unresolved", {})
 
-                        solution_data[entry_sha] = {
-                            "resolved_files": list(resolved.keys()),
-                            "unresolved_files": list(unresolved.keys()),
-                        }
+                        # Merge with existing data for this SHA (don't overwrite)
+                        if entry_sha in solution_data:
+                            existing = solution_data[entry_sha]
+                            existing["resolved_files"].extend(resolved.keys())
+                            existing["unresolved_files"].extend(unresolved.keys())
+                        else:
+                            solution_data[entry_sha] = {
+                                "resolved_files": list(resolved.keys()),
+                                "unresolved_files": list(unresolved.keys()),
+                            }
 
     # Second pass: for each merge commit with conflicts, find the solution commit
     # The solution can be either:
