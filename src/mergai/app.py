@@ -121,7 +121,6 @@ class AppContext:
                 f"  - %(target_branch)\n"
                 f"  - Either %(merge_commit_sha) or %(merge_commit_short_sha)\n\n"
                 f"Optional tokens:\n"
-                f"  - %(target_branch_sha) or %(target_branch_short_sha)\n"
                 f"  - %(type)\n\n"
                 f"Current format: {self.config.branch.name_format}"
             ) from e
@@ -1007,9 +1006,11 @@ class AppContext:
                                   or cannot determine scan range.
         """
         current_branch = git_utils.get_current_branch(self.repo)
-        # Parse branch name to validate we're on a mergai branch (may be useful for
-        # future enhancements), but target_branch_sha is not included in branch names,
-        # so we rely on finding it from merge_info in git notes (see below)
+        # Parse branch name to extract merge info components. Note: this returns
+        # None if the branch doesn't match the expected format, but we don't
+        # validate here because we rely on finding merge_info from git notes.
+        # The target_branch_sha is not included in branch names, so we must
+        # discover it from the git notes (see below).
         BranchNameBuilder.parse_branch_name_with_config(
             current_branch, self.config.branch
         )
@@ -1402,7 +1403,7 @@ class AppContext:
             if modified_count > 0:
                 summary_parts.append(f"{modified_count} modified")
             click.echo(
-                f"  -> Added solution [{solution_idx}]: " f"{', '.join(summary_parts)}"
+                f"  -> Added solution [{solution_idx}]: {', '.join(summary_parts)}"
             )
 
         click.echo(f"\nSuccessfully synced {synced_count} commit(s).")
