@@ -113,7 +113,7 @@ class BranchNameBuilder:
 
         Args:
             name_format: Format string with %(token) placeholders.
-            merge_info: MergeInfo with target_branch and merge_commit_sha.
+            merge_info: MergeInfo with target_branch, target_branch_sha, and merge_commit_sha.
 
         Raises:
             ValueError: If name_format is missing required tokens or uses unsupported tokens.
