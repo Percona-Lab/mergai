@@ -218,12 +218,14 @@ class AppContext:
 
         return create_agent(agent_type, model, yolo=yolo)
 
-    def resolve(self, force: bool, yolo: bool):
+    def resolve(self, force: bool, yolo: bool, agent_desc: str | None = None):
         """Run the AI agent to resolve conflicts.
 
         Args:
             force: If True, overwrite existing uncommitted solution.
             yolo: Enable YOLO mode for the agent.
+            agent_desc: Agent descriptor (e.g., "gemini-cli", "opencode:model").
+                       If None, uses the value from config.resolve.agent.
 
         Raises:
             Exception: If no note found or agent fails.
@@ -239,7 +241,7 @@ class AppContext:
         # Otherwise, we'll append a new solution
 
         prompt = self.prompt_builder.build_resolve_prompt()
-        agent = self.get_agent(yolo=yolo)
+        agent = self.get_agent(agent_desc=agent_desc, yolo=yolo)
 
         executor = AgentExecutor(
             agent=agent,
@@ -267,7 +269,12 @@ class AppContext:
 
         self.save_note(self.note)
 
-    def describe(self, force: bool, max_attempts: int | None = None):
+    def describe(
+        self,
+        force: bool,
+        max_attempts: int | None = None,
+        agent_desc: str | None = None,
+    ):
         """Generate a description of the merge using an AI agent.
 
         This method runs an agent to analyze the merge context and generate
@@ -277,6 +284,8 @@ class AppContext:
         Args:
             force: If True, overwrite existing merge_description.
             max_attempts: Maximum number of retry attempts on validation failure.
+            agent_desc: Agent descriptor (e.g., "gemini-cli", "opencode:model").
+                       If None, uses the value from config.resolve.agent.
 
         Raises:
             Exception: If no note found, merge_description exists (without force),
@@ -296,7 +305,7 @@ class AppContext:
         prompt = self.prompt_builder.build_describe_prompt()
 
         # No YOLO mode for describe - we don't want file modifications
-        agent = self.get_agent(yolo=False)
+        agent = self.get_agent(agent_desc=agent_desc, yolo=False)
 
         # Check repo state before running agent
         was_dirty_before = self.repo.is_dirty(untracked_files=True)

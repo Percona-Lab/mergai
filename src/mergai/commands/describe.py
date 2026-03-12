@@ -12,9 +12,18 @@ from ..app import AppContext
     default=False,
     help="Overwrite existing merge description.",
 )
+@click.option(
+    "--agent",
+    "-a",
+    "agent",
+    type=str,
+    default=None,
+    help="Override the agent:model to use (e.g., 'gemini-cli:gemini-2.5-pro').",
+)
 def describe(
     app: AppContext,
     force: bool,
+    agent: str | None,
 ):
     """Generate a description of the merge based on the note context.
 
@@ -28,7 +37,9 @@ def describe(
     )
     click.echo("")
     try:
-        app.describe(force, max_attempts=app.config.resolve.max_attempts)
+        app.describe(
+            force, max_attempts=app.config.resolve.max_attempts, agent_desc=agent
+        )
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
