@@ -253,7 +253,7 @@ class AppContext:
         try:
             solution = executor.run_with_retry(
                 prompt=prompt,
-                validator=executor.validate_solution_files,
+                validator=executor.create_solution_validator(),
             )
         except AgentExecutionError as e:
             raise Exception(str(e)) from e

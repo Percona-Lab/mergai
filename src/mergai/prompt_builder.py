@@ -156,4 +156,4 @@ class PromptBuilder:
         Returns:
             Formatted prompt string describing the error.
         """
-        return f"An error occurred while trying to process the output: {error}"
+        return f"Error: {error}. Please fix and try again."

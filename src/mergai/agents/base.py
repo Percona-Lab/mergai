@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -11,11 +12,12 @@ class Agent:
     def get_model(self) -> str:
         return self._model
 
-    def run(self, prompt: str) -> "AgentResult":
+    def run(self, prompt: str, response_file: Path | None = None) -> "AgentResult":
         """Run the agent with the given prompt.
 
         Args:
             prompt: The prompt to send to the agent.
+            response_file: Optional path to file where agent should write JSON response.
 
         Returns:
             AgentResult with the result or error.

@@ -77,6 +77,15 @@ class AgentExecutor:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         return f"prompt_{timestamp}.md"
 
+    def _generate_response_filename(self) -> str:
+        """Generate unique response filename with timestamp.
+
+        Returns:
+            Filename string in format: response_YYYYMMDD_HHMMSS_ffffff.json
+        """
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        return f"response_{timestamp}.json"
+
     def _generate_session_filename(self, session_id: str) -> str:
         """Generate session filename.
 
@@ -184,51 +193,68 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If max attempts reached without valid result.
         """
+        # Create response file path in cwd (same location as prompt)
+        response_filename = self._generate_response_filename()
+        response_path = Path.cwd() / response_filename
+
         current_prompt = (
-            f"See @{prompt_path} make sure the output is in specified format"
+            f"Read @{prompt_path} and write your JSON response to @{response_path}"
         )
         error = None
         result = None
 
-        for attempt in range(self.max_attempts):
-            if error is not None:
-                click.echo(
-                    f"Attempt {attempt + 1} failed with error: {error}. Retrying..."
+        try:
+            for attempt in range(self.max_attempts):
+                if error is not None:
+                    click.echo(
+                        f"Attempt {attempt + 1} failed with error: {error}. Retrying..."
+                    )
+
+                if attempt == self.max_attempts - 1:
+                    click.echo("Max attempts reached. Failed to obtain a valid result.")
+                    result = None
+                    break
+
+                # Remove response file before each attempt to ensure fresh response
+                if response_path.exists():
+                    response_path.unlink()
+
+                agent_result = self.agent.run(
+                    current_prompt, response_file=response_path
                 )
-
-            if attempt == self.max_attempts - 1:
-                click.echo("Max attempts reached. Failed to obtain a valid result.")
-                result = None
-                break
-
-            agent_result = self.agent.run(current_prompt)
-            if not agent_result.success():
-                click.echo(f"Agent execution failed: {agent_result.error()}")
-                current_prompt = PromptBuilder.error_to_prompt(
-                    str(agent_result.error())
-                )
-                error = str(agent_result.error())
-                continue
-
-            click.echo("Agent execution succeeded. Checking result...")
-            result = agent_result.result()
-
-            # Run validator if provided
-            if validator is not None and result is not None:
-                validation_error = validator(result)
-                if validation_error is not None:
-                    click.echo(f"Validation failed: {validation_error}")
-                    current_prompt = PromptBuilder.error_to_prompt(validation_error)
-                    error = validation_error
+                if not agent_result.success():
+                    click.echo(f"Agent execution failed: {agent_result.error()}")
+                    current_prompt = PromptBuilder.error_to_prompt(
+                        str(agent_result.error())
+                    )
+                    error = str(agent_result.error())
                     continue
 
-            click.echo("Result verified.")
-            break
+                click.echo("Agent execution succeeded. Checking result...")
+                result = agent_result.result()
 
-        if result is None:
-            raise AgentExecutionError("Failed to obtain a valid result from the agent.")
+                # Run validator if provided
+                if validator is not None and result is not None:
+                    validation_error = validator(result)
+                    if validation_error is not None:
+                        click.echo(f"Validation failed: {validation_error}")
+                        current_prompt = PromptBuilder.error_to_prompt(validation_error)
+                        error = validation_error
+                        continue
 
-        return result  # type: ignore[return-value]
+                click.echo("Result verified.")
+                break
+
+            if result is None:
+                raise AgentExecutionError(
+                    "Failed to obtain a valid result from the agent."
+                )
+
+            return result  # type: ignore[return-value]
+        finally:
+            # Clean up response file
+            if response_path.exists():
+                response_path.unlink()
 
     def validate_solution_files(self, solution: dict) -> str | None:
         """Validate that solution files have been modified in the repo.
@@ -275,6 +301,88 @@ class AgentExecutor:
             return message
 
         return None
+
+    def validate_solution_response_format(self, solution: dict) -> str | None:
+        """Validate that solution response has the correct JSON format.
+
+        Checks for required fields and validates their types:
+        - summary: required, non-empty string
+        - resolved: required, dict with non-empty string values
+        - review_notes: required, non-empty string
+        - unresolved: optional, if present must be dict with non-empty string values
+        - modified: optional, if present must be dict with non-empty string values
+
+        Args:
+            solution: The solution dict from agent, expected structure:
+                     {"response": {...}}
+
+        Returns:
+            None if valid, or an error message string if invalid.
+        """
+        response = solution.get("response", {})
+
+        # Validate 'summary' - required, non-empty string
+        if "summary" not in response:
+            return "Missing required field: 'summary'"
+        if not isinstance(response["summary"], str) or not response["summary"].strip():
+            return "'summary' must be a non-empty string"
+
+        # Validate 'resolved' - required, dict with non-empty string values
+        if "resolved" not in response:
+            return "Missing required field: 'resolved'"
+        if not isinstance(response["resolved"], dict):
+            return "'resolved' must be a dictionary"
+        for file_path, explanation in response["resolved"].items():
+            if not isinstance(explanation, str) or not explanation.strip():
+                return f"'resolved[\"{file_path}\"]' must be a non-empty string explanation"
+
+        # Validate 'review_notes' - required, non-empty string
+        if "review_notes" not in response:
+            return "Missing required field: 'review_notes'"
+        if (
+            not isinstance(response["review_notes"], str)
+            or not response["review_notes"].strip()
+        ):
+            return "'review_notes' must be a non-empty string"
+
+        # Validate 'unresolved' - optional, if present must be dict with non-empty values
+        if "unresolved" in response:
+            if not isinstance(response["unresolved"], dict):
+                return "'unresolved' must be a dictionary"
+            for file_path, reason in response["unresolved"].items():
+                if not isinstance(reason, str) or not reason.strip():
+                    return f"'unresolved[\"{file_path}\"]' must be a non-empty string reason"
+
+        # Validate 'modified' - optional, if present must be dict with non-empty values
+        if "modified" in response:
+            if not isinstance(response["modified"], dict):
+                return "'modified' must be a dictionary"
+            for file_path, explanation in response["modified"].items():
+                if not isinstance(explanation, str) or not explanation.strip():
+                    return f"'modified[\"{file_path}\"]' must be a non-empty string explanation"
+
+        return None
+
+    def create_solution_validator(self) -> Callable[[dict], str | None]:
+        """Create a composite validator for solution operations.
+
+        Combines response format validation and file modification validation.
+        Format validation runs first to catch JSON structure issues early.
+
+        Returns:
+            A validator function suitable for use with run_with_retry.
+        """
+
+        def validator(result: dict) -> str | None:
+            # Validate response format first
+            format_error = self.validate_solution_response_format(result)
+            if format_error:
+                return format_error
+
+            # Then validate files are actually modified
+            return self.validate_solution_files(result)
+
+        return validator
 
     def validate_describe_response(self, response: dict) -> str | None:
         """Validate that describe response has the correct format.
