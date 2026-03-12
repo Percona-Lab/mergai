@@ -19,13 +19,22 @@ from ..app import AppContext
     default=False,
     help="Enable YOLO mode.",
 )
+@click.option(
+    "--agent",
+    "-a",
+    "agent",
+    type=str,
+    default=None,
+    help="Override the agent:model to use (e.g., 'gemini-cli:gemini-2.5-pro').",
+)
 def resolve(
     app: AppContext,
     force: bool,
     yolo: bool,
+    agent: str | None,
 ):
     try:
-        app.resolve(force, yolo)
+        app.resolve(force, yolo, agent_desc=agent)
     except Exception as e:
         click.echo(f"Error: {e}")
         exit(1)
