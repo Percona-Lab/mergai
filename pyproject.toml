@@ -13,7 +13,7 @@ dependencies = [
     "python-dotenv==1.2.1",
     "rich==14.2.0",
     "pygithub==2.8.1",
-    "simpleeval==1.0.3",
+    "simpleeval>=1.0.5,<2",
 ]
 
 [project.scripts]

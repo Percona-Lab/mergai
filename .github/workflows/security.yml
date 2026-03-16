@@ -22,8 +22,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          pip install -e .
-          pip install pip-audit
+          python -m pip install --upgrade pip
+          python -m pip install -e .
+          python -m pip install pip-audit
 
       - name: Run pip-audit
         run: pip-audit --progress-spinner off --skip-editable
