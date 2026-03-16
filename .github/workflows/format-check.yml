@@ -2,6 +2,7 @@ name: Format Check
 
 on:
   push:
+    branches: [master]
   pull_request:
 
 jobs:
