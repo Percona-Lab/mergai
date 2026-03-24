@@ -1,8 +1,12 @@
 from .base import Agent
+from .claude_cli import ClaudeCLIAgent
 from .gemini_cli import GeminiCLIAgent
 from .opencode_cli import OpenCodeCLIAgent
 
-REGISTRY: dict[str, type[GeminiCLIAgent] | type[OpenCodeCLIAgent]] = {
+REGISTRY: dict[
+    str, type[ClaudeCLIAgent] | type[GeminiCLIAgent] | type[OpenCodeCLIAgent]
+] = {
+    "claude-cli": ClaudeCLIAgent,
     "gemini-cli": GeminiCLIAgent,
     "opencode-cli": OpenCodeCLIAgent,
 }
