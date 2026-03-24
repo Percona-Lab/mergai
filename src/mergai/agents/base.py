@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -11,11 +12,19 @@ class Agent:
     def get_model(self) -> str:
         return self._model
 
-    def run(self, prompt: str) -> "AgentResult":
+    def run(
+        self,
+        prompt: str,
+        response_file: Path | None = None,
+        allowed_write_paths: list[Path] | None = None,
+    ) -> "AgentResult":
         """Run the agent with the given prompt.
 
         Args:
             prompt: The prompt to send to the agent.
+            response_file: Optional path to file where agent should write JSON response.
+            allowed_write_paths: Optional list of paths the agent is allowed to write to.
+                Used to grant specific write permissions without enabling full yolo mode.
 
         Returns:
             AgentResult with the result or error.

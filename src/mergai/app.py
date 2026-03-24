@@ -304,7 +304,9 @@ class AppContext:
 
         prompt = self.prompt_builder.build_describe_prompt()
 
-        # No YOLO mode for describe - we don't want file modifications
+        # No yolo mode for describe - agents are granted specific write permissions
+        # for the response file only via allowed_write_paths in agent_executor.
+        # The validator ensures no repo files are modified.
         agent = self.get_agent(agent_desc=agent_desc, yolo=False)
 
         # Check repo state before running agent

@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import subprocess
 from pathlib import Path
 
@@ -8,47 +7,10 @@ import click
 
 from .base import CliAgent
 from .error import AgentError, AgentErrorType, AgentResult
-
-JSON_BLOCK_RE = re.compile(
-    r"```json\s*\n(.*?)\n```",
-    re.DOTALL | re.IGNORECASE,
-)
-
-
-# Extracts the content of the first ```json ... ``` block.
-# Returns the JSON string or None if not found.
-def extract_json_block(text: str) -> str | None:
-    match = JSON_BLOCK_RE.search(text)
-    if not match:
-        return None
-    return match.group(1).strip()
-
-
-def fix_response_json(result_json: dict) -> dict:
-    if "response" not in result_json:
-        raise AgentError(
-            AgentErrorType.PARSING_RESULT, "invalid response: 'response' field missing"
-        )
-
-    response = result_json["response"]
-
-    extracted = extract_json_block(response)
-    if extracted is not None:
-        response = extracted
-
-    try:
-        response_json = json.loads(response)
-        result_json["response"] = response_json
-    except json.JSONDecodeError as e:
-        raise AgentError(
-            AgentErrorType.PARSING_RESULT, f"JSON decode error: {e}"
-        ) from e
-
-    return result_json
+from .response_utils import parse_response_json
 
 
 class GeminiCLIAgent(CliAgent):
-
     def __init__(self, model: str, yolo: bool, debug: bool = False):
         super().__init__(model)
         self.session_id: str | None = None
@@ -177,26 +139,79 @@ class GeminiCLIAgent(CliAgent):
 
         return result
 
-    def run(self, prompt: str) -> AgentResult:
+    def run(
+        self,
+        prompt: str,
+        response_file: Path | None = None,
+        allowed_write_paths: list[Path] | None = None,  # noqa: ARG002
+    ) -> AgentResult:
+        # Note: allowed_write_paths is accepted for interface compatibility but not used.
+        # Gemini CLI's auto_edit mode already auto-approves file edits.
         if not prompt or prompt.strip() == "":
             raise ValueError("Prompt cannot be empty")
 
         click.echo(f"Running Gemini CLI agent with prompt:\n{prompt}")
 
         try:
-            response = self.run_prompt(prompt)
+            result = self.run_prompt(prompt)
         except AgentError as e:
             click.echo(f"Agent execution error: {e}")
             return AgentResult(error=e)
 
+        # If response_file is provided, try reading from file first
+        if response_file is not None:
+            if response_file.exists():
+                try:
+                    response_text = response_file.read_text()
+                    response_json = json.loads(response_text)
+                    result["response"] = response_json
+                except json.JSONDecodeError as e:
+                    # Fallback to parsing from stdout if JSON in file is invalid
+                    click.echo(
+                        f"Warning: Invalid JSON in response file ({e}), "
+                        "falling back to stdout parsing..."
+                    )
+                    try:
+                        result = parse_response_json(result)
+                    except AgentError:
+                        # If legacy parsing also fails, return the original JSON error
+                        return AgentResult(
+                            error=AgentError(
+                                AgentErrorType.PARSING_RESULT,
+                                f"Invalid JSON in response file: {e}",
+                            )
+                        )
+            else:
+                # Fallback to parsing from stdout if file is missing
+                click.echo(
+                    "Warning: Response file not found, falling back to stdout parsing..."
+                )
+                try:
+                    result = parse_response_json(result)
+                except AgentError as e:
+                    # If legacy parsing also fails, surface the parsing error
+                    click.echo(
+                        "Error parsing Gemini CLI response after file was not found"
+                    )
+                    click.echo("--- Start of Gemini CLI response ---")
+                    click.echo(f"{result}")
+                    click.echo("--- End of Gemini CLI response ---")
+                    return AgentResult(error=e)
+        else:
+            # No response file provided - parse from stdout (legacy behavior)
+            try:
+                result = parse_response_json(result)
+            except AgentError as e:
+                click.echo("Error parsing Gemini CLI response")
+                click.echo("--- Start of Gemini CLI response ---")
+                click.echo(f"{result}")
+                click.echo("--- End of Gemini CLI response ---")
+                return AgentResult(error=e)
+
         try:
-            result = fix_response_json(response)
             version = self.get_version()
         except AgentError as e:
-            click.echo("Error parsing Gemini CLI response")
-            click.echo("--- Start of Gemini CLI response ---")
-            click.echo(f"{response}")
-            click.echo("--- End of Gemini CLI response ---")
+            click.echo(f"Error getting version: {e}")
             return AgentResult(error=e)
 
         result["agent_info"] = {

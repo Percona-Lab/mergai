@@ -13,7 +13,6 @@ import click
 import git
 
 from .agents.base import Agent
-from .prompt_builder import PromptBuilder
 
 
 class AgentExecutionError(Exception):
@@ -77,6 +76,15 @@ class AgentExecutor:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         return f"prompt_{timestamp}.md"
 
+    def _generate_response_filename(self) -> str:
+        """Generate unique response filename with timestamp.
+
+        Returns:
+            Filename string in format: response_YYYYMMDD_HHMMSS_ffffff.json
+        """
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        return f"response_{timestamp}.json"
+
     def _generate_session_filename(self, session_id: str) -> str:
         """Generate session filename.
 
@@ -137,10 +145,10 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If max attempts reached without valid result.
         """
-        # Generate unique filename and write prompt to cwd (not state_dir)
-        # so the agent can access it (state_dir may be ignored by agent)
+        # Generate unique filename and write prompt to state_dir
+        # state_dir is typically .cache/mergai which is gitignored
         prompt_filename = self._generate_prompt_filename()
-        prompt_path = Path.cwd() / prompt_filename
+        prompt_path = self.state_dir / prompt_filename
         prompt_path.write_text(prompt)
 
         success = False
@@ -149,15 +157,11 @@ class AgentExecutor:
             success = True
             return result
         except AgentExecutionError:
-            # Move prompt file to state_dir for preservation
-            final_prompt_path = self.state_dir / prompt_filename
-            prompt_path.rename(final_prompt_path)
-
             # Save session data on failure
             session_path = self._save_session_on_failure()
 
-            # Log file locations
-            click.echo(f"Prompt file kept at: {final_prompt_path}")
+            # Log file locations (prompt is already in state_dir)
+            click.echo(f"Prompt file kept at: {prompt_path}")
             if session_path:
                 click.echo(f"Session file saved at: {session_path}")
 
@@ -184,51 +188,83 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If max attempts reached without valid result.
         """
-        current_prompt = (
-            f"See @{prompt_path} make sure the output is in specified format"
+        # Create response file path in state_dir (same location as prompt)
+        # state_dir is typically .cache/mergai which is gitignored
+        response_filename = self._generate_response_filename()
+        response_path = self.state_dir / response_filename
+
+        # Base prompt with file instructions - preserved across retries
+        base_prompt = (
+            f"Read @{prompt_path} and write your JSON response to @{response_path}"
         )
-        error = None
+        current_prompt = base_prompt
         result = None
 
-        for attempt in range(self.max_attempts):
-            if error is not None:
-                click.echo(
-                    f"Attempt {attempt + 1} failed with error: {error}. Retrying..."
+        try:
+            for attempt in range(self.max_attempts):
+                click.echo(f"Attempt {attempt + 1} of {self.max_attempts}...")
+
+                # Remove response file before each attempt to ensure fresh response
+                if response_path.exists():
+                    response_path.unlink()
+
+                agent_result = self.agent.run(
+                    current_prompt,
+                    response_file=response_path,
+                    allowed_write_paths=[response_path],
                 )
-
-            if attempt == self.max_attempts - 1:
-                click.echo("Max attempts reached. Failed to obtain a valid result.")
-                result = None
-                break
-
-            agent_result = self.agent.run(current_prompt)
-            if not agent_result.success():
-                click.echo(f"Agent execution failed: {agent_result.error()}")
-                current_prompt = PromptBuilder.error_to_prompt(
-                    str(agent_result.error())
-                )
-                error = str(agent_result.error())
-                continue
-
-            click.echo("Agent execution succeeded. Checking result...")
-            result = agent_result.result()
-
-            # Run validator if provided
-            if validator is not None and result is not None:
-                validation_error = validator(result)
-                if validation_error is not None:
-                    click.echo(f"Validation failed: {validation_error}")
-                    current_prompt = PromptBuilder.error_to_prompt(validation_error)
-                    error = validation_error
+                if not agent_result.success():
+                    error_msg = str(agent_result.error())
+                    click.echo(f"Agent execution failed: {error_msg}")
+                    # Preserve file instructions and append error context for retry
+                    current_prompt = (
+                        f"{base_prompt}\n\n"
+                        f"Previous attempt failed with error:\n{error_msg}\n\n"
+                        "Please fix the issue and try again."
+                    )
                     continue
 
-            click.echo("Result verified.")
-            break
+                click.echo("Agent execution succeeded. Checking result...")
+                result = agent_result.result()
 
-        if result is None:
+                # Clean up response file before validation to avoid false positives
+                # in validators that check for file modifications (e.g., describe)
+                if response_path.exists():
+                    response_path.unlink()
+
+                # Run validator if provided
+                if validator is not None and result is not None:
+                    validation_error = validator(result)
+                    if validation_error is not None:
+                        click.echo(f"Validation failed: {validation_error}")
+                        # Check if validation failed due to file modifications
+                        # In this case, retrying won't help since the repo is now dirty
+                        if "Files were modified" in validation_error:
+                            click.echo(
+                                "Error: Agent modified files when it should not have. "
+                                "Failing immediately as retries would continue to fail."
+                            )
+                            raise AgentExecutionError(
+                                f"Validation failed: {validation_error}"
+                            )
+                        # Preserve file instructions and append validation error for retry
+                        current_prompt = (
+                            f"{base_prompt}\n\n"
+                            f"Previous attempt failed validation:\n{validation_error}\n\n"
+                            "Please fix the issue and try again."
+                        )
+                        continue
+
+                click.echo("Result verified.")
+                return result  # type: ignore[return-value]
+
+            # All attempts exhausted
+            click.echo("Max attempts reached. Failed to obtain a valid result.")
             raise AgentExecutionError("Failed to obtain a valid result from the agent.")
-
-        return result  # type: ignore[return-value]
+        finally:
+            # Clean up response file
+            if response_path.exists():
+                response_path.unlink()
 
     def validate_solution_files(self, solution: dict) -> str | None:
         """Validate that solution files have been modified in the repo.
@@ -318,7 +354,28 @@ class AgentExecutor:
         is_dirty_after = self.repo.is_dirty(untracked_files=True)
 
         if is_dirty_after and not was_dirty_before:
-            return "Files were modified during operation. No file modifications are allowed."
+            # Collect modified, staged, and untracked files for the error message
+            modified_files = []
+
+            # Get modified (unstaged) files
+            for item in self.repo.index.diff(None):
+                modified_files.append(f"M {item.a_path}")
+
+            # Get staged files (guard against empty/unborn HEAD)
+            try:
+                staged_diff = self.repo.index.diff("HEAD")
+                for item in staged_diff:
+                    modified_files.append(f"S {item.a_path}")
+            except (git.exc.GitCommandError, git.BadName, ValueError):
+                # HEAD doesn't exist (unborn branch) - no staged files to report
+                pass
+
+            # Get untracked files
+            for path in self.repo.untracked_files:
+                modified_files.append(f"? {path}")
+
+            files_list = ", ".join(modified_files) if modified_files else "unknown"
+            return f"Files were modified during operation. No file modifications are allowed. Modified files: {files_list}"
         elif is_dirty_after and was_dirty_before:
             # Repo was already dirty - we can't verify if new modifications were made
             click.echo(
