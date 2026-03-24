@@ -24,8 +24,9 @@ class MergePickStrategyContext:
         fork_ref: The fork reference (e.g., "HEAD").
         commit_stats_cache: Pre-computed commit stats (sha -> CommitStats).
             Used by huge_commit and important_files strategies.
-        branching_points_cache: Pre-computed branching points (sha -> child_count).
-            Only commits with >1 child are included.
+        branching_points_cache: Pre-computed branching points (sha -> list of branches).
+            Only commits with children on multiple branches are included.
+            None means cache is not loaded; empty dict means loaded but no branching points found.
     """
 
     upstream_ref: str | None = None
@@ -33,7 +34,7 @@ class MergePickStrategyContext:
 
     # Batch data caches for performance optimization
     commit_stats_cache: dict[str, "CommitStats"] = field(default_factory=dict)
-    branching_points_cache: dict[str, int] = field(default_factory=dict)
+    branching_points_cache: dict[str, list[str]] | None = None
 
 
 class MergePickStrategyResult(ABC):

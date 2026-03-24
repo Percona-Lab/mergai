@@ -14,19 +14,19 @@ class BranchingPointResult(MergePickStrategyResult):
     """Result for branching point strategy match.
 
     Attributes:
-        child_count: Number of children this commit has in upstream.
+        branches: List of branch names where children of this commit exist.
     """
 
-    child_count: int
+    branches: list[str]
 
     def format_short(self) -> str:
         """Return a short description of the branching point match."""
-        return f"{self.child_count} children in upstream"
+        return f"branches: {', '.join(self.branches)}"
 
     def to_dict(self) -> dict:
         """Return a dictionary representation for JSON serialization."""
         return {
-            "child_count": self.child_count,
+            "branches": self.branches,
         }
 
 
@@ -91,18 +91,20 @@ class BranchingPointStrategy(MergePickStrategy):
         if not context.upstream_ref:
             return None
 
-        # Use cached branching points if available
-        if context.branching_points_cache:
-            # Cache only contains commits with >1 child
+        # Use cached branching points if available (None means not loaded)
+        if context.branching_points_cache is not None:
+            # Cache only contains commits with children on multiple branches
             if commit.hexsha in context.branching_points_cache:
-                child_count = context.branching_points_cache[commit.hexsha]
-                return BranchingPointResult(child_count=child_count)
+                branches = context.branching_points_cache[commit.hexsha]
+                return BranchingPointResult(branches=branches)
+            # Cache is loaded but this commit is not a branching point
             return None
 
-        # Fallback to individual check if no cache
-        is_bp, child_count = git_utils.is_branching_point(
+        # Fallback to individual check if cache is not loaded
+        # Warning: This is expensive as it runs git rev-list --all --children
+        is_bp, branches = git_utils.is_branching_point(
             repo, commit, context.upstream_ref
         )
         if is_bp:
-            return BranchingPointResult(child_count=child_count)
+            return BranchingPointResult(branches=branches)
         return None

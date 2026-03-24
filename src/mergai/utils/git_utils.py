@@ -7,6 +7,7 @@ from enum import Enum
 from os import PathLike
 from pathlib import Path
 
+import git
 from git import Blob, Commit, Repo
 
 log = logging.getLogger(__name__)
@@ -1156,13 +1157,54 @@ def get_merged_commits(
     return [commit.hexsha for commit in commits]
 
 
+def _normalize_branch_name(branch: str, remote_prefixes: set[str]) -> str:
+    """Normalize a branch name by stripping known remote prefixes.
+
+    Only strips prefixes that match known remotes (e.g., "origin/", "mongodb/").
+    Local branches with slashes (e.g., "feature/foo") are preserved.
+
+    Args:
+        branch: The branch name to normalize.
+        remote_prefixes: Set of known remote prefixes (e.g., {"origin/", "mongodb/"}).
+
+    Returns:
+        Normalized branch name.
+    """
+    for prefix in remote_prefixes:
+        if branch.startswith(prefix):
+            return branch[len(prefix) :]
+    return branch
+
+
+def _get_remote_prefixes(repo: Repo) -> set[str]:
+    """Get the set of remote prefixes from a repository.
+
+    Args:
+        repo: GitPython Repo object.
+
+    Returns:
+        Set of remote prefixes (e.g., {"origin/", "mongodb/"}).
+    """
+    return {f"{remote.name}/" for remote in repo.remotes}
+
+
 def get_batch_branching_points(
     repo: Repo, base_sha: str, upstream_ref: str
-) -> dict[str, int]:
+) -> dict[str, list[str]]:
     """Batch detect all branching points in a commit range.
 
-    A branching point is a commit with multiple children. This function
-    efficiently detects all branching points in a single git command.
+    A branching point is a commit with multiple children on different branches.
+    This function first walks the commit range to find commits with multiple
+    children, then runs branch-lookup commands for each child to determine
+    which branches contain it.
+
+    Note: This function uses --all to find children across ALL branches,
+    not just the upstream branch. This is important for detecting branching
+    points where branches like v8.3 diverge from master - the child commit
+    on v8.3 would not be visible if we only looked at master's history.
+
+    Because it issues branch-lookup commands for each candidate child, the
+    runtime grows with the number of branching commits in the range.
 
     Args:
         repo: GitPython Repo object.
@@ -1170,30 +1212,77 @@ def get_batch_branching_points(
         upstream_ref: The upstream reference (newest commit in range).
 
     Returns:
-        Dictionary mapping commit SHA to child count for commits with >1 child.
-        Only commits with multiple children are included in the result.
+        Dictionary mapping commit SHA to list of branch names for commits
+        with children on multiple branches. Only commits with multiple
+        children are included in the result.
     """
-    result: dict[str, int] = {}
+    result: dict[str, list[str]] = {}
 
     try:
-        # git rev-list --children base..upstream gives:
+        # First, get the set of commits in the range we care about
+        commits_in_range = set(
+            repo.git.rev_list(f"{base_sha}..{upstream_ref}").strip().split("\n")
+        )
+        if not commits_in_range or commits_in_range == {""}:
+            return result
+
+        # Use --all to find children across ALL branches, not just upstream.
+        # This is critical for detecting branching points where other branches
+        # (like v8.3) diverge - those child commits are not reachable from
+        # the upstream branch (master) but they still make the parent a
+        # branching point.
+        #
+        # git rev-list --all --children gives:
         # <commit_sha> <child1> <child2> ...
-        # for each commit in the range
-        children_output = repo.git.rev_list(
-            "--children", f"{base_sha}..{upstream_ref}"
-        ).strip()
+        # for each commit across all branches
+        children_output = repo.git.rev_list("--all", "--children").strip()
 
         if not children_output:
             return result
 
+        # Build a map of commit SHA to children
+        commits_with_multiple_children: dict[str, list[str]] = {}
         for line in children_output.split("\n"):
             if not line:
                 continue
             parts = line.split()
+            commit_sha = parts[0]
+            # Only consider commits that are in our target range
+            if commit_sha not in commits_in_range:
+                continue
             if len(parts) > 2:  # More than 1 child
-                commit_sha = parts[0]
-                child_count = len(parts) - 1
-                result[commit_sha] = child_count
+                children = parts[1:]
+                commits_with_multiple_children[commit_sha] = children
+
+        if not commits_with_multiple_children:
+            return result
+
+        # Get remote prefixes for branch name normalization
+        remote_prefixes = _get_remote_prefixes(repo)
+
+        # Now find which branches contain each child commit
+        # Use git branch -a --contains for each child to find branch names
+        for commit_sha, children in commits_with_multiple_children.items():
+            branches: set[str] = set()
+            for child_sha in children:
+                try:
+                    # Get branches containing this child commit
+                    branch_output = repo.git.branch(
+                        "-a", "--contains", child_sha, "--format=%(refname:short)"
+                    ).strip()
+                    if branch_output:
+                        for branch in branch_output.split("\n"):
+                            branch = branch.strip()
+                            if branch:
+                                # Normalize by stripping known remote prefixes
+                                branch = _normalize_branch_name(branch, remote_prefixes)
+                                branches.add(branch)
+                except git.exc.GitCommandError as e:
+                    log.debug(f"Failed to get branches for child {child_sha}: {e}")
+
+            if len(branches) > 1:
+                # Sort branches for consistent output
+                result[commit_sha] = sorted(branches)
 
     except Exception as e:
         log.warning(f"Failed to batch detect branching points: {e}")
@@ -1202,49 +1291,84 @@ def get_batch_branching_points(
 
 
 def is_branching_point(
-    repo: Repo, commit: Commit, upstream_ref: str
-) -> tuple[bool, int]:
+    repo: Repo,
+    commit: Commit,
+    upstream_ref: str,  # noqa: ARG001 - kept for API compat
+) -> tuple[bool, list[str]]:
     """Check if a commit is a branching point.
 
     A commit is considered a branching point if it has multiple children
-    within the upstream branch. This typically indicates where branches
-    diverged and can be an important merge point.
+    across ALL branches. This typically indicates where branches diverged
+    (e.g., where v8.3 branched off from master) and can be an important
+    merge point.
+
+    Note: This function uses --all to find children across ALL branches,
+    not just the upstream branch. This is important for detecting branching
+    points where branches like v8.3 diverge from master.
+
+    Warning: This function runs `git rev-list --all --children` on every call,
+    which scans the full repository history. For batch operations, use
+    `get_batch_branching_points()` instead to avoid repeated scans.
 
     Args:
         repo: GitPython Repo object.
         commit: The commit to check.
-        upstream_ref: The upstream reference to check children against.
+        upstream_ref: Unused, kept for API compatibility.
 
     Returns:
-        Tuple of (is_branching_point, child_count).
-        is_branching_point is True if the commit has multiple children.
-        child_count is the number of children found (0 if none).
+        Tuple of (is_branching_point, branches).
+        is_branching_point is True if the commit has children on multiple branches.
+        branches is a list of branch names where children exist.
     """
     try:
-        # Find commits in upstream that have this commit as a parent
-        # Use git rev-list with --children to find children
-        # Alternative: count commits that have this commit as parent
-        children_output = repo.git.rev_list(
-            "--children", f"{commit.hexsha}..{upstream_ref}"
-        ).strip()
+        # Use --all to find children across ALL branches, not just upstream.
+        # This is critical for detecting branching points where other branches
+        # (like v8.3) diverge - those child commits are not reachable from
+        # the upstream branch (master) but they still make the parent a
+        # branching point.
+        children_output = repo.git.rev_list("--all", "--children").strip()
 
         if not children_output:
-            return (False, 0)
+            return (False, [])
 
         # Parse the output to find children of this specific commit
         # Format: "commit_sha child1 child2 ..."
-        child_count = 0
+        children: list[str] = []
         for line in children_output.split("\n"):
             parts = line.split()
             if len(parts) > 0 and parts[0] == commit.hexsha:
                 # This line shows children of our commit
-                child_count = len(parts) - 1
+                children = parts[1:]
                 break
 
-        return (child_count > 1, child_count)
+        if len(children) <= 1:
+            return (False, [])
+
+        # Get remote prefixes for branch name normalization
+        remote_prefixes = _get_remote_prefixes(repo)
+
+        # Find which branches contain each child commit
+        branches: set[str] = set()
+        for child_sha in children:
+            try:
+                branch_output = repo.git.branch(
+                    "-a", "--contains", child_sha, "--format=%(refname:short)"
+                ).strip()
+                if branch_output:
+                    for branch in branch_output.split("\n"):
+                        branch = branch.strip()
+                        if branch:
+                            # Normalize by stripping known remote prefixes
+                            branch = _normalize_branch_name(branch, remote_prefixes)
+                            branches.add(branch)
+            except git.exc.GitCommandError as e:
+                log.debug(f"Failed to get branches for child {child_sha}: {e}")
+
+        branch_list = sorted(branches)
+        return (len(branch_list) > 1, branch_list)
     except Exception as e:
         log.warning(f"Failed to check branching point for {commit.hexsha}: {e}")
-        return (False, 0)
+        return (False, [])
 
 
 def get_fork_status(repo: Repo, upstream_ref: str, fork_ref: str) -> ForkStatus:
