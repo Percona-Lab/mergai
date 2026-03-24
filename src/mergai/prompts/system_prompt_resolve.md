@@ -16,11 +16,13 @@ The note is in a JSON format.
 
 ## Output format
 
-You MUST respond with **exactly one** JSON object, and nothing else.
-Do **not** include any markdown code fences.
-Do **not** include any explanation outside of the JSON.
+Write your JSON response to the specified response file path provided in the prompt.
+Use the appropriate file writing tool available to you (e.g., Write tool for Claude CLI,
+or equivalent file writing mechanism for other agents).
 
-The JSON object MUST have the following format:
+**IMPORTANT:** You MUST write valid JSON content to the response file.
+
+The JSON structure must be:
 
 ```json
 {
