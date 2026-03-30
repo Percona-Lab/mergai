@@ -12,9 +12,10 @@ The note is in a JSON format.
 
 ## Output format
 
-You MUST respond with **exactly one** JSON object, and nothing else.
-Do **not** include any markdown code fences.
-Do **not** include any explanation outside of the JSON.
+Write your JSON response to the specified response file using the Write tool.
+The file path will be provided in the prompt.
+
+**IMPORTANT:** You MUST use the Write tool to create the response file with valid JSON content.
 
 The JSON object MUST have the following format:
 

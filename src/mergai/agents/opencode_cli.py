@@ -7,6 +7,7 @@ import click
 
 from .base import CliAgent
 from .error import AgentError, AgentErrorType, AgentResult
+from .response_utils import parse_response_json
 
 
 class OpenCodeCLIAgent(CliAgent):
@@ -379,26 +380,34 @@ class OpenCodeCLIAgent(CliAgent):
             click.echo(f"Agent execution error: {e}")
             return AgentResult(error=e)
 
-        # If response_file is provided, read response from file
+        # If response_file is provided, try reading from file first
         if response_file is not None:
-            if not response_file.exists():
-                return AgentResult(
-                    error=AgentError(
-                        AgentErrorType.PARSING_RESULT,
-                        f"Response file not found: {response_file}",
+            if response_file.exists():
+                # Preferred: read from file
+                try:
+                    response_text = response_file.read_text()
+                    response_json = json.loads(response_text)
+                    result["response"] = response_json
+                except json.JSONDecodeError as e:
+                    return AgentResult(
+                        error=AgentError(
+                            AgentErrorType.PARSING_RESULT,
+                            f"Invalid JSON in response file: {e}",
+                        )
                     )
+            else:
+                # Fallback: parse JSON from stdout response
+                click.echo(
+                    "Warning: Response file not found, falling back to stdout parsing..."
                 )
-            try:
-                response_text = response_file.read_text()
-                response_json = json.loads(response_text)
-                result["response"] = response_json
-            except json.JSONDecodeError as e:
-                return AgentResult(
-                    error=AgentError(
-                        AgentErrorType.PARSING_RESULT,
-                        f"Invalid JSON in response file: {e}",
-                    )
-                )
+                try:
+                    result = parse_response_json(result)
+                except AgentError as e:
+                    click.echo("Error parsing OpenCode CLI response")
+                    click.echo("--- Start of OpenCode CLI response ---")
+                    click.echo(f"{result.get('response', '')}")
+                    click.echo("--- End of OpenCode CLI response ---")
+                    return AgentResult(error=e)
 
         try:
             version = self.get_version()

@@ -8,7 +8,12 @@
 
 ## Output format
 
-Write a JSON response to the specified response file with this structure:
+Write your JSON response to the specified response file using the Write tool.
+The file path will be provided in the prompt.
+
+**IMPORTANT:** You MUST use the Write tool to create the response file with valid JSON content.
+
+The JSON structure must be:
 
 ```json
 {

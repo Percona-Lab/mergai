@@ -1,6 +1,5 @@
 import json
 import os
-import re
 import subprocess
 from pathlib import Path
 
@@ -8,43 +7,7 @@ import click
 
 from .base import CliAgent
 from .error import AgentError, AgentErrorType, AgentResult
-
-JSON_BLOCK_RE = re.compile(
-    r"```json\s*\n(.*?)\n```",
-    re.DOTALL | re.IGNORECASE,
-)
-
-
-# Extracts the content of the first ```json ... ``` block.
-# Returns the JSON string or None if not found.
-def extract_json_block(text: str) -> str | None:
-    match = JSON_BLOCK_RE.search(text)
-    if not match:
-        return None
-    return match.group(1).strip()
-
-
-def fix_response_json(result_json: dict) -> dict:
-    if "response" not in result_json:
-        raise AgentError(
-            AgentErrorType.PARSING_RESULT, "invalid response: 'response' field missing"
-        )
-
-    response = result_json["response"]
-
-    extracted = extract_json_block(response)
-    if extracted is not None:
-        response = extracted
-
-    try:
-        response_json = json.loads(response)
-        result_json["response"] = response_json
-    except json.JSONDecodeError as e:
-        raise AgentError(
-            AgentErrorType.PARSING_RESULT, f"JSON decode error: {e}"
-        ) from e
-
-    return result_json
+from .response_utils import parse_response_json
 
 
 class GeminiCLIAgent(CliAgent):
@@ -211,7 +174,7 @@ class GeminiCLIAgent(CliAgent):
         else:
             # Fallback to parsing from stdout (legacy behavior)
             try:
-                result = fix_response_json(result)
+                result = parse_response_json(result)
             except AgentError as e:
                 click.echo("Error parsing Gemini CLI response")
                 click.echo("--- Start of Gemini CLI response ---")
