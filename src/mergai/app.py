@@ -304,8 +304,9 @@ class AppContext:
 
         prompt = self.prompt_builder.build_describe_prompt()
 
-        # No YOLO mode for describe - we don't want file modifications
-        agent = self.get_agent(agent_desc=agent_desc, yolo=False)
+        # YOLO mode is required for Claude CLI to write the response file.
+        # The validator ensures no repo files are modified.
+        agent = self.get_agent(agent_desc=agent_desc, yolo=True)
 
         # Check repo state before running agent
         was_dirty_before = self.repo.is_dirty(untracked_files=True)
