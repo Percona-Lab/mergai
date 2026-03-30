@@ -146,10 +146,10 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If max attempts reached without valid result.
         """
-        # Generate unique filename and write prompt to cwd (not state_dir)
-        # so the agent can access it (state_dir may be ignored by agent)
+        # Generate unique filename and write prompt to state_dir
+        # state_dir is typically .cache/mergai which is gitignored
         prompt_filename = self._generate_prompt_filename()
-        prompt_path = Path.cwd() / prompt_filename
+        prompt_path = self.state_dir / prompt_filename
         prompt_path.write_text(prompt)
 
         success = False
@@ -158,15 +158,11 @@ class AgentExecutor:
             success = True
             return result
         except AgentExecutionError:
-            # Move prompt file to state_dir for preservation
-            final_prompt_path = self.state_dir / prompt_filename
-            prompt_path.rename(final_prompt_path)
-
             # Save session data on failure
             session_path = self._save_session_on_failure()
 
-            # Log file locations
-            click.echo(f"Prompt file kept at: {final_prompt_path}")
+            # Log file locations (prompt is already in state_dir)
+            click.echo(f"Prompt file kept at: {prompt_path}")
             if session_path:
                 click.echo(f"Session file saved at: {session_path}")
 
@@ -193,9 +189,10 @@ class AgentExecutor:
         Raises:
             AgentExecutionError: If max attempts reached without valid result.
         """
-        # Create response file path in cwd (same location as prompt)
+        # Create response file path in state_dir (same location as prompt)
+        # state_dir is typically .cache/mergai which is gitignored
         response_filename = self._generate_response_filename()
-        response_path = Path.cwd() / response_filename
+        response_path = self.state_dir / response_filename
 
         current_prompt = (
             f"Read @{prompt_path} and write your JSON response to @{response_path}"
