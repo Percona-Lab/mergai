@@ -233,6 +233,11 @@ class AgentExecutor:
                 click.echo("Agent execution succeeded. Checking result...")
                 result = agent_result.result()
 
+                # Clean up response file before validation to avoid false positives
+                # in validators that check for file modifications (e.g., describe)
+                if response_path.exists():
+                    response_path.unlink()
+
                 # Run validator if provided
                 if validator is not None and result is not None:
                     validation_error = validator(result)
@@ -426,7 +431,23 @@ class AgentExecutor:
         is_dirty_after = self.repo.is_dirty(untracked_files=True)
 
         if is_dirty_after and not was_dirty_before:
-            return "Files were modified during operation. No file modifications are allowed."
+            # Collect modified, staged, and untracked files for the error message
+            modified_files = []
+
+            # Get modified (unstaged) files
+            for item in self.repo.index.diff(None):
+                modified_files.append(f"M {item.a_path}")
+
+            # Get staged files
+            for item in self.repo.index.diff("HEAD"):
+                modified_files.append(f"S {item.a_path}")
+
+            # Get untracked files
+            for path in self.repo.untracked_files:
+                modified_files.append(f"? {path}")
+
+            files_list = ", ".join(modified_files) if modified_files else "unknown"
+            return f"Files were modified during operation. No file modifications are allowed. Modified files: {files_list}"
         elif is_dirty_after and was_dirty_before:
             # Repo was already dirty - we can't verify if new modifications were made
             click.echo(
