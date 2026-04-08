@@ -10,14 +10,16 @@ mergai automates the merge workflow by:
 - Storing all merge metadata and AI solutions as git notes, allowing them to travel with commits
 - Managing branches and PRs for both clean merges and conflict resolution workflows
 
-Currently, the tool uses Gemini CLI as the AI agent.
+The tool supports multiple AI agents: Gemini CLI and Claude CLI (Claude Code).
 
 **This is under active development; use with caution.**
 
 ## Prerequisites
 
 - Python 3.10+ and git installed.
-- Gemini CLI available on your `PATH` (used as the default agent). Setup authentication on your own.
+- At least one AI CLI agent available on your `PATH`:
+  - **Gemini CLI** (`gemini` command) - Set up authentication on your own.
+  - **Claude CLI** (`claude` command) - Claude Code CLI, set up authentication on your own.
 - Optional: `GITHUB_TOKEN` or `GH_TOKEN` for commands that read/write PRs.
 - Run `mergai config` to configure git settings (conflictstyle, notes display).
 - Run `mergai fork init` to initialize the upstream remote from config.
@@ -72,6 +74,9 @@ fork:
           - src/api/public_api.h
 
 resolve:
+  # Agent format: <agent-type>[:<model>]
+  # Available agents: gemini-cli, claude-cli
+  # Examples: gemini-cli, gemini-cli:gemini-2.5-pro, claude-cli:claude-opus-4-5
   agent: gemini-cli:gemini-2.5-pro
   max_attempts: 3
 
