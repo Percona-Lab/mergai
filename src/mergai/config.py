@@ -135,7 +135,11 @@ class PRTypeConfig:
 
     Attributes:
         title_format: Format string for PR titles.
-        labels: List of labels to apply to the PR when created.
+        labels: Labels always applied to the PR when created.
+        labels_on_unresolved: Labels applied only when the PR's note contains
+            at least one solution with unresolved conflicts (any file left with
+            conflict markers). Typically used to attach skip labels like
+            ``ci-skip-format`` so CI only runs on fully-resolved PRs.
 
         Available tokens for title_format:
         - %(target_branch) - The target branch name
@@ -145,6 +149,7 @@ class PRTypeConfig:
 
     title_format: str = ""
     labels: list[str] = field(default_factory=list)
+    labels_on_unresolved: list[str] = field(default_factory=list)
 
     @classmethod
     def from_dict(cls, data: dict, default_title_format: str = "") -> "PRTypeConfig":
@@ -160,6 +165,7 @@ class PRTypeConfig:
         return cls(
             title_format=data.get("title_format", default_title_format),
             labels=data.get("labels", []),
+            labels_on_unresolved=data.get("labels_on_unresolved", []),
         )
 
 

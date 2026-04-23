@@ -1069,13 +1069,25 @@ def get_file_content_at_commit(
         return None
 
 
+def content_has_conflict_markers(content: str) -> bool:
+    """Check if content contains git conflict markers.
+
+    A conflict is recognized only when both a start marker (`<<<<<<<`) and
+    an end marker (`>>>>>>>`) are present at the beginning of a line.
+
+    Args:
+        content: File content to check.
+
+    Returns:
+        True if conflict markers are found.
+    """
+    has_start = bool(re.search(r"^<{7}", content, re.MULTILINE))
+    has_end = bool(re.search(r"^>{7}", content, re.MULTILINE))
+    return has_start and has_end
+
+
 def file_has_conflict_markers(repo: Repo, commit_sha: str, file_path: str) -> bool:
     """Check if a file at a specific commit contains unresolved conflict markers.
-
-    Scans the file content for standard git conflict marker patterns:
-    - <<<<<<< (start marker)
-    - ======= (middle marker)
-    - >>>>>>> (end marker)
 
     Args:
         repo: GitPython Repo instance.
@@ -1089,13 +1101,7 @@ def file_has_conflict_markers(repo: Repo, commit_sha: str, file_path: str) -> bo
     content = get_file_content_at_commit(repo, commit_sha, file_path)
     if content is None:
         return False
-
-    # Check for conflict marker patterns at the start of lines
-    # We need at least one start marker and one end marker to consider it a conflict
-    has_start = bool(re.search(r"^<{7}", content, re.MULTILINE))
-    has_end = bool(re.search(r"^>{7}", content, re.MULTILINE))
-
-    return has_start and has_end
+    return content_has_conflict_markers(content)
 
 
 def file_has_conflict_markers_in_workdir(file_path: str) -> bool:
@@ -1113,10 +1119,7 @@ def file_has_conflict_markers_in_workdir(file_path: str) -> bool:
         return False
 
     try:
-        content = path.read_text()
-        has_start = bool(re.search(r"^<{7}", content, re.MULTILINE))
-        has_end = bool(re.search(r"^>{7}", content, re.MULTILINE))
-        return has_start and has_end
+        return content_has_conflict_markers(path.read_text())
     except Exception:
         return False
 

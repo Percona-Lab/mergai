@@ -13,6 +13,7 @@ import click
 import git
 
 from .agents.base import Agent
+from .utils import git_utils
 
 
 class AgentExecutionError(Exception):
@@ -311,6 +312,51 @@ class AgentExecutor:
             return message
 
         return None
+
+    def validate_resolved_files_have_no_markers(self, solution: dict) -> str | None:
+        """Validate that files reported as 'resolved' have no conflict markers left.
+
+        The agent is allowed to leave conflict markers in files listed under
+        `response.unresolved`, but any file listed under `response.resolved`
+        must be free of markers.
+
+        Args:
+            solution: The solution dict from the agent, expected to have
+                     structure: {"response": {"resolved": {path: ...}}}.
+
+        Returns:
+            None if all resolved files are free of conflict markers, or an
+            error message listing the offending files.
+        """
+        offending: list[str] = []
+        for path in solution["response"].get("resolved", {}):
+            if git_utils.file_has_conflict_markers_in_workdir(path):
+                offending.append(path)
+
+        if offending:
+            return (
+                "The following files were marked as resolved but still contain "
+                "conflict markers: "
+                + ", ".join(offending)
+                + ". Remove the conflict markers from these files, or move them "
+                "to the 'unresolved' section of your response."
+            )
+        return None
+
+    def validate_solution(self, solution: dict) -> str | None:
+        """Combined validator for agent solutions.
+
+        Runs `validate_solution_files` (files listed as resolved/modified were
+        actually changed on disk) followed by
+        `validate_resolved_files_have_no_markers` (no conflict markers remain
+        in files the agent claimed to have resolved).
+
+        Returns the first error encountered, or None if both checks pass.
+        """
+        error = self.validate_solution_files(solution)
+        if error:
+            return error
+        return self.validate_resolved_files_have_no_markers(solution)
 
     def validate_describe_response(self, response: dict) -> str | None:
         """Validate that describe response has the correct format.
