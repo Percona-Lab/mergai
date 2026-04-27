@@ -71,6 +71,10 @@ def register_commands(cli):
 
     cli.add_command(config)
 
+    from .commands.ci import ci
+
+    cli.add_command(ci)
+
 
 @click.group()
 @click.version_option(version=__version__, prog_name="mergai")

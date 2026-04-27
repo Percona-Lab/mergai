@@ -392,6 +392,11 @@ class AppContext:
                 selective_note["user_comment"] = self.note.user_comment
             elif field == "merge_description" and self.note.has_merge_description:
                 selective_note["merge_description"] = self.note.merge_description
+            elif field == "ci_fix_history" and self.note.has_ci_fix_history:
+                # Attach only the most recent attempt; older ones already
+                # live on earlier commits' notes.
+                assert self.note.ci_fix_history is not None  # for type-checkers
+                selective_note["ci_fix_history"] = [self.note.ci_fix_history[-1]]
 
         # Write selective note to temp file and attach as git note
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:

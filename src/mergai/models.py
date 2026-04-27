@@ -832,6 +832,11 @@ class MergaiNote:
         user_comment: Optional user-provided comment.
         merge_description: Optional AI-generated merge description.
         note_index: Optional index tracking which commits have which fields.
+        ci_fix_history: Optional list of CI fix attempts. Each entry is a
+            free-form dict produced by ``mergai ci handle``, typically with
+            keys ``workflow``, ``attempt_number``, ``timestamp``,
+            ``action_type``, ``context_summary``, ``files_affected``, and
+            ``success``. New attempts are appended.
     """
 
     merge_info: MergeInfo
@@ -843,6 +848,7 @@ class MergaiNote:
     user_comment: dict | None = None  # Dict with user, email, date, body
     merge_description: dict | None = None
     note_index: list[dict] | None = None
+    ci_fix_history: list[dict] | None = None
 
     # Cached repo reference (not serialized)
     _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
@@ -884,6 +890,7 @@ class MergaiNote:
             user_comment=data.get("user_comment"),
             merge_description=data.get("merge_description"),
             note_index=data.get("note_index"),
+            ci_fix_history=data.get("ci_fix_history"),
             _repo=repo,
         )
         return note
@@ -974,6 +981,13 @@ class MergaiNote:
             if "user_comment" in git_note and "user_comment" not in combined:
                 combined["user_comment"] = git_note["user_comment"]
 
+            # ci_fix_history - combine all into array (preserves attempt order)
+            if "ci_fix_history" in git_note:
+                if "ci_fix_history" not in combined:
+                    combined["ci_fix_history"] = []
+                for attempt in git_note["ci_fix_history"]:
+                    combined["ci_fix_history"].append(attempt)
+
         # Cast the result since from_dict returns MergaiNote, but cls is type[T]
         # where T is bound to MergaiNote
         note = cls.from_dict(combined, repo)
@@ -1027,6 +1041,36 @@ class MergaiNote:
     def has_note_index(self) -> bool:
         """Check if note_index is present."""
         return self.note_index is not None and len(self.note_index) > 0
+
+    @property
+    def has_ci_fix_history(self) -> bool:
+        """Check if ci_fix_history has at least one attempt recorded."""
+        return self.ci_fix_history is not None and len(self.ci_fix_history) > 0
+
+    def get_ci_attempts(self, workflow: str) -> list[dict]:
+        """Return CI fix attempts recorded for a given workflow name.
+
+        Args:
+            workflow: Workflow name as it appears in the ``workflow`` key of
+                each attempt dict (e.g. ``"format"``).
+
+        Returns:
+            Attempts matching ``workflow``, in insertion order. Empty list
+            if none.
+        """
+        if not self.ci_fix_history:
+            return []
+        return [a for a in self.ci_fix_history if a.get("workflow") == workflow]
+
+    def add_ci_attempt(self, attempt: dict) -> "MergaiNote":
+        """Append a CI fix attempt dict to ``ci_fix_history``.
+
+        Initialises the list if it is None. Returns self for chaining.
+        """
+        if self.ci_fix_history is None:
+            self.ci_fix_history = []
+        self.ci_fix_history.append(attempt)
+        return self
 
     # --- Repo Binding ---
 
@@ -1420,4 +1464,6 @@ class MergaiNote:
             result["merge_description"] = self.merge_description
         if self.note_index:
             result["note_index"] = self.note_index
+        if self.ci_fix_history:
+            result["ci_fix_history"] = self.ci_fix_history
         return result

@@ -800,6 +800,173 @@ class InitConfig:
         )
 
 
+# Valid values for workflow action_type config
+WORKFLOW_ACTION_COMMAND = "command"
+WORKFLOW_ACTION_RESOLVE = "resolve"
+VALID_WORKFLOW_ACTION_TYPES = [WORKFLOW_ACTION_COMMAND, WORKFLOW_ACTION_RESOLVE]
+
+
+@dataclass
+class WorkflowContextConfig:
+    """Configuration for extracting failure context from a CI workflow run.
+
+    Resolved at runtime by the ``mergai.ci.context_builders`` factory, which
+    maps ``type`` to a concrete builder. Unknown types are rejected there,
+    not here, so new builders can be added without touching config parsing.
+
+    Attributes:
+        type: Context type (e.g. ``"diff"``, ``"sarif"``, ``"logs"``).
+        source: Where to read the context from. Currently ``"artifact"``
+            (downloaded workflow artifact) or ``"code-scanning"`` (GitHub
+            Code Scanning API).
+        artifact_name: Name of the artifact to download when ``source`` is
+            ``"artifact"``.
+        extract_pattern: Regex pattern used by log-style context builders to
+            extract relevant lines.
+
+    Example YAML config::
+
+        context:
+          type: diff
+          source: artifact
+          artifact_name: format-results
+    """
+
+    type: str = "logs"
+    source: str = "artifact"
+    artifact_name: str | None = None
+    extract_pattern: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WorkflowContextConfig":
+        """Create a WorkflowContextConfig from a dictionary."""
+        return cls(
+            type=data.get("type", cls.type),
+            source=data.get("source", cls.source),
+            artifact_name=data.get("artifact_name"),
+            extract_pattern=data.get("extract_pattern"),
+        )
+
+
+@dataclass
+class WorkflowConfig:
+    """Configuration for handling failures of a specific CI workflow.
+
+    Attributes:
+        enabled: Whether mergai will attempt fixes for this workflow.
+        max_attempts: Maximum number of fix attempts before giving up and
+            posting a PR comment.
+        action_type: How to attempt the fix. Either ``"command"`` (run a
+            shell command) or ``"resolve"`` (invoke the AI agent via the
+            existing ``AgentExecutor`` retry loop).
+        command: Shell command to run when ``action_type`` is ``"command"``.
+            Receives ``TARGET_BRANCH``, ``PR_NUMBER``, and ``WORKFLOW_NAME``
+            as environment variables.
+        context: Configuration for extracting failure context for this
+            workflow (used to build the AI prompt and/or for logging).
+
+    Example YAML config::
+
+        format:
+          enabled: true
+          max_attempts: 3
+          action_type: command
+          command: "bazel run format -- --origin-branch=origin/${TARGET_BRANCH}"
+          context:
+            type: diff
+            source: artifact
+            artifact_name: format-results
+    """
+
+    enabled: bool = False
+    max_attempts: int = 3
+    action_type: str = WORKFLOW_ACTION_RESOLVE
+    command: str | None = None
+    context: WorkflowContextConfig = field(default_factory=WorkflowContextConfig)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WorkflowConfig":
+        """Create a WorkflowConfig from a dictionary.
+
+        Raises:
+            ValueError: If ``action_type`` is not one of
+                ``VALID_WORKFLOW_ACTION_TYPES``, or if ``action_type`` is
+                ``"command"`` without a non-empty ``command``.
+        """
+        action_type = data.get("action_type", cls.action_type)
+        if action_type not in VALID_WORKFLOW_ACTION_TYPES:
+            raise ValueError(
+                f"Invalid workflow action_type: '{action_type}'. "
+                f"Valid values are: {', '.join(VALID_WORKFLOW_ACTION_TYPES)}"
+            )
+
+        command = data.get("command")
+        if action_type == WORKFLOW_ACTION_COMMAND and not command:
+            raise ValueError(
+                "Workflow action_type 'command' requires a non-empty 'command' field"
+            )
+
+        context_data = data.get("context", {})
+        context = (
+            WorkflowContextConfig.from_dict(context_data)
+            if context_data
+            else WorkflowContextConfig()
+        )
+
+        return cls(
+            enabled=data.get("enabled", cls.enabled),
+            max_attempts=data.get("max_attempts", cls.max_attempts),
+            action_type=action_type,
+            command=command,
+            context=context,
+        )
+
+
+@dataclass
+class WorkflowsConfig:
+    """Configuration for CI workflow failure handlers, keyed by workflow name.
+
+    The workflow name is the value of ``name:`` in the GitHub Actions
+    workflow file (e.g. ``"format"``, ``"clang-tidy"``). When a ``workflow_run``
+    event fires, mergai looks up the matching ``WorkflowConfig`` here.
+
+    Example YAML config::
+
+        workflows:
+          format:
+            enabled: true
+            max_attempts: 3
+            action_type: command
+            command: "bazel run format"
+            context:
+              type: diff
+              source: artifact
+              artifact_name: format-results
+          clang-tidy:
+            enabled: true
+            max_attempts: 2
+            action_type: resolve
+            context:
+              type: sarif
+              source: artifact
+              artifact_name: clang-tidy-results
+    """
+
+    workflows: dict[str, WorkflowConfig] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WorkflowsConfig":
+        """Create a WorkflowsConfig from a dictionary of workflow-name → config."""
+        workflows: dict[str, WorkflowConfig] = {}
+        for name, wf_data in data.items():
+            workflows[name] = WorkflowConfig.from_dict(wf_data or {})
+        return cls(workflows=workflows)
+
+    def get(self, name: str) -> WorkflowConfig | None:
+        """Look up a workflow's config by name. Returns None if absent."""
+        return self.workflows.get(name)
+
+
 @dataclass
 class MergaiConfig:
     """Configuration settings for MergAI.
@@ -817,6 +984,7 @@ class MergaiConfig:
         merge: Configuration for the merge command.
         context: Configuration for context creation (conflict context, etc.).
         config: Configuration for the 'mergai config' command.
+        workflows: Configuration for CI workflow failure handlers.
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
 
@@ -830,6 +998,7 @@ class MergaiConfig:
     merge: MergeConfig = field(default_factory=MergeConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     config: InitConfig = field(default_factory=InitConfig)
+    workflows: WorkflowsConfig = field(default_factory=WorkflowsConfig)
     _raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -929,6 +1098,14 @@ class MergaiConfig:
             else InitConfig()
         )
 
+        # Parse workflows section if present
+        workflows_data = data.get("workflows", {})
+        workflows_config = (
+            WorkflowsConfig.from_dict(workflows_data)
+            if workflows_data
+            else WorkflowsConfig()
+        )
+
         return cls(
             fork=fork_config,
             resolve=resolve_config,
@@ -940,6 +1117,7 @@ class MergaiConfig:
             merge=merge_config,
             context=context_config,
             config=config_config,
+            workflows=workflows_config,
             _raw=data,
         )
 
