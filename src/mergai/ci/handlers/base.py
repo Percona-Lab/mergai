@@ -2,6 +2,8 @@
 
 from abc import ABC, abstractmethod
 
+from ...app import AppContext
+from ...config import WorkflowConfig
 from ..context_builders.base import WorkflowContext
 
 
@@ -14,6 +16,10 @@ class WorkflowHandler(ABC):
     - ``command`` → :class:`.command.CommandHandler` (run a shell command)
     - ``resolve`` → :class:`.resolve.ResolveHandler` (run the AI agent)
     """
+
+    def __init__(self, app: AppContext, config: WorkflowConfig):
+        self.app = app
+        self.config = config
 
     @abstractmethod
     def execute(self, context: WorkflowContext) -> bool:
