@@ -2,7 +2,8 @@
 
 Entry point invoked by the ``ci-fix`` job in ``.github/workflows/mergai.yml``
 on every ``workflow_run.completed`` for a watched CI workflow on a
-``mergai/*`` branch. Given just a run ID, this command:
+``mergai/*`` branch. Given a run ID (or ``"all"`` / a workflow name for
+manual catch-up), this command:
 
 * Fetches the workflow run (resolves workflow name, head SHA, PR number,
   conclusion) so callers don't have to extract them from the event payload.
@@ -15,12 +16,13 @@ on every ``workflow_run.completed`` for a watched CI workflow on a
   the Code Scanning path; otherwise exits no-op.
 * Otherwise exits no-op.
 
-The handler edits the working tree; this command commits the result.
-The outer workflow pushes the new commit so CI re-runs.
+The handler edits the working tree; this command commits the result as
+a ``type: ci_fix`` solution on the note. The outer workflow pushes the
+new commit so CI re-runs.
 
-The same command is intended to be runnable manually with just
-``--run-id``; explicit ``--workflow`` / ``--pr`` / ``--artifacts-dir``
-overrides exist for testing or unusual setups.
+``mergai ci handle <run-id>`` is what GitHub Actions calls. Manually
+you can also pass ``"all"`` or a workflow name to process every
+unprocessed actionable run on the current branch.
 """
 
 import logging
@@ -64,7 +66,7 @@ def ci(app: AppContext, repo: str | None):
 
 @ci.command()
 @click.pass_obj
-@click.option("--run-id", required=True, help="GitHub workflow run ID.")
+@click.argument("target", required=True)
 @click.option(
     "--workflow",
     required=False,
@@ -88,30 +90,149 @@ def ci(app: AppContext, repo: str | None):
 )
 def handle(
     app: AppContext,
-    run_id: str,
+    target: str,
     workflow: str | None,
     pr: int | None,
     artifacts_dir: str | None,
 ) -> None:
-    """Handle a completed CI workflow run for the current branch.
+    """Handle one or more workflow runs for the current branch.
 
-    Builds a :class:`WorkflowContext` via
-    :func:`build_workflow_context_for_run`, enforces ``max_attempts``,
-    dispatches to the configured handler, and commits the result.
+    \b
+    TARGET can be:
+      * a numeric run ID — process that specific run
+      * "all"            — process every unprocessed actionable run on
+                           the current branch (newest first), respecting
+                           per-workflow `max_attempts`
+      * a workflow name  — like "all" but filtered to that workflow
+
+    For each selected run, builds a `WorkflowContext` via
+    `build_workflow_context_for_run`, enforces `max_attempts`,
+    dispatches to the configured handler, and commits the result as a
+    `type: ci_fix` solution.
+    """
+    if target.isdigit():
+        run_ids = [target]
+    else:
+        run_ids = _resolve_target_runs(app, target)
+        if not run_ids:
+            click.echo(f"No unprocessed actionable runs found for target '{target}'.")
+            return
+        click.echo(
+            f"Found {len(run_ids)} unprocessed actionable run(s) "
+            f"for target '{target}'."
+        )
+
+    for run_id in run_ids:
+        _handle_one_run(
+            app,
+            run_id,
+            workflow_override=workflow,
+            pr_override=pr,
+            artifacts_dir_override=artifacts_dir,
+        )
+
+
+def _resolve_target_runs(app: AppContext, target: str) -> list[str]:
+    """Resolve ``"all"`` / workflow-name to a list of run IDs to process.
+
+    Lists recent workflow_runs on the current branch, filters out runs
+    that are not configured / not actionable / already processed, and
+    returns IDs in newest-first order.
+
+    A workflow-name target is just the ``"all"`` filter narrowed to one
+    workflow.
+    """
+    workflow_filter = None if target == "all" else target
+    if (
+        workflow_filter is not None
+        and workflow_filter not in app.config.workflows.workflows
+    ):
+        raise click.ClickException(
+            f"Unknown workflow '{workflow_filter}'. Configured workflows: "
+            + ", ".join(sorted(app.config.workflows.workflows))
+            + "."
+        )
+
+    try:
+        branch = app.repo.active_branch.name
+    except TypeError as e:
+        raise click.ClickException(
+            "HEAD is detached; pass an explicit run ID instead of "
+            "'all' / workflow name."
+        ) from e
+
+    runs = app.gh_repo.get_workflow_runs(branch=branch)  # type: ignore[arg-type]
+    runs_list: list[github.WorkflowRun.WorkflowRun] = list(runs[:50])
+
+    selected: list[str] = []
+    for run in runs_list:
+        if workflow_filter is not None and run.name != workflow_filter:
+            continue
+        if run.name not in app.config.workflows.workflows:
+            continue
+        run_id = str(run.id)
+        if app.has_note and app.note.get_ci_solution_for_run(run_id) is not None:
+            continue
+        if not _run_is_actionable(app, run):
+            continue
+        selected.append(run_id)
+
+    return selected
+
+
+def _run_is_actionable(app: AppContext, run: "github.WorkflowRun.WorkflowRun") -> bool:
+    """Mirror of the dispatch decision in ``build_workflow_context_for_run``.
+
+    Returns True if mergai would build a context for this run if asked
+    to handle it now. Used by ``mergai ci handle all`` /
+    ``mergai ci handle <workflow>`` to filter the run list before
+    iterating.
+    """
+    config = app.config.workflows.get(run.name)
+    if config is None or not config.enabled:
+        return False
+    if not (run.head_branch or "").startswith("mergai/"):
+        return False
+    if run.conclusion == "failure":
+        return True
+    if run.conclusion == "success" and config.context.code_scanning_check:
+        pr_number = _resolve_pr_number(run)
+        if pr_number is None:
+            return False
+        return _code_scanning_has_findings(
+            app,
+            workflow_name=run.name,
+            head_sha=run.head_sha,
+            pr_number=pr_number,
+        )
+    return False
+
+
+def _handle_one_run(
+    app: AppContext,
+    run_id: str,
+    *,
+    workflow_override: str | None,
+    pr_override: int | None,
+    artifacts_dir_override: str | None,
+) -> None:
+    """Handle a single workflow run.
+
+    Body of the old single-run ``handle`` command, hoisted out so that
+    ``handle`` can iterate over multiple runs for the ``all`` /
+    workflow-name targets.
     """
     with build_workflow_context_for_run(
         app,
         run_id,
-        workflow_override=workflow,
-        pr_override=pr,
-        artifacts_dir_override=artifacts_dir,
+        workflow_override=workflow_override,
+        pr_override=pr_override,
+        artifacts_dir_override=artifacts_dir_override,
     ) as built:
         if built is None:
             return
         context, config = built
 
-        # Don't process the same run twice. With the unified solutions[]
-        # store this is just a lookup by run_id.
         existing = app.note.get_ci_solution_for_run(run_id)
         if existing is not None:
             click.echo(
@@ -122,8 +243,6 @@ def handle(
             )
             return
 
-        # Cap is on *applied* fixes — failed agent runs leave no
-        # solution behind, so they don't count toward max_attempts.
         prior_solutions = app.note.get_ci_solutions(context.workflow_name)
         attempt_number = len(prior_solutions) + 1
         if attempt_number > config.max_attempts:
@@ -137,8 +256,9 @@ def handle(
             return
 
         click.echo(
-            f"Handling '{context.workflow_name}' (attempt {attempt_number} of "
-            f"{config.max_attempts}). Context: {context.summary}"
+            f"Handling '{context.workflow_name}' run {run_id} "
+            f"(attempt {attempt_number} of {config.max_attempts}). "
+            f"Context: {context.summary}"
         )
 
         handler = get_handler(app, config)
@@ -151,8 +271,6 @@ def handle(
             )
             return
 
-        # Wrap the agent's response with CI-fix metadata, append to the
-        # note's solutions[], persist, then commit.
         ci_solution = {
             "type": "ci_fix",
             "request": {
