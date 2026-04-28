@@ -317,3 +317,152 @@ def _post_max_attempts_comment(
         app.gh_repo.get_pull(pr_number).create_issue_comment(body)
     except Exception as e:  # noqa: BLE001 — best-effort notification
         log.warning("Failed to post PR comment on #%s: %s", pr_number, e)
+
+
+@ci.command(name="list")
+@click.pass_obj
+@click.option(
+    "--branch",
+    "-b",
+    "branch_override",
+    required=False,
+    help="Branch to list runs for (default: current branch).",
+)
+@click.option(
+    "--limit",
+    "-n",
+    default=20,
+    type=int,
+    show_default=True,
+    help="Maximum number of recent runs to show.",
+)
+@click.option(
+    "--check-findings/--no-check-findings",
+    default=True,
+    show_default=True,
+    help=(
+        "For passing runs whose workflow has 'code_scanning_check', query "
+        "Code Scanning to determine the actual finding count. Disable to "
+        "skip the extra API calls."
+    ),
+)
+def list_runs(
+    app: AppContext,
+    branch_override: str | None,
+    limit: int,
+    check_findings: bool,
+) -> None:
+    """List recent workflow runs and their mergai status.
+
+    For each configured workflow run on the branch, shows whether
+    mergai has already applied a fix (matching ``ci_fix`` solution) or,
+    if not, what action mergai would take if the run was handled now.
+    """
+    repo = app.gh_repo
+
+    branch = branch_override
+    if branch is None:
+        try:
+            branch = app.repo.active_branch.name
+        except TypeError as e:
+            raise click.ClickException(
+                "HEAD is detached; pass --branch explicitly."
+            ) from e
+
+    # PyGithub's type stub asks for a Branch object, but the API
+    # accepts a branch name string. Pass the string directly.
+    runs = repo.get_workflow_runs(branch=branch)  # type: ignore[arg-type]
+
+    rows: list[tuple[str, ...]] = []
+    runs_list: list[github.WorkflowRun.WorkflowRun] = list(runs[:limit])
+    for run in runs_list:
+        if run.name not in app.config.workflows.workflows:
+            continue
+        status, notes = _list_run_status(app, run, check_findings=check_findings)
+        rows.append(
+            (
+                str(run.id),
+                run.name,
+                run.conclusion or run.status or "-",
+                (run.head_sha or "")[:8],
+                status,
+                notes,
+            )
+        )
+
+    if not rows:
+        click.echo(
+            f"No configured workflow runs found for branch '{branch}' "
+            f"(showing first {limit})."
+        )
+        return
+
+    from rich.console import Console
+    from rich.table import Table
+
+    table = Table(show_lines=False)
+    table.add_column("Run ID", no_wrap=True)
+    table.add_column("Workflow")
+    table.add_column("Conclusion")
+    table.add_column("Head SHA", no_wrap=True)
+    table.add_column("Status")
+    table.add_column("Notes")
+    for row in rows:
+        table.add_row(*row)
+    Console().print(table)
+
+
+def _list_run_status(
+    app: AppContext,
+    run: "github.WorkflowRun.WorkflowRun",
+    *,
+    check_findings: bool,
+) -> tuple[str, str]:
+    """Return ``(status, notes)`` describing what mergai sees for this run.
+
+    Status is one of:
+    - ``applied``: a ``type: ci_fix`` solution exists with a matching ``run_id``.
+    - ``pending``: not processed and mergai *would* act (failure, or
+      success with code_scanning_check + findings present).
+    - ``skip``: not processed and mergai would not act (passing run with
+      no opt-in, conclusion not actionable, workflow disabled, etc.).
+    """
+    run_id = str(run.id)
+    existing = app.note.get_ci_solution_for_run(run_id) if app.has_note else None
+    if existing is not None:
+        solutions = app.note.solutions or []
+        idx = next(
+            (i for i, s in enumerate(solutions) if s is existing),
+            -1,
+        )
+        attempt = existing.get("request", {}).get("attempt_number", "?")
+        return "applied", f"solutions[{idx}], attempt {attempt}"
+
+    config = app.config.workflows.get(run.name)
+    if config is None or not config.enabled:
+        return "skip", "workflow not enabled in config"
+
+    if not (run.head_branch or "").startswith("mergai/"):
+        return "skip", f"head_branch '{run.head_branch}' is not mergai/*"
+
+    if run.conclusion == "failure":
+        return "pending", "failure → artifact + log fallback"
+
+    if run.conclusion == "success":
+        if not config.context.code_scanning_check:
+            return "skip", "passed; code_scanning_check not enabled"
+        if not check_findings:
+            return "pending", "would check Code Scanning"
+        pr_number = _resolve_pr_number(run)
+        if pr_number is None:
+            return "skip", "no associated PR for code scanning lookup"
+        if _code_scanning_has_findings(
+            app,
+            workflow_name=run.name,
+            head_sha=run.head_sha,
+            pr_number=pr_number,
+        ):
+            return "pending", "Code Scanning has findings"
+        return "skip", "passed; no Code Scanning findings"
+
+    return "skip", f"conclusion '{run.conclusion}'"
