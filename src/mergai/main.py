@@ -30,14 +30,16 @@ def register_commands(cli):
 
     cli.add_command(pr)
 
-    from .commands.util import comment, log, merge_prompt, prompt, show, status
+    from .commands.util import comment, log, show, status
 
     cli.add_command(show)
     cli.add_command(status)
     cli.add_command(log)
-    cli.add_command(prompt)
     cli.add_command(comment)
-    cli.add_command(merge_prompt)
+
+    from .commands.prompt import prompt
+
+    cli.add_command(prompt)
 
     from .commands.commit import commit
 

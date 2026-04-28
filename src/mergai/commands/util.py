@@ -536,42 +536,6 @@ def log(app: AppContext, ref: str):
     util.print_or_page(output_str, format="text")
 
 
-@click.command()
-@click.pass_obj
-def prompt(app: AppContext):
-    try:
-        if not app.has_note:
-            click.echo("No note found. Please prepare the context first.")
-            click.echo("Use `mergai create-conflict-context` to add conflict context.")
-            click.echo(
-                "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
-            )
-            exit(1)
-        prompt_text = app.prompt_builder.build_resolve_prompt()
-        util.print_or_page(prompt_text, format="markdown")
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)
-
-
-@click.command()
-@click.pass_obj
-def merge_prompt(app: AppContext):
-    try:
-        if not app.has_note:
-            click.echo("No note found. Please prepare the context first.")
-            click.echo("Use `mergai create-conflict-context` to add conflict context.")
-            click.echo(
-                "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
-            )
-            exit(1)
-        prompt_text = app.prompt_builder.build_describe_prompt()
-        util.print_or_page(prompt_text, format="markdown")
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        exit(1)
-
-
 COMMENT_FILE_TEMPLATE = """\
 
 # MergAI comment
