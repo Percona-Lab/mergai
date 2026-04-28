@@ -10,11 +10,18 @@ build an AI prompt: affected files and a per-finding summary of
 rule-id + location + message. It is deliberately tolerant of missing or
 odd fields — real-world SARIF files vary.
 
-When the SARIF artifact is absent — typically because the workflow
-failed before clang-tidy could run (e.g. a Bazel build error during
-``compile_commands.json`` generation) — the builder falls back to
-fetching the failing job's log via the GitHub API. The agent then sees
-the actual build error rather than a silent crash.
+The builder picks its source from what the caller provides:
+
+* ``artifacts_dir`` set: read the SARIF from the downloaded artifact.
+  If the workflow failed before producing one (e.g. a Bazel error
+  during ``compile_commands.json`` generation), fall back to the
+  failing job's log so the agent sees the build error rather than a
+  silent crash. This is the path used when the watched workflow_run
+  fails.
+* ``head_sha`` set (no artifacts): fetch the SARIF for that commit via
+  Code Scanning's analyses API. This is the path used when the
+  workflow_run *passed* but ``code_scanning_check`` is enabled — the
+  build was clean, but Code Scanning has findings to fix.
 """
 
 import json
@@ -50,7 +57,35 @@ class SARIFContextBuilder(WorkflowContextBuilder):
         run_id: str,
         pr_number: int,
         artifacts_dir: str | None,
+        head_sha: str | None = None,
     ) -> WorkflowContext:
+        if artifacts_dir is not None:
+            return self._build_from_artifact(
+                config, workflow_name, run_id, pr_number, artifacts_dir
+            )
+        if head_sha is not None:
+            return self._build_from_code_scanning(
+                workflow_name, run_id, pr_number, head_sha
+            )
+        raise FileNotFoundError(
+            f"SARIF context for '{workflow_name}' needs either an "
+            f"artifacts directory (workflow_run trigger) or a head_sha "
+            f"(check_run trigger from Code Scanning); neither was provided."
+        )
+
+    def _build_from_artifact(
+        self,
+        config: WorkflowContextConfig,
+        workflow_name: str,
+        run_id: str,
+        pr_number: int,
+        artifacts_dir: str,
+    ) -> WorkflowContext:
+        """Read SARIF from the downloaded workflow artifact.
+
+        Falls back to the failing job's log when the artifact is missing
+        (workflow failed before producing the SARIF report).
+        """
         if config.source != "artifact":
             raise NotImplementedError(
                 f"SARIF source '{config.source}' is not supported yet "
@@ -73,8 +108,65 @@ class SARIFContextBuilder(WorkflowContextBuilder):
             )
 
         sarif_data = json.loads(sarif_path.read_text())
-        findings = self._flatten_findings(sarif_data)
+        return self._context_from_sarif(
+            sarif_data,
+            workflow_name=workflow_name,
+            run_id=run_id,
+            pr_number=pr_number,
+            extra_raw={"source": "artifact"},
+        )
 
+    def _build_from_code_scanning(
+        self,
+        workflow_name: str,
+        run_id: str,
+        pr_number: int,
+        head_sha: str,
+    ) -> WorkflowContext:
+        """Fetch SARIF from Code Scanning for the given commit + tool.
+
+        Used when the watched workflow_run *passed* but the per-workflow
+        config opts in via ``code_scanning_check: true`` — Code Scanning
+        flagged findings even though the build itself was clean.
+        """
+        if self.app.gh is None:
+            raise FileNotFoundError(
+                f"Cannot fetch Code Scanning SARIF for '{workflow_name}': "
+                f"no GitHub token available."
+            )
+
+        analysis = self.find_code_scanning_analysis(
+            tool_name=workflow_name, head_sha=head_sha, pr_number=pr_number
+        )
+        if analysis is None:
+            raise FileNotFoundError(
+                f"No Code Scanning analyses found for tool '{workflow_name}' "
+                f"on refs/pull/{pr_number}/merge."
+            )
+        sarif_data = self._download_sarif_for_analysis(analysis["id"])
+        return self._context_from_sarif(
+            sarif_data,
+            workflow_name=workflow_name,
+            run_id=run_id,
+            pr_number=pr_number,
+            extra_raw={
+                "source": "code-scanning",
+                "analysis_id": analysis["id"],
+                "analysis_commit_sha": analysis["commit_sha"],
+                "analysis_ref": analysis["ref"],
+            },
+        )
+
+    def _context_from_sarif(
+        self,
+        sarif_data: dict[str, Any],
+        *,
+        workflow_name: str,
+        run_id: str,
+        pr_number: int,
+        extra_raw: dict[str, Any],
+    ) -> WorkflowContext:
+        findings = self._flatten_findings(sarif_data)
         files_affected = sorted({f["file"] for f in findings if f["file"]})
         details = self._format_details(findings)
 
@@ -91,8 +183,62 @@ class SARIFContextBuilder(WorkflowContextBuilder):
             summary=summary,
             files_affected=files_affected,
             details=details,
-            raw_data={"findings": findings},
+            raw_data={"findings": findings, **extra_raw},
         )
+
+    def find_code_scanning_analysis(
+        self, *, tool_name: str, head_sha: str, pr_number: int
+    ) -> dict[str, Any] | None:
+        """Look up the Code Scanning analysis for a commit + tool, or None.
+
+        Filters ``/code-scanning/analyses`` by the PR's merge ref and
+        tool name, then matches by ``commit_sha``. Falls back to the
+        most-recent analysis on the same ref+tool if no commit_sha match
+        — useful when analysis ingestion lags slightly behind the
+        workflow_run event, or the merge-commit SHA drifted.
+
+        Returned dicts have ``id``, ``commit_sha``, ``ref``,
+        ``results_count``, etc. Used by both this builder
+        (``_build_from_code_scanning``) and the orchestrator (to
+        pre-check ``results_count`` before running the resolve handler).
+        """
+        repo = self.app.gh_repo
+        ref = f"refs/pull/{pr_number}/merge"
+
+        _, analyses = repo._requester.requestJsonAndCheck(
+            "GET",
+            f"{repo.url}/code-scanning/analyses",
+            parameters={"ref": ref, "tool_name": tool_name, "per_page": 30},
+        )
+
+        analysis = next(
+            (a for a in analyses if a.get("commit_sha") == head_sha),
+            None,
+        )
+        if analysis is None and analyses:
+            log.info(
+                "No analysis matches commit %s on %s; using most recent",
+                head_sha[:7],
+                ref,
+            )
+            analysis = analyses[0]
+        return analysis
+
+    def _download_sarif_for_analysis(self, analysis_id: int) -> dict[str, Any]:
+        """Download SARIF for a Code Scanning analysis ID.
+
+        Uses ``Accept: application/sarif+json`` so the API returns the
+        original SARIF document GitHub stored — same shape that
+        :meth:`_flatten_findings` consumes from artifact files.
+        """
+        repo = self.app.gh_repo
+        _, sarif_data = repo._requester.requestJsonAndCheck(
+            "GET",
+            f"{repo.url}/code-scanning/analyses/{analysis_id}",
+            headers={"Accept": "application/sarif+json"},
+        )
+        result: dict[str, Any] = sarif_data
+        return result
 
     @staticmethod
     def _try_find_sarif(

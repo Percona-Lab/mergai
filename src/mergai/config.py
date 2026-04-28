@@ -817,25 +817,32 @@ class WorkflowContextConfig:
     Attributes:
         type: Context type (e.g. ``"diff"``, ``"sarif"``, ``"logs"``).
         source: Where to read the context from. Currently ``"artifact"``
-            (downloaded workflow artifact) or ``"code-scanning"`` (GitHub
-            Code Scanning API).
+            (downloaded workflow artifact).
         artifact_name: Name of the artifact to download when ``source`` is
             ``"artifact"``.
         extract_pattern: Regex pattern used by log-style context builders to
             extract relevant lines.
+        code_scanning_check: If true, when the watched workflow_run
+            *passes*, also consult GitHub Code Scanning for findings on
+            the run's commit. If the latest analysis for the configured
+            tool has any results, build a context from that SARIF and
+            run the handler. Only meaningful for SARIF-emitting tools
+            whose workflow uploads to Code Scanning (e.g. clang-tidy).
 
     Example YAML config::
 
         context:
-          type: diff
+          type: sarif
           source: artifact
-          artifact_name: format-results
+          artifact_name: clang-tidy-results
+          code_scanning_check: true
     """
 
     type: str = "logs"
     source: str = "artifact"
     artifact_name: str | None = None
     extract_pattern: str | None = None
+    code_scanning_check: bool = False
 
     @classmethod
     def from_dict(cls, data: dict) -> "WorkflowContextConfig":
@@ -845,6 +852,9 @@ class WorkflowContextConfig:
             source=data.get("source", cls.source),
             artifact_name=data.get("artifact_name"),
             extract_pattern=data.get("extract_pattern"),
+            code_scanning_check=data.get(
+                "code_scanning_check", cls.code_scanning_check
+            ),
         )
 
 

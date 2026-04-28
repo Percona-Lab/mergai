@@ -21,6 +21,7 @@ class DiffContextBuilder(WorkflowContextBuilder):
         run_id: str,
         pr_number: int,
         artifacts_dir: str | None,
+        head_sha: str | None = None,
     ) -> WorkflowContext:
         if artifacts_dir is None:
             raise FileNotFoundError(

@@ -62,6 +62,7 @@ class WorkflowContextBuilder(ABC):
         run_id: str,
         pr_number: int,
         artifacts_dir: str | None,
+        head_sha: str | None = None,
     ) -> WorkflowContext:
         """Build a :class:`WorkflowContext` for a given failed run.
 
@@ -73,7 +74,13 @@ class WorkflowContextBuilder(ABC):
             pr_number: PR number.
             artifacts_dir: Directory with downloaded workflow artifacts.
                 Each artifact is extracted into a subdirectory named after
-                the artifact.
+                the artifact. ``None`` when the trigger is a ``check_run``
+                event (the failure isn't a workflow run, so there's
+                nothing to download).
+            head_sha: Head commit SHA of the run that produced the
+                failure. Required for the ``check_run`` trigger so the
+                SARIF builder can fetch findings from Code Scanning.
+                ``None`` is fine for the workflow_run trigger.
 
         Returns:
             Populated WorkflowContext.
