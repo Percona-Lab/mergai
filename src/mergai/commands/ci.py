@@ -101,7 +101,7 @@ def handle(
         f"{config.max_attempts})"
     )
 
-    builder = get_context_builder(config.context.type)
+    builder = get_context_builder(app, config.context.type)
     context = builder.build_context(
         config.context,
         workflow_name=workflow,

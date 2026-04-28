@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
+from ...app import AppContext
 from ...config import WorkflowContextConfig
 
 
@@ -43,7 +44,15 @@ class WorkflowContextBuilder(ABC):
     ``source``) to a concrete :class:`WorkflowContext`. Subclasses are
     registered by type via
     :func:`mergai.ci.context_builders.get_context_builder`.
+
+    Builders receive the active :class:`~mergai.app.AppContext` so they
+    can fall back to GitHub-API sources (e.g. job logs) when the expected
+    artifact is missing — the SARIF builder uses this when the workflow
+    failed before producing its SARIF report.
     """
+
+    def __init__(self, app: AppContext):
+        self.app = app
 
     @abstractmethod
     def build_context(

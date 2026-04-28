@@ -5,6 +5,7 @@ from :class:`mergai.config.WorkflowContextConfig`. New types can be
 registered by appending to ``_BUILDERS``.
 """
 
+from ...app import AppContext
 from .base import WorkflowContext, WorkflowContextBuilder
 from .diff import DiffContextBuilder
 from .sarif import SARIFContextBuilder
@@ -15,10 +16,13 @@ _BUILDERS: dict[str, type[WorkflowContextBuilder]] = {
 }
 
 
-def get_context_builder(type_: str) -> WorkflowContextBuilder:
+def get_context_builder(app: AppContext, type_: str) -> WorkflowContextBuilder:
     """Return a context-builder instance for the given context type.
 
     Args:
+        app: The active :class:`~mergai.app.AppContext`. Builders receive
+            it so they can fall back to GitHub-API sources (e.g. job
+            logs) when the expected artifact is missing.
         type_: ``WorkflowContextConfig.type`` value (e.g. ``"diff"``,
             ``"sarif"``).
 
@@ -31,7 +35,7 @@ def get_context_builder(type_: str) -> WorkflowContextBuilder:
         raise ValueError(
             f"No context builder registered for type '{type_}'. Known: {known}"
         )
-    return builder_cls()
+    return builder_cls(app)
 
 
 __all__ = [
