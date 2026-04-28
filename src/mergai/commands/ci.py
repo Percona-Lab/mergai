@@ -515,19 +515,30 @@ def list_runs(
         )
         return
 
-    from rich.console import Console
-    from rich.table import Table
+    headers = ("Run ID", "Workflow", "Conclusion", "Head SHA", "Status", "Notes")
+    click.echo(_format_ascii_table(headers, rows))
 
-    table = Table(show_lines=False)
-    table.add_column("Run ID", no_wrap=True)
-    table.add_column("Workflow")
-    table.add_column("Conclusion")
-    table.add_column("Head SHA", no_wrap=True)
-    table.add_column("Status")
-    table.add_column("Notes")
-    for row in rows:
-        table.add_row(*row)
-    Console().print(table)
+
+def _format_ascii_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
+    """Render a plain-ASCII table with `|` columns and `-` rules.
+
+    No Unicode box-drawing characters — works in any terminal /
+    log-aggregator without font surprises. Columns are padded to the
+    widest cell; the last column is left as-is so long notes don't
+    force wide gutters on everything else.
+    """
+    cols = list(zip(headers, *rows, strict=False))
+    widths = [max(len(str(cell)) for cell in col) for col in cols]
+
+    def render_row(row: tuple[str, ...]) -> str:
+        return "  ".join(
+            str(cell).ljust(width) for cell, width in zip(row, widths, strict=False)
+        ).rstrip()
+
+    rule = "  ".join("-" * w for w in widths)
+    lines = [render_row(headers), rule]
+    lines.extend(render_row(row) for row in rows)
+    return "\n".join(lines)
 
 
 def _list_run_status(
@@ -564,7 +575,7 @@ def _list_run_status(
         return "skip", f"head_branch '{run.head_branch}' is not mergai/*"
 
     if run.conclusion == "failure":
-        return "pending", "failure → artifact + log fallback"
+        return "pending", "failure -> artifact + log fallback"
 
     if run.conclusion == "success":
         if not config.context.code_scanning_check:
