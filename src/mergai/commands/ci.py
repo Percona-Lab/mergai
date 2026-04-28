@@ -110,8 +110,22 @@ def handle(
             return
         context, config = built
 
-        prior_attempts = app.note.get_ci_attempts(context.workflow_name)
-        attempt_number = len(prior_attempts) + 1
+        # Don't process the same run twice. With the unified solutions[]
+        # store this is just a lookup by run_id.
+        existing = app.note.get_ci_solution_for_run(run_id)
+        if existing is not None:
+            click.echo(
+                f"Run {run_id} was already processed "
+                f"(solution recorded as attempt "
+                f"{existing.get('request', {}).get('attempt_number', '?')}); "
+                f"nothing to do."
+            )
+            return
+
+        # Cap is on *applied* fixes — failed agent runs leave no
+        # solution behind, so they don't count toward max_attempts.
+        prior_solutions = app.note.get_ci_solutions(context.workflow_name)
+        attempt_number = len(prior_solutions) + 1
         if attempt_number > config.max_attempts:
             click.echo(
                 f"Max attempts ({config.max_attempts}) reached for "
@@ -119,18 +133,6 @@ def handle(
             )
             _post_max_attempts_comment(
                 app, context.pr_number, context.workflow_name, config
-            )
-            _record_attempt(
-                app,
-                workflow=context.workflow_name,
-                attempt_number=attempt_number,
-                run_id=run_id,
-                pr_number=context.pr_number,
-                action_type=config.action_type,
-                summary="(skipped — max attempts reached)",
-                files_affected=[],
-                success=False,
-                give_up=True,
             )
             return
 
@@ -140,29 +142,36 @@ def handle(
         )
 
         handler = get_handler(app, config)
-        success = handler.execute(context)
+        agent_solution = handler.execute(context)
 
-        _record_attempt(
-            app,
-            workflow=context.workflow_name,
-            attempt_number=attempt_number,
-            run_id=run_id,
-            pr_number=context.pr_number,
-            action_type=config.action_type,
-            summary=context.summary,
-            files_affected=context.files_affected,
-            success=success,
-            give_up=False,
-        )
-
-        if not success:
+        if agent_solution is None:
             click.echo(
-                f"Handler did not produce any changes for "
+                f"Handler did not produce a solution for "
                 f"'{context.workflow_name}'. Will retry on the next workflow run."
             )
             return
 
-        _commit_fix(app, workflow=context.workflow_name, attempt_number=attempt_number)
+        # Wrap the agent's response with CI-fix metadata, append to the
+        # note's solutions[], persist, then commit.
+        ci_solution = {
+            "type": "ci_fix",
+            "request": {
+                "workflow": context.workflow_name,
+                "run_id": run_id,
+                "pr_number": context.pr_number,
+                "attempt_number": attempt_number,
+                "context_summary": context.summary,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            },
+            **agent_solution,
+        }
+        solution_idx = app.note.add_solution(ci_solution)
+        app.save_note(app.note)
+
+        try:
+            app.commit_ci_fix_solution(solution_idx)
+        except Exception as e:
+            raise click.ClickException(f"Failed to commit CI fix: {e}") from e
 
 
 @contextmanager
@@ -308,65 +317,3 @@ def _post_max_attempts_comment(
         app.gh_repo.get_pull(pr_number).create_issue_comment(body)
     except Exception as e:  # noqa: BLE001 — best-effort notification
         log.warning("Failed to post PR comment on #%s: %s", pr_number, e)
-
-
-def _record_attempt(
-    app: AppContext,
-    *,
-    workflow: str,
-    attempt_number: int,
-    run_id: str,
-    pr_number: int,
-    action_type: str,
-    summary: str,
-    files_affected: list[str],
-    success: bool,
-    give_up: bool,
-) -> None:
-    """Append the attempt to the note's ``ci_fix_history`` and persist it."""
-    attempt = {
-        "workflow": workflow,
-        "attempt_number": attempt_number,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "run_id": run_id,
-        "pr_number": pr_number,
-        "action_type": action_type,
-        "context_summary": summary,
-        "files_affected": list(files_affected),
-        "success": success,
-        "give_up": give_up,
-    }
-    app.note.add_ci_attempt(attempt)
-    app.save_note(app.note)
-
-
-def _commit_fix(app: AppContext, workflow: str, attempt_number: int) -> None:
-    """Stage all changes and commit the CI fix.
-
-    The corresponding mergai note is attached via
-    ``add_selective_note(..., ["ci_fix_history"])``, recording only the
-    just-added attempt entry.
-    """
-    repo = app.repo
-    work_dir = repo.working_tree_dir
-    if work_dir is None:
-        raise click.ClickException("Repo has no working tree; cannot commit fix")
-
-    repo.git.add("-A", str(Path(work_dir)))
-
-    if not repo.index.diff("HEAD"):
-        # Should not happen — handler returned success because tree was
-        # dirty — but guard against subtle edge cases (e.g. all changes
-        # in submodules, ignored paths) so we don't create empty commits.
-        click.echo("No staged changes after `git add`; skipping commit.")
-        return
-
-    message = f"fix({workflow}): automated fix attempt {attempt_number}\n"
-    if app.config.commit.footer:
-        message += "\n" + app.config.commit.footer
-
-    repo.git.commit("-m", message)
-
-    commit_sha = repo.head.commit.hexsha
-    app.add_selective_note(commit_sha, ["ci_fix_history"])
-    click.echo(f"Committed CI fix as {commit_sha[:11]}.")

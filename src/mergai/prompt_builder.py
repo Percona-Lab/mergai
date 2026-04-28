@@ -1,15 +1,20 @@
 """Prompt building utilities for MergAI.
 
 This module provides the PromptBuilder class which encapsulates all logic
-for building prompts for AI agents from MergaiNote data.
+for building prompts for AI agents from MergaiNote data, plus free
+functions for prompts that don't depend on a merge note (e.g. CI fixes).
 """
 
 import json
+from typing import TYPE_CHECKING
 
 from . import prompts
 from .config import PromptConfig
 from .models import MergaiNote
 from .utils import util
+
+if TYPE_CHECKING:
+    from .ci.context_builders.base import WorkflowContext
 
 
 class PromptBuilder:
@@ -157,3 +162,46 @@ class PromptBuilder:
             Formatted prompt string describing the error.
         """
         return f"An error occurred while trying to process the output: {error}"
+
+
+def build_ci_fix_prompt(context: "WorkflowContext") -> str:
+    """Build the prompt for fixing a CI workflow failure.
+
+    Mirrors the structure of :meth:`PromptBuilder.build_resolve_prompt`:
+    system prompt + project invariants + per-context section + a JSON
+    serialization of the input data. The agent is told to write a
+    response with the same shape as the resolve flow
+    (``resolved``/``unresolved``/``modified``/``summary``/``review_notes``)
+    so the post-processing pipeline (validators, commit message, note
+    attachment) can be shared.
+
+    Free function rather than a ``PromptBuilder`` method because CI
+    fixes are not driven by a merge note — only the optional
+    ``.mergai/invariants.md`` is read from the working tree, and the
+    rest of the prompt is fully derived from the supplied
+    ``WorkflowContext``.
+    """
+    system_prompt = prompts.load_system_prompt_ci_fix()
+    project_invariants = util.load_if_exists(".mergai/invariants.md")
+
+    prompt = system_prompt + "\n\n"
+    if project_invariants:
+        prompt += project_invariants + "\n\n"
+
+    prompt += prompts.load_ci_fix_context_prompt() + "\n\n"
+
+    context_dict = {
+        "workflow_name": context.workflow_name,
+        "run_id": context.run_id,
+        "pr_number": context.pr_number,
+        "summary": context.summary,
+        "files_affected": list(context.files_affected),
+        "details": context.details,
+    }
+
+    prompt += "## CI Fix Context\n\n"
+    prompt += "```json\n"
+    prompt += json.dumps(context_dict, indent=2)
+    prompt += "\n```\n"
+
+    return prompt

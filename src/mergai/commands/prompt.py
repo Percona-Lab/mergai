@@ -15,7 +15,7 @@ Three subtypes share one entry point:
 import click
 
 from ..app import AppContext
-from ..ci.handlers.resolve import build_ci_fix_prompt
+from ..prompt_builder import build_ci_fix_prompt
 from ..utils import util
 from .ci import build_workflow_context_for_run
 

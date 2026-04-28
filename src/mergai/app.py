@@ -258,6 +258,8 @@ class AppContext:
         except AgentExecutionError as e:
             raise Exception(str(e)) from e
 
+        solution["type"] = "conflict_resolution"
+
         # Add solution to solutions array
         if uncommitted is not None and force:
             # Replace the uncommitted solution
@@ -392,11 +394,6 @@ class AppContext:
                 selective_note["user_comment"] = self.note.user_comment
             elif field == "merge_description" and self.note.has_merge_description:
                 selective_note["merge_description"] = self.note.merge_description
-            elif field == "ci_fix_history" and self.note.has_ci_fix_history:
-                # Attach only the most recent attempt; older ones already
-                # live on earlier commits' notes.
-                assert self.note.ci_fix_history is not None  # for type-checkers
-                selective_note["ci_fix_history"] = [self.note.ci_fix_history[-1]]
 
         # Write selective note to temp file and attach as git note
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -420,6 +417,90 @@ class AppContext:
         # Update note_index in note
         self.note.add_note_index_entry(commit, fields)
         self.save_note(self.note)
+
+    def commit_ci_fix_solution(self, solution_idx: int) -> None:
+        """Commit the CI-fix solution at ``solution_idx`` and attach the note.
+
+        Mirrors :meth:`commit_solution`'s structure for the CI-fix path:
+        builds a ``fix(<workflow>): ...`` commit message from the
+        agent's response (resolved / unresolved / modified sections),
+        stages every file the agent touched, commits, and attaches the
+        solution as a selective git note via
+        ``add_selective_note(sha, ["solutions[N]"])``.
+
+        The solution at ``solution_idx`` must have ``type == "ci_fix"``
+        and a populated ``request`` dict (workflow / run_id /
+        attempt_number). Raises if the working tree is clean — that
+        means the agent claimed a fix but didn't touch any files (which
+        ``validate_solution`` should have caught earlier).
+        """
+        if not self.note.has_solutions or self.note.solutions is None:
+            raise Exception("No solutions in note.")
+        if solution_idx >= len(self.note.solutions):
+            raise Exception(
+                f"Solution index {solution_idx} out of range "
+                f"(have {len(self.note.solutions)})."
+            )
+
+        solution = self.note.solutions[solution_idx]
+        if solution.get("type") != "ci_fix":
+            raise Exception(
+                f"Solution at {solution_idx} is "
+                f"type={solution.get('type')!r}, expected 'ci_fix'."
+            )
+        if not self.repo.is_dirty(untracked_files=True):
+            raise Exception(
+                "No changes to commit — agent reported a fix but the "
+                "working tree is clean."
+            )
+
+        request = solution.get("request") or {}
+        response = solution.get("response") or {}
+        workflow = request.get("workflow", "ci")
+        attempt_number = request.get("attempt_number", "?")
+
+        # Stage every file the agent touched (resolved + modified).
+        # Untracked files won't show up in index.diff(None), so add them
+        # explicitly via git index.add — same approach commit_solution uses.
+        files_to_stage = list(response.get("resolved", {}).keys())
+        files_to_stage += list(response.get("modified", {}).keys())
+        if files_to_stage:
+            self.repo.index.add(files_to_stage)
+
+        # Build commit message in the same shape as commit_solution.
+        message = f"fix({workflow}): automated fix attempt {attempt_number}\n\n"
+
+        summary = response.get("summary", "")
+        if summary:
+            message += textwrap.fill(summary, width=72) + "\n\n"
+
+        resolved_files = response.get("resolved", {})
+        if resolved_files:
+            message += "Resolved:\n"
+            for file_path in resolved_files:
+                message += f"\t{file_path}\n"
+            message += "\n"
+
+        unresolved_files = response.get("unresolved", {})
+        if unresolved_files:
+            message += "Unresolved:\n"
+            for file_path in unresolved_files:
+                message += f"\t{file_path}\n"
+            message += "\n"
+
+        modified_files = response.get("modified", {})
+        if modified_files:
+            message += "Modified:\n"
+            for file_path in modified_files:
+                message += f"\t{file_path}\n"
+            message += "\n"
+
+        message += self.commit_footer
+
+        self.repo.index.commit(message)
+        self.add_selective_note(
+            self.repo.head.commit.hexsha, [f"solutions[{solution_idx}]"]
+        )
 
     def commit_solution(self):
         """Commit the current solution to the repository."""
@@ -1318,6 +1399,7 @@ class AppContext:
         )
 
         return {
+            "type": "conflict_resolution",
             "response": {
                 "summary": summary,
                 "resolved": resolved,

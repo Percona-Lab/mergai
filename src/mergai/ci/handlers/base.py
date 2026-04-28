@@ -22,20 +22,26 @@ class WorkflowHandler(ABC):
         self.config = config
 
     @abstractmethod
-    def execute(self, context: WorkflowContext) -> bool:
-        """Attempt the fix.
+    def execute(self, context: WorkflowContext) -> dict | None:
+        """Attempt the fix; return the solution dict on success.
 
-        Handlers should write their changes to the working tree. The
-        caller (``mergai ci handle``) is responsible for creating the
-        commit and pushing. Handlers must NOT commit themselves.
+        Handlers write their changes to the working tree. The caller
+        (``mergai ci handle``) wraps the returned dict as a
+        ``type: ci_fix`` entry in the note's ``solutions`` list, builds
+        the commit, and attaches the selective git note. Handlers MUST
+        NOT commit themselves.
 
         Args:
             context: The failure context built by the configured
                 :class:`~mergai.ci.context_builders.base.WorkflowContextBuilder`.
 
         Returns:
-            True if the fix appears to have been applied (e.g. the
-            working tree is dirty), False otherwise. The caller decides
-            what to do with a False result (retry vs. give up is driven
-            by ``WorkflowConfig.max_attempts`` at the command level).
+            A solution dict with the canonical
+            ``{"response": {"summary", "resolved", "unresolved",
+            "modified", "review_notes"}}`` shape — same as the resolve
+            flow — so the post-processing pipeline can be shared.
+            ``None`` when the handler did not produce a fix (e.g. the
+            agent failed, or a command produced no diff); the caller
+            then exits without recording an attempt, leaving the cap
+            untouched for the next workflow run.
         """

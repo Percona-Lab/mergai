@@ -28,7 +28,7 @@ class CommandHandler(WorkflowHandler):
         self.app = app
         self.config = config
 
-    def execute(self, context: WorkflowContext) -> bool:
+    def execute(self, context: WorkflowContext) -> dict | None:
         env = os.environ.copy()
         env["TARGET_BRANCH"] = self.app.note.merge_info.target_branch
         env["PR_NUMBER"] = str(context.pr_number)
@@ -50,7 +50,7 @@ class CommandHandler(WorkflowHandler):
             )
         except OSError as e:
             log.error("Failed to spawn fix command: %s", e)
-            return False
+            return None
 
         if result.stdout:
             log.debug("stdout:\n%s", result.stdout)
@@ -67,4 +67,37 @@ class CommandHandler(WorkflowHandler):
         # exit with dirty tree still counts (some formatters return non-zero
         # when they *do* reformat). An exit of 0 with a clean tree means
         # the command ran but made no changes — treat as "no fix applied".
-        return self.app.repo.is_dirty(untracked_files=True)
+        if not self.app.repo.is_dirty(untracked_files=True):
+            return None
+
+        return self._synthesize_solution(context)
+
+    def _synthesize_solution(self, context: WorkflowContext) -> dict:
+        """Build a solution dict from the working tree state after the command.
+
+        Command-driven fixers don't produce structured output, so we
+        enumerate the dirty / untracked files and treat them as the
+        ``resolved`` set. Keeps the recorded shape aligned with what
+        :class:`ResolveHandler` returns, so the orchestrator and commit
+        logic don't have to special-case action types.
+        """
+        repo = self.app.repo
+        dirty: list[str] = sorted(
+            item.a_path for item in repo.index.diff(None) if item.a_path
+        )
+        untracked: list[str] = sorted(repo.untracked_files)
+        changed: list[str] = sorted(set(dirty) | set(untracked))
+
+        explanation = f"changed by '{context.workflow_name}' auto-fix"
+        return {
+            "response": {
+                "summary": (
+                    f"{context.workflow_name} auto-fix: {len(changed)} "
+                    f"file{'s' if len(changed) != 1 else ''} changed"
+                ),
+                "resolved": dict.fromkeys(changed, explanation),
+                "unresolved": {},
+                "modified": {},
+                "review_notes": "",
+            },
+        }
