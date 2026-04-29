@@ -29,5 +29,9 @@ def load_ci_fix_context_prompt() -> str:
     return load_prompt("ci_fix_context.md")
 
 
+def load_merge_context_for_ci_fix_prompt() -> str:
+    return load_prompt("merge_context_for_ci_fix.md")
+
+
 def load_user_comment_prompt() -> str:
     return load_prompt("user_comment.md")

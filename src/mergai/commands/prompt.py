@@ -120,11 +120,18 @@ def prompt_ci(
             click.echo(f"No unprocessed actionable runs found for target '{target}'.")
             return
 
+    # Embed the merge note when available so the prompt actually shows
+    # the agent it's a post-merge state. `prompt ci <run-id>` for an
+    # arbitrary run outside a mergai working tree still works — the
+    # preamble just skips the merge section in that case.
+    note = app.note if app.has_note else None
+    prompt_config = app.config.prompt
+
     # Single run renders as the agent would see it (full prompt). Multi
-    # run shares the system prompt + invariants + context-format
-    # description across runs and emits one per-run section per run, so
-    # the output is actually useful for inspection and not wall-of-text
-    # repetition.
+    # run shares the system prompt + invariants + merge context +
+    # context-format description across runs and emits one per-run
+    # section per run, so the output is actually useful for inspection
+    # and not wall-of-text repetition.
     if len(run_ids) == 1:
         with build_workflow_context_for_run(
             app,
@@ -136,7 +143,10 @@ def prompt_ci(
             if built is None:
                 return
             context, _config = built
-            util.print_or_page(build_ci_fix_prompt(context), format="markdown")
+            util.print_or_page(
+                build_ci_fix_prompt(context, note=note, prompt_config=prompt_config),
+                format="markdown",
+            )
         return
 
     sections: list[str] = []
@@ -156,4 +166,8 @@ def prompt_ci(
 
     if not sections:
         return
-    util.print_or_page(build_ci_fix_preamble() + "\n".join(sections), format="markdown")
+    util.print_or_page(
+        build_ci_fix_preamble(note=note, prompt_config=prompt_config)
+        + "\n".join(sections),
+        format="markdown",
+    )

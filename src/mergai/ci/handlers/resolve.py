@@ -11,8 +11,6 @@ on the note and produces the commit.
 import logging
 
 from ...agent_executor import AgentExecutionError, AgentExecutor
-from ...app import AppContext
-from ...config import WorkflowConfig
 from ...prompt_builder import build_ci_fix_prompt
 from ..context_builders.base import WorkflowContext
 from .base import WorkflowHandler
@@ -29,10 +27,6 @@ class ResolveHandler(WorkflowHandler):
     no leftover conflict markers).
     """
 
-    def __init__(self, app: AppContext, config: WorkflowConfig):
-        self.app = app
-        self.config = config
-
     def execute(self, context: WorkflowContext) -> dict | None:
         """Run the agent against ``context`` and return its parsed solution.
 
@@ -40,8 +34,17 @@ class ResolveHandler(WorkflowHandler):
         ``response`` wrapper applied by :class:`AgentExecutor`) on
         success, or ``None`` if the agent could not produce a valid
         result within the configured retry budget.
+
+        Embeds the merge note (when available) into the prompt so the
+        agent diagnoses the failure against the post-merge state —
+        which upstream commits were brought in, which conflicts mergai
+        already resolved, and any prior CI fixes — rather than
+        treating the failure in isolation.
         """
-        prompt = build_ci_fix_prompt(context)
+        note = self.app.note if self.app.has_note else None
+        prompt = build_ci_fix_prompt(
+            context, note=note, prompt_config=self.app.config.prompt
+        )
         agent = self.app.get_agent(yolo=True)
         executor = AgentExecutor(
             agent=agent,
