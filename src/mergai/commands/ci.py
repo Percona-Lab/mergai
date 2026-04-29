@@ -112,8 +112,16 @@ def fix(
     dispatches to the configured handler, and commits the result as a
     `type: ci_fix` solution.
     """
+    # `check_staleness` only applies at the entry — once a run has been
+    # vetted (either by the user passing its run-id explicitly or by
+    # `_resolve_target_runs` filtering the listing) the per-iteration
+    # head_sha check just gets in our own way: applying a fix for run #1
+    # commits something on top of HEAD, which would then disqualify
+    # run #2 even though both runs were valid against the same commit at
+    # the start of the loop.
     if target.isdigit():
         run_ids = [target]
+        check_staleness = True
     else:
         run_ids = _resolve_target_runs(app, target)
         if not run_ids:
@@ -123,6 +131,7 @@ def fix(
             f"Found {len(run_ids)} unprocessed actionable run(s) "
             f"for target '{target}'."
         )
+        check_staleness = False
 
     for run_id in run_ids:
         _fix_one_run(
@@ -131,6 +140,7 @@ def fix(
             workflow_override=workflow,
             pr_override=pr,
             artifacts_dir_override=artifacts_dir,
+            check_staleness=check_staleness,
         )
 
 
@@ -268,6 +278,7 @@ def _fix_one_run(
     workflow_override: str | None,
     pr_override: int | None,
     artifacts_dir_override: str | None,
+    check_staleness: bool = True,
 ) -> None:
     """Apply a fix for a single workflow run.
 
@@ -275,27 +286,33 @@ def _fix_one_run(
     command can iterate over multiple runs for the ``all`` /
     workflow-name targets.
 
-    Skips runs whose head commit isn't the current branch HEAD: the
-    findings describe an older snapshot, and applying a fix on the
-    wrong base is worse than no fix. Use ``mergai prompt ci <run-id>``
-    to inspect stale runs without committing.
+    Args:
+        check_staleness: If True (default; for explicit run-id targets),
+            reject the run when its head_sha isn't the current branch
+            HEAD. ``fix all`` / ``fix <workflow>`` pass False because
+            ``_resolve_target_runs`` has already vetted the runs at the
+            top of the loop, and applying a fix for run #1 will move
+            HEAD past run #2 even though both were originally valid.
     """
-    try:
-        run = app.gh_repo.get_workflow_run(int(run_id))
-    except github.GithubException as e:
-        raise click.ClickException(f"Could not fetch workflow run {run_id}: {e}") from e
-    head_status = _run_head_status(app, run)
-    if head_status != "current":
-        reason = (
-            "superseded by newer commits"
-            if head_status == "superseded"
-            else "head_sha not reachable from HEAD (force-pushed?)"
-        )
-        click.echo(
-            f"Run {run_id} ({run.head_sha[:7]}) is {head_status}: {reason}; "
-            f"skipping."
-        )
-        return
+    if check_staleness:
+        try:
+            run = app.gh_repo.get_workflow_run(int(run_id))
+        except github.GithubException as e:
+            raise click.ClickException(
+                f"Could not fetch workflow run {run_id}: {e}"
+            ) from e
+        head_status = _run_head_status(app, run)
+        if head_status != "current":
+            reason = (
+                "superseded by newer commits"
+                if head_status == "superseded"
+                else "head_sha not reachable from HEAD (force-pushed?)"
+            )
+            click.echo(
+                f"Run {run_id} ({run.head_sha[:7]}) is {head_status}: {reason}; "
+                f"skipping."
+            )
+            return
 
     with build_workflow_context_for_run(
         app,
