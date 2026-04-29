@@ -10,6 +10,6 @@ on mergai PRs (PSMDB-1972). Top-level pieces:
   ``WorkflowContext``: either a shell command (``command``) or an AI
   agent run (``resolve``).
 
-The ``mergai ci handle`` click command in :mod:`mergai.commands.ci`
+The ``mergai ci fix`` click command in :mod:`mergai.commands.ci`
 wires these together and is the public entry point.
 """

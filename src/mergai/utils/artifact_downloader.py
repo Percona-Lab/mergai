@@ -1,6 +1,6 @@
 """Download and extract artifacts from a GitHub Actions workflow run.
 
-Used by ``mergai ci handle`` so the workflow YAML doesn't have to call
+Used by ``mergai ci fix`` so the workflow YAML doesn't have to call
 the artifacts API itself. The layout matches what the context builders
 expect: each artifact extracted into ``<dest>/<artifact_name>/``.
 """

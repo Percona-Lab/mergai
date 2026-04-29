@@ -26,7 +26,7 @@ class WorkflowHandler(ABC):
         """Attempt the fix; return the solution dict on success.
 
         Handlers write their changes to the working tree. The caller
-        (``mergai ci handle``) wraps the returned dict as a
+        (``mergai ci fix``) wraps the returned dict as a
         ``type: ci_fix`` entry in the note's ``solutions`` list, builds
         the commit, and attaches the selective git note. Handlers MUST
         NOT commit themselves.

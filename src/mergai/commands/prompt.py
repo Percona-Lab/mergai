@@ -6,9 +6,9 @@ Three subtypes share one entry point:
   current merge note (was the top-level ``mergai prompt``).
 * ``prompt describe`` — the merge-description prompt (was
   ``mergai merge-prompt``).
-* ``prompt ci <target>`` — the CI-fix prompt(s) that ``ci handle``
+* ``prompt ci <target>`` — the CI-fix prompt(s) that ``ci fix``
   would feed to the agent. Same positional ``target`` shape as
-  ``ci handle`` (numeric run id, ``"all"``, or a workflow name).
+  ``ci fix`` (numeric run id, ``"all"``, or a workflow name).
   Renders without invoking the agent.
 """
 
@@ -91,17 +91,17 @@ def prompt_ci(
     pr: int | None,
     artifacts_dir: str | None,
 ) -> None:
-    """Print the CI-fix prompt(s) that ``ci handle`` would build.
+    """Print the CI-fix prompt(s) that ``ci fix`` would build.
 
     \b
     TARGET can be:
       * a numeric run ID — print the prompt for that run
       * "all"            — print prompts for every unprocessed
                            actionable run on the current branch
-                           (same filter as `ci handle all`)
+                           (same filter as `ci fix all`)
       * a workflow name  — like "all" but filtered to that workflow
 
-    Runs the same orchestration as ``ci handle`` (resolve run → pick
+    Runs the same orchestration as ``ci fix`` (resolve run → pick
     artifact / Code Scanning / log fallback → build WorkflowContext)
     but stops before invoking the agent and prints the rendered prompt
     instead. Multiple prompts are separated by a header line.

@@ -20,7 +20,7 @@ The handler edits the working tree; this command commits the result as
 a ``type: ci_fix`` solution on the note. The outer workflow pushes the
 new commit so CI re-runs.
 
-``mergai ci handle <run-id>`` is what GitHub Actions calls. Manually
+``mergai ci fix <run-id>`` is what GitHub Actions calls. Manually
 you can also pass ``"all"`` or a workflow name to process every
 unprocessed actionable run on the current branch.
 """
@@ -90,14 +90,14 @@ def ci(app: AppContext, repo: str | None):
         "subdirectory named after it. Useful for manual / offline runs."
     ),
 )
-def handle(
+def fix(
     app: AppContext,
     target: str,
     workflow: str | None,
     pr: int | None,
     artifacts_dir: str | None,
 ) -> None:
-    """Handle one or more workflow runs for the current branch.
+    """Apply a fix for one or more workflow runs on the current branch.
 
     \b
     TARGET can be:
@@ -125,7 +125,7 @@ def handle(
         )
 
     for run_id in run_ids:
-        _handle_one_run(
+        _fix_one_run(
             app,
             run_id,
             workflow_override=workflow,
@@ -186,8 +186,8 @@ def _run_is_actionable(app: AppContext, run: "github.WorkflowRun.WorkflowRun") -
     """Mirror of the dispatch decision in ``build_workflow_context_for_run``.
 
     Returns True if mergai would build a context for this run if asked
-    to handle it now. Used by ``mergai ci handle all`` /
-    ``mergai ci handle <workflow>`` to filter the run list before
+    to handle it now. Used by ``mergai ci fix all`` /
+    ``mergai ci fix <workflow>`` to filter the run list before
     iterating.
 
     Skips runs whose head commit isn't the current branch HEAD —
@@ -218,7 +218,7 @@ def _run_is_actionable(app: AppContext, run: "github.WorkflowRun.WorkflowRun") -
 
 
 def _failure_note(config: WorkflowConfig) -> str:
-    """Describe how `ci handle` would source context for a failed run.
+    """Describe how `ci fix` would source context for a failed run.
 
     The note text is shown by ``ci list`` so the user can tell at a
     glance which path mergai would take. The phrasing depends on the
@@ -261,7 +261,7 @@ def _run_head_status(
         return "obsolete"
 
 
-def _handle_one_run(
+def _fix_one_run(
     app: AppContext,
     run_id: str,
     *,
@@ -269,16 +269,16 @@ def _handle_one_run(
     pr_override: int | None,
     artifacts_dir_override: str | None,
 ) -> None:
-    """Handle a single workflow run.
+    """Apply a fix for a single workflow run.
 
-    Body of the old single-run ``handle`` command, hoisted out so that
-    ``handle`` can iterate over multiple runs for the ``all`` /
+    Body of the per-run flow, hoisted out so that the top-level ``fix``
+    command can iterate over multiple runs for the ``all`` /
     workflow-name targets.
 
     Skips runs whose head commit isn't the current branch HEAD: the
     findings describe an older snapshot, and applying a fix on the
-    wrong base is worse than no fix. Use ``mergai prompt ci --run-id
-    <id>`` to inspect stale runs without committing.
+    wrong base is worse than no fix. Use ``mergai prompt ci <run-id>``
+    to inspect stale runs without committing.
     """
     try:
         run = app.gh_repo.get_workflow_run(int(run_id))
@@ -382,7 +382,7 @@ def build_workflow_context_for_run(
     after echoing a human-readable skip reason. Cleans up any temporary
     artifact directory on exit.
 
-    Shared by ``mergai ci handle`` (which then runs the handler) and
+    Shared by ``mergai ci fix`` (which then runs the handler) and
     ``mergai prompt ci`` (which renders the prompt without invoking the
     agent), so both consume the same dispatch decision and the same
     context shape.

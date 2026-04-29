@@ -1036,7 +1036,7 @@ class MergaiNote:
         """Return solutions recording successful CI fixes for ``workflow``.
 
         Filters ``solutions`` to entries with ``type == "ci_fix"`` and
-        ``request.workflow == workflow``. Used by ``mergai ci handle``
+        ``request.workflow == workflow``. Used by ``mergai ci fix``
         to count prior fix attempts against ``max_attempts``: each
         applied (committed) fix is one attempt.
 
@@ -1056,7 +1056,7 @@ class MergaiNote:
     def get_ci_solution_for_run(self, run_id: str) -> dict | None:
         """Return the CI fix solution for a workflow run, or None.
 
-        Used by ``mergai ci list`` and ``mergai ci handle all`` to skip
+        Used by ``mergai ci list`` and ``mergai ci fix all`` to skip
         already-processed runs.
         """
         if not self.solutions:
