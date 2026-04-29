@@ -31,8 +31,10 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 import click
+import git
 import github
 
 from ..app import AppContext
@@ -187,7 +189,14 @@ def _run_is_actionable(app: AppContext, run: "github.WorkflowRun.WorkflowRun") -
     to handle it now. Used by ``mergai ci handle all`` /
     ``mergai ci handle <workflow>`` to filter the run list before
     iterating.
+
+    Skips runs whose head commit isn't the current branch HEAD —
+    findings on a superseded or force-pushed commit don't necessarily
+    apply to the current state, and committing a fix on the wrong base
+    is worse than no fix.
     """
+    if _run_head_status(app, run) != "current":
+        return False
     config = app.config.workflows.get(run.name)
     if config is None or not config.enabled:
         return False
@@ -208,6 +217,34 @@ def _run_is_actionable(app: AppContext, run: "github.WorkflowRun.WorkflowRun") -
     return False
 
 
+def _run_head_status(
+    app: AppContext, run: "github.WorkflowRun.WorkflowRun"
+) -> Literal["current", "superseded", "obsolete"]:
+    """Classify a workflow run's head commit relative to the local branch.
+
+    * ``current``    — ``run.head_sha`` equals the working tree HEAD.
+                       Findings still describe the same source the user
+                       has checked out, so the run is safe to act on.
+    * ``superseded`` — ``run.head_sha`` is an ancestor of HEAD but not
+                       equal. Newer commits exist on the branch since
+                       the run; its findings may be stale.
+    * ``obsolete``   — ``run.head_sha`` isn't reachable from HEAD at
+                       all. Typically means the branch was force-pushed
+                       (or the SHA was never fetched locally).
+    """
+    head_sha = app.repo.head.commit.hexsha
+    if run.head_sha == head_sha:
+        return "current"
+    try:
+        app.repo.git.merge_base("--is-ancestor", run.head_sha, "HEAD")
+        return "superseded"
+    except git.GitCommandError:
+        # status 1 → not an ancestor; anything else (e.g. unknown SHA) →
+        # also obsolete from our perspective. We can't act on a SHA we
+        # don't have or can't reach.
+        return "obsolete"
+
+
 def _handle_one_run(
     app: AppContext,
     run_id: str,
@@ -221,7 +258,29 @@ def _handle_one_run(
     Body of the old single-run ``handle`` command, hoisted out so that
     ``handle`` can iterate over multiple runs for the ``all`` /
     workflow-name targets.
+
+    Skips runs whose head commit isn't the current branch HEAD: the
+    findings describe an older snapshot, and applying a fix on the
+    wrong base is worse than no fix. Use ``mergai prompt ci --run-id
+    <id>`` to inspect stale runs without committing.
     """
+    try:
+        run = app.gh_repo.get_workflow_run(int(run_id))
+    except github.GithubException as e:
+        raise click.ClickException(f"Could not fetch workflow run {run_id}: {e}") from e
+    head_status = _run_head_status(app, run)
+    if head_status != "current":
+        reason = (
+            "superseded by newer commits"
+            if head_status == "superseded"
+            else "head_sha not reachable from HEAD (force-pushed?)"
+        )
+        click.echo(
+            f"Run {run_id} ({run.head_sha[:7]}) is {head_status}: {reason}; "
+            f"skipping."
+        )
+        return
+
     with build_workflow_context_for_run(
         app,
         run_id,
@@ -496,6 +555,12 @@ def list_runs(
     for run in runs_list:
         if run.name not in app.config.workflows.workflows:
             continue
+        # Drop runs whose head commit isn't reachable from HEAD — they
+        # belong to a prior incarnation of this branch (force-pushed
+        # away). They're still in GitHub's history for the branch name
+        # but they're noise here.
+        if _run_head_status(app, run) == "obsolete":
+            continue
         status, notes = _list_run_status(app, run, check_findings=check_findings)
         rows.append(
             (
@@ -574,6 +639,18 @@ def _list_run_status(
     if not (run.head_branch or "").startswith("mergai/"):
         return "skip", f"head_branch '{run.head_branch}' is not mergai/*"
 
+    head_status = _run_head_status(app, run)
+    if head_status == "superseded":
+        return "skip", "superseded by newer commits on the branch"
+    if head_status == "obsolete":
+        return "skip", "head_sha not reachable from HEAD (force-pushed?)"
+
+    # Run hasn't completed yet — neither actionable now nor a reason to
+    # give up. `wait` differentiates from `skip` so the user can tell
+    # the table is still moving.
+    if run.status != "completed":
+        return "wait", f"still {run.status}"
+
     if run.conclusion == "failure":
         return "pending", "failure -> artifact + log fallback"
 
@@ -594,4 +671,7 @@ def _list_run_status(
             return "pending", "Code Scanning has findings"
         return "skip", "passed; no Code Scanning findings"
 
+    # Completed but with an unusual conclusion (cancelled, timed_out,
+    # action_required, neutral, etc.). Surface verbatim — these are
+    # rare and worth seeing rather than silently skipping.
     return "skip", f"conclusion '{run.conclusion}'"
