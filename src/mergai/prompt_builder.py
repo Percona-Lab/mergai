@@ -164,8 +164,51 @@ class PromptBuilder:
         return f"An error occurred while trying to process the output: {error}"
 
 
+def build_ci_fix_preamble() -> str:
+    """Build the common prefix shared by all CI-fix prompts.
+
+    System prompt + project invariants + the
+    ``ci_fix_context.md`` description of the per-run JSON shape. This
+    part doesn't depend on any specific :class:`WorkflowContext`, so
+    multi-run renderings (``mergai prompt ci all``) can emit it once
+    and follow with one
+    :func:`build_ci_fix_run_section` per run.
+    """
+    system_prompt = prompts.load_system_prompt_ci_fix()
+    project_invariants = util.load_if_exists(".mergai/invariants.md")
+
+    parts: list[str] = [system_prompt, "\n\n"]
+    if project_invariants:
+        parts.extend([project_invariants, "\n\n"])
+    parts.extend([prompts.load_ci_fix_context_prompt(), "\n\n"])
+    return "".join(parts)
+
+
+def build_ci_fix_run_section(
+    context: "WorkflowContext", *, heading: str = "## CI Fix Context"
+) -> str:
+    """Build the per-run section: heading + the WorkflowContext as JSON.
+
+    The default heading matches the original single-run prompt shape
+    (so the agent sees the same text it always has). Multi-run callers
+    pass a per-run heading like ``"## Run 12345 — clang-tidy"`` to
+    disambiguate.
+    """
+    context_dict = {
+        "workflow_name": context.workflow_name,
+        "run_id": context.run_id,
+        "pr_number": context.pr_number,
+        "summary": context.summary,
+        "files_affected": list(context.files_affected),
+        "details": context.details,
+    }
+    return (
+        f"{heading}\n\n" + "```json\n" + json.dumps(context_dict, indent=2) + "\n```\n"
+    )
+
+
 def build_ci_fix_prompt(context: "WorkflowContext") -> str:
-    """Build the prompt for fixing a CI workflow failure.
+    """Build the full single-run CI-fix prompt.
 
     Mirrors the structure of :meth:`PromptBuilder.build_resolve_prompt`:
     system prompt + project invariants + per-context section + a JSON
@@ -175,33 +218,14 @@ def build_ci_fix_prompt(context: "WorkflowContext") -> str:
     so the post-processing pipeline (validators, commit message, note
     attachment) can be shared.
 
+    This is what :class:`ResolveHandler` feeds to the agent. For the
+    inspection command ``mergai prompt ci`` with multi-run targets, see
+    :func:`build_ci_fix_preamble` + :func:`build_ci_fix_run_section`.
+
     Free function rather than a ``PromptBuilder`` method because CI
     fixes are not driven by a merge note — only the optional
     ``.mergai/invariants.md`` is read from the working tree, and the
     rest of the prompt is fully derived from the supplied
     ``WorkflowContext``.
     """
-    system_prompt = prompts.load_system_prompt_ci_fix()
-    project_invariants = util.load_if_exists(".mergai/invariants.md")
-
-    prompt = system_prompt + "\n\n"
-    if project_invariants:
-        prompt += project_invariants + "\n\n"
-
-    prompt += prompts.load_ci_fix_context_prompt() + "\n\n"
-
-    context_dict = {
-        "workflow_name": context.workflow_name,
-        "run_id": context.run_id,
-        "pr_number": context.pr_number,
-        "summary": context.summary,
-        "files_affected": list(context.files_affected),
-        "details": context.details,
-    }
-
-    prompt += "## CI Fix Context\n\n"
-    prompt += "```json\n"
-    prompt += json.dumps(context_dict, indent=2)
-    prompt += "\n```\n"
-
-    return prompt
+    return build_ci_fix_preamble() + build_ci_fix_run_section(context)

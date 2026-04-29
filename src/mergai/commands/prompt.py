@@ -6,18 +6,22 @@ Three subtypes share one entry point:
   current merge note (was the top-level ``mergai prompt``).
 * ``prompt describe`` — the merge-description prompt (was
   ``mergai merge-prompt``).
-* ``prompt ci --run-id <id>`` — the CI-fix prompt that ``ci handle``
-  would feed to the agent for a given workflow run, rendered without
-  invoking the agent. Useful for inspecting what the agent will see and
-  for iterating on the template / context builder.
+* ``prompt ci <target>`` — the CI-fix prompt(s) that ``ci handle``
+  would feed to the agent. Same positional ``target`` shape as
+  ``ci handle`` (numeric run id, ``"all"``, or a workflow name).
+  Renders without invoking the agent.
 """
 
 import click
 
 from ..app import AppContext
-from ..prompt_builder import build_ci_fix_prompt
+from ..prompt_builder import (
+    build_ci_fix_preamble,
+    build_ci_fix_prompt,
+    build_ci_fix_run_section,
+)
 from ..utils import util
-from .ci import build_workflow_context_for_run
+from .ci import _resolve_target_runs, build_workflow_context_for_run
 
 
 @click.group()
@@ -57,7 +61,7 @@ def prompt_describe(app: AppContext) -> None:
     envvar="GH_REPO",
     help="The repository where the run lives.",
 )
-@click.option("--run-id", required=True, help="GitHub workflow run ID.")
+@click.argument("target", required=True)
 @click.option(
     "--workflow",
     required=False,
@@ -82,17 +86,25 @@ def prompt_describe(app: AppContext) -> None:
 def prompt_ci(
     app: AppContext,
     repo: str | None,
-    run_id: str,
+    target: str,
     workflow: str | None,
     pr: int | None,
     artifacts_dir: str | None,
 ) -> None:
-    """Print the CI-fix prompt that ``ci handle`` would build for a workflow run.
+    """Print the CI-fix prompt(s) that ``ci handle`` would build.
+
+    \b
+    TARGET can be:
+      * a numeric run ID — print the prompt for that run
+      * "all"            — print prompts for every unprocessed
+                           actionable run on the current branch
+                           (same filter as `ci handle all`)
+      * a workflow name  — like "all" but filtered to that workflow
 
     Runs the same orchestration as ``ci handle`` (resolve run → pick
-    artifact / Code Scanning / log-fallback → build WorkflowContext) but
-    stops before invoking the agent and prints the rendered prompt
-    instead.
+    artifact / Code Scanning / log fallback → build WorkflowContext)
+    but stops before invoking the agent and prints the rendered prompt
+    instead. Multiple prompts are separated by a header line.
     """
     if repo is None:
         raise click.ClickException(
@@ -100,14 +112,48 @@ def prompt_ci(
         )
     app.gh_repo_str = repo
 
-    with build_workflow_context_for_run(
-        app,
-        run_id,
-        workflow_override=workflow,
-        pr_override=pr,
-        artifacts_dir_override=artifacts_dir,
-    ) as built:
-        if built is None:
+    if target.isdigit():
+        run_ids = [target]
+    else:
+        run_ids = _resolve_target_runs(app, target)
+        if not run_ids:
+            click.echo(f"No unprocessed actionable runs found for target '{target}'.")
             return
-        context, _config = built
-        util.print_or_page(build_ci_fix_prompt(context), format="markdown")
+
+    # Single run renders as the agent would see it (full prompt). Multi
+    # run shares the system prompt + invariants + context-format
+    # description across runs and emits one per-run section per run, so
+    # the output is actually useful for inspection and not wall-of-text
+    # repetition.
+    if len(run_ids) == 1:
+        with build_workflow_context_for_run(
+            app,
+            run_ids[0],
+            workflow_override=workflow,
+            pr_override=pr,
+            artifacts_dir_override=artifacts_dir,
+        ) as built:
+            if built is None:
+                return
+            context, _config = built
+            util.print_or_page(build_ci_fix_prompt(context), format="markdown")
+        return
+
+    sections: list[str] = []
+    for run_id in run_ids:
+        with build_workflow_context_for_run(
+            app,
+            run_id,
+            workflow_override=workflow,
+            pr_override=pr,
+            artifacts_dir_override=artifacts_dir,
+        ) as built:
+            if built is None:
+                continue
+            context, _config = built
+            heading = f"## Run {run_id} — {context.workflow_name}"
+            sections.append(build_ci_fix_run_section(context, heading=heading))
+
+    if not sections:
+        return
+    util.print_or_page(build_ci_fix_preamble() + "\n".join(sections), format="markdown")
