@@ -217,6 +217,22 @@ def _run_is_actionable(app: AppContext, run: "github.WorkflowRun.WorkflowRun") -
     return False
 
 
+def _failure_note(config: WorkflowConfig) -> str:
+    """Describe how `ci handle` would source context for a failed run.
+
+    The note text is shown by ``ci list`` so the user can tell at a
+    glance which path mergai would take. The phrasing depends on the
+    configured context builder — only the SARIF builder has a log
+    fallback, the diff builder doesn't.
+    """
+    ctx_type = config.context.type
+    if ctx_type == "sarif":
+        return "failure -> SARIF artifact (log fallback if missing)"
+    if ctx_type == "diff":
+        return "failure -> diff artifact"
+    return f"failure -> {ctx_type} artifact"
+
+
 def _run_head_status(
     app: AppContext, run: "github.WorkflowRun.WorkflowRun"
 ) -> Literal["current", "superseded", "obsolete"]:
@@ -652,7 +668,7 @@ def _list_run_status(
         return "wait", f"still {run.status}"
 
     if run.conclusion == "failure":
-        return "pending", "failure -> artifact + log fallback"
+        return "pending", _failure_note(config)
 
     if run.conclusion == "success":
         if not config.context.code_scanning_check:
