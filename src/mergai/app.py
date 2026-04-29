@@ -421,12 +421,15 @@ class AppContext:
     def commit_ci_fix_solution(self, solution_idx: int) -> None:
         """Commit the CI-fix solution at ``solution_idx`` and attach the note.
 
-        Mirrors :meth:`commit_solution`'s structure for the CI-fix path:
-        builds a ``fix(<workflow>): ...`` commit message from the
-        agent's response (resolved / unresolved / modified sections),
-        stages every file the agent touched, commits, and attaches the
-        solution as a selective git note via
-        ``add_selective_note(sha, ["solutions[N]"])``.
+        Mirrors :meth:`commit_solution`'s structure and voice for the
+        CI-fix path: title `Fix <workflow> failure for merge commit
+        '<sha>' into <target_branch>` (echoes "Resolve conflicts for
+        merge commit ..." / "Merge commit ... into ..."), body with
+        the agent's summary + Resolved / Unresolved / Modified
+        sections + a ``CI:`` trailer carrying the run id and the
+        attempt index for traceability. Stages every file the agent
+        touched, commits, and attaches the solution as a selective
+        git note via ``add_selective_note(sha, ["solutions[N]"])``.
 
         The solution at ``solution_idx`` must have ``type == "ci_fix"``
         and a populated ``request`` dict (workflow / run_id /
@@ -458,6 +461,11 @@ class AppContext:
         response = solution.get("response") or {}
         workflow = request.get("workflow", "ci")
         attempt_number = request.get("attempt_number", "?")
+        run_id = request.get("run_id", "?")
+        workflow_config = self.config.workflows.get(workflow)
+        max_attempts = (
+            workflow_config.max_attempts if workflow_config is not None else "?"
+        )
 
         # Stage every file the agent touched (resolved + modified).
         # Untracked files won't show up in index.diff(None), so add them
@@ -467,8 +475,16 @@ class AppContext:
         if files_to_stage:
             self.repo.index.add(files_to_stage)
 
-        # Build commit message in the same shape as commit_solution.
-        message = f"fix({workflow}): automated fix attempt {attempt_number}\n\n"
+        # Build commit message matching mergai's voice — title mirrors
+        # `commit_solution`'s "Resolve conflicts for merge commit '...'
+        # into ..." pattern so a `git log` over a mergai branch reads
+        # as one consistent voice.
+        target_branch = self.note.merge_info.target_branch
+        merge_sha = git_utils.short_sha(self.note.merge_info.merge_commit_sha)
+        message = (
+            f"Fix {workflow} failure for merge commit "
+            f"'{merge_sha}' into {target_branch}\n\n"
+        )
 
         summary = response.get("summary", "")
         if summary:
@@ -494,6 +510,11 @@ class AppContext:
             for file_path in modified_files:
                 message += f"\t{file_path}\n"
             message += "\n"
+
+        message += (
+            f"CI: {workflow} run {run_id} "
+            f"(attempt {attempt_number} of {max_attempts})\n\n"
+        )
 
         message += self.commit_footer
 
