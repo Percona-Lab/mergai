@@ -458,6 +458,22 @@ def _short_sha(sha: str) -> str:
     return sha[:11]
 
 
+def _sha_reachable_from_head(repo: "Repo", sha: str) -> bool:
+    """Return True if ``sha`` is HEAD or an ancestor of HEAD in ``repo``.
+
+    Used by :meth:`MergaiNote.find_orphaned_solution_indices` to detect
+    solutions whose commit no longer exists in the current branch
+    history (revert / reset / force-push).
+    """
+    import git
+
+    try:
+        repo.git.merge_base("--is-ancestor", sha, "HEAD")
+        return True
+    except git.GitCommandError:
+        return False
+
+
 def _commit_to_dict(commit: "Commit", config: CommitSerializationConfig) -> dict | str:
     """Serialize a git Commit based on config.
 
@@ -1371,6 +1387,110 @@ class MergaiNote:
                     committed.add(int(match.group(1)))
 
         return committed
+
+    def drop_solutions_at_indices(self, indices: set[int]) -> "MergaiNote":
+        """Drop solutions at the given indices and compact the array.
+
+        Solutions whose original index is in ``indices`` are removed.
+        The remaining solutions keep their relative order but are
+        re-indexed (compacted), so a solution that was at index 5 may
+        now be at index 3.
+
+        ``note_index`` references like ``solutions[5]`` are rewritten to
+        match the new positions; entries whose only field referenced a
+        dropped solution are removed entirely.
+
+        Args:
+            indices: Set of indices to drop. Out-of-range indices are
+                ignored.
+
+        Returns:
+            Self for method chaining.
+        """
+        if not self.has_solutions or self.solutions is None or not indices:
+            return self
+
+        kept_old_indices = [i for i in range(len(self.solutions)) if i not in indices]
+        old_to_new: dict[int, int] = {
+            old: new for new, old in enumerate(kept_old_indices)
+        }
+        self.solutions = [self.solutions[i] for i in kept_old_indices]
+        if not self.solutions:
+            self.clear_solutions()
+
+        if self.has_note_index and self.note_index is not None:
+            updated: list[dict] = []
+            for entry in self.note_index:
+                new_fields: list[str] = []
+                for field in entry.get("fields", []):
+                    match = re.match(r"solutions\[(\d+)\]", field)
+                    if match is None:
+                        new_fields.append(field)
+                        continue
+                    old_idx = int(match.group(1))
+                    if old_idx in indices:
+                        # The solution this field referenced is gone —
+                        # drop the field reference. The git note on the
+                        # commit itself still has the solution data, but
+                        # we no longer track it in the note's array.
+                        continue
+                    new_fields.append(f"solutions[{old_to_new.get(old_idx, old_idx)}]")
+                if new_fields:
+                    new_entry = dict(entry)
+                    new_entry["fields"] = new_fields
+                    updated.append(new_entry)
+            self.note_index = updated if updated else None
+
+        return self
+
+    def find_orphaned_solution_indices(self, repo: "Repo") -> list[int]:
+        """Return indices of solutions whose commits aren't reachable from HEAD.
+
+        A solution is "orphaned" when every commit SHA we have for it
+        (from ``solution.commit_sha`` for human-synced solutions, plus
+        any ``note_index`` entries that reference its index) is no
+        longer reachable from the current HEAD. Typically this happens
+        after the user reverts the solution's commit, hard-resets past
+        it, or force-pushes a different history.
+
+        Solutions with no associated commit SHA (uncommitted ones) are
+        never considered orphaned — they have nothing to verify
+        against.
+
+        Args:
+            repo: GitPython Repo for ancestor lookups.
+
+        Returns:
+            Sorted list of orphaned solution indices.
+        """
+        if not self.has_solutions or self.solutions is None:
+            return []
+
+        # Index → list of commit SHAs that reference this solution.
+        sha_by_index: dict[int, list[str]] = {}
+        if self.has_note_index and self.note_index is not None:
+            for entry in self.note_index:
+                sha = entry.get("sha")
+                if not sha:
+                    continue
+                for field in entry.get("fields", []):
+                    match = re.match(r"solutions\[(\d+)\]", field)
+                    if match:
+                        sha_by_index.setdefault(int(match.group(1)), []).append(sha)
+
+        orphaned: list[int] = []
+        for idx, solution in enumerate(self.solutions):
+            candidates: list[str] = list(sha_by_index.get(idx, []))
+            inline_sha = solution.get("commit_sha")
+            if inline_sha:
+                candidates.append(inline_sha)
+            if not candidates:
+                continue  # uncommitted; leave alone
+
+            if not any(_sha_reachable_from_head(repo, sha) for sha in candidates):
+                orphaned.append(idx)
+
+        return orphaned
 
     def get_uncommitted_solution(self) -> tuple[int, dict] | None:
         """Get the last uncommitted solution with its index.
