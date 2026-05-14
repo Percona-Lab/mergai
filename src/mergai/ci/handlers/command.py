@@ -33,6 +33,12 @@ class CommandHandler(WorkflowHandler):
         env["TARGET_BRANCH"] = self.app.note.merge_info.target_branch
         env["PR_NUMBER"] = str(context.pr_number)
         env["WORKFLOW_NAME"] = context.workflow_name
+        # Where the failing run's artifacts are extracted (one subdir per
+        # artifact). Lets deterministic auto-fixers apply a pre-computed
+        # patch (`git apply $MERGAI_ARTIFACTS_DIR/<artifact>/diff.patch`)
+        # instead of re-running the underlying tool.
+        if context.artifacts_dir:
+            env["MERGAI_ARTIFACTS_DIR"] = context.artifacts_dir
 
         # `config.command` is enforced non-empty by __init__.
         command = str(self.config.command)

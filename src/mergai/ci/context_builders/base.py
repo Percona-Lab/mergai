@@ -26,6 +26,12 @@ class WorkflowContext:
         details: Full text content for the AI prompt (the diff, SARIF
             findings, log excerpt — whatever the builder extracts).
         raw_data: Original parsed data, kept for storage/debugging.
+        artifacts_dir: Directory where the run's artifacts are extracted.
+            Each artifact lives at ``<artifacts_dir>/<artifact_name>/``.
+            ``None`` when the trigger is a ``check_run`` event (no run
+            artifacts to download). Surfaced to ``CommandHandler`` as
+            ``$MERGAI_ARTIFACTS_DIR`` so deterministic auto-fixers can
+            apply pre-computed patches directly.
     """
 
     workflow_name: str
@@ -35,6 +41,7 @@ class WorkflowContext:
     files_affected: list[str] = field(default_factory=list)
     details: str = ""
     raw_data: dict[str, Any] = field(default_factory=dict)
+    artifacts_dir: str | None = None
 
 
 class WorkflowContextBuilder(ABC):

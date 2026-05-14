@@ -60,4 +60,5 @@ class DiffContextBuilder(WorkflowContextBuilder):
             files_affected=files_affected,
             details=diff_content,
             raw_data={"diff": diff_content, "files": files_affected},
+            artifacts_dir=artifacts_dir,
         )

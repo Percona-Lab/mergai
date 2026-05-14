@@ -105,6 +105,7 @@ class SARIFContextBuilder(WorkflowContextBuilder):
                 workflow_name=workflow_name,
                 run_id=run_id,
                 pr_number=pr_number,
+                artifacts_dir=artifacts_dir,
             )
 
         sarif_data = json.loads(sarif_path.read_text())
@@ -114,6 +115,7 @@ class SARIFContextBuilder(WorkflowContextBuilder):
             run_id=run_id,
             pr_number=pr_number,
             extra_raw={"source": "artifact"},
+            artifacts_dir=artifacts_dir,
         )
 
     def _build_from_code_scanning(
@@ -165,6 +167,7 @@ class SARIFContextBuilder(WorkflowContextBuilder):
         run_id: str,
         pr_number: int,
         extra_raw: dict[str, Any],
+        artifacts_dir: str | None = None,
     ) -> WorkflowContext:
         findings = self._flatten_findings(sarif_data)
         files_affected = sorted({f["file"] for f in findings if f["file"]})
@@ -184,6 +187,7 @@ class SARIFContextBuilder(WorkflowContextBuilder):
             files_affected=files_affected,
             details=details,
             raw_data={"findings": findings, **extra_raw},
+            artifacts_dir=artifacts_dir,
         )
 
     def find_code_scanning_analysis(
@@ -272,6 +276,7 @@ class SARIFContextBuilder(WorkflowContextBuilder):
         workflow_name: str,
         run_id: str,
         pr_number: int,
+        artifacts_dir: str | None = None,
     ) -> WorkflowContext:
         """Build a context from the failing job's log when SARIF is absent.
 
@@ -326,6 +331,7 @@ class SARIFContextBuilder(WorkflowContextBuilder):
                 "failing_step": failing_step_name,
                 "truncated": len(log_text) > len(details),
             },
+            artifacts_dir=artifacts_dir,
         )
 
     @staticmethod

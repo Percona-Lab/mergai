@@ -90,12 +90,26 @@ def ci(app: AppContext, repo: str | None):
         "subdirectory named after it. Useful for manual / offline runs."
     ),
 )
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help=(
+        "Act on runs whose head_sha has been superseded by newer commits "
+        "on the branch (the same runs ``ci list`` shows as 'skip — "
+        "superseded'). Use when the intervening commits are known to be "
+        "unrelated to the failure. Runs whose head_sha is no longer "
+        "reachable from HEAD at all (force-pushed away) are still "
+        "skipped — those describe code that doesn't exist on this branch."
+    ),
+)
 def fix(
     app: AppContext,
     target: str,
     workflow: str | None,
     pr: int | None,
     artifacts_dir: str | None,
+    force: bool,
 ) -> None:
     """Apply a fix for one or more workflow runs on the current branch.
 
@@ -121,9 +135,9 @@ def fix(
     # the start of the loop.
     if target.isdigit():
         run_ids = [target]
-        check_staleness = True
+        check_staleness = not force
     else:
-        run_ids = _resolve_target_runs(app, target)
+        run_ids = _resolve_target_runs(app, target, force=force)
         if not run_ids:
             click.echo(f"No unprocessed actionable runs found for target '{target}'.")
             return
@@ -144,7 +158,9 @@ def fix(
         )
 
 
-def _resolve_target_runs(app: AppContext, target: str) -> list[str]:
+def _resolve_target_runs(
+    app: AppContext, target: str, *, force: bool = False
+) -> list[str]:
     """Resolve ``"all"`` / workflow-name to a list of run IDs to process.
 
     Lists recent workflow_runs on the current branch, filters out runs
@@ -153,6 +169,11 @@ def _resolve_target_runs(app: AppContext, target: str) -> list[str]:
 
     A workflow-name target is just the ``"all"`` filter narrowed to one
     workflow.
+
+    Args:
+        force: When True, do not filter out runs whose head_sha is not
+            current HEAD. Other actionability filters (workflow enabled,
+            mergai/* branch, conclusion type) still apply.
     """
     workflow_filter = None if target == "all" else target
     if (
@@ -185,14 +206,19 @@ def _resolve_target_runs(app: AppContext, target: str) -> list[str]:
         run_id = str(run.id)
         if app.has_note and app.note.get_ci_solution_for_run(run_id) is not None:
             continue
-        if not _run_is_actionable(app, run):
+        if not _run_is_actionable(app, run, force=force):
             continue
         selected.append(run_id)
 
     return selected
 
 
-def _run_is_actionable(app: AppContext, run: "github.WorkflowRun.WorkflowRun") -> bool:
+def _run_is_actionable(
+    app: AppContext,
+    run: "github.WorkflowRun.WorkflowRun",
+    *,
+    force: bool = False,
+) -> bool:
     """Mirror of the dispatch decision in ``build_workflow_context_for_run``.
 
     Returns True if mergai would build a context for this run if asked
@@ -204,8 +230,21 @@ def _run_is_actionable(app: AppContext, run: "github.WorkflowRun.WorkflowRun") -
     findings on a superseded or force-pushed commit don't necessarily
     apply to the current state, and committing a fix on the wrong base
     is worse than no fix.
+
+    Args:
+        force: When True, accept ``superseded`` runs (newer commits on
+            the branch since the run, but ``head_sha`` still reachable
+            from HEAD). ``obsolete`` runs — whose ``head_sha`` isn't
+            reachable from HEAD at all — are still skipped: their work
+            was force-pushed away and acting on their findings means
+            patching code that no longer exists on this branch. This
+            keeps ``ci fix --force`` aligned with ``ci list``, which
+            also hides obsolete runs.
     """
-    if _run_head_status(app, run) != "current":
+    head_status = _run_head_status(app, run)
+    if head_status == "obsolete":
+        return False
+    if not force and head_status != "current":
         return False
     config = app.config.workflows.get(run.name)
     if config is None or not config.enabled:
