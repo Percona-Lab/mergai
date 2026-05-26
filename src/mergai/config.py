@@ -815,11 +815,17 @@ class WorkflowContextConfig:
     not here, so new builders can be added without touching config parsing.
 
     Attributes:
-        type: Context type (e.g. ``"diff"``, ``"sarif"``, ``"logs"``).
+        type: Context type (e.g. ``"diff"``, ``"sarif"``, ``"bazel"``,
+            ``"logs"``).
         source: Where to read the context from. Currently ``"artifact"``
             (downloaded workflow artifact).
-        artifact_name: Name of the artifact to download when ``source`` is
-            ``"artifact"``.
+        artifact_name: Names of artifacts to inspect when ``source`` is
+            ``"artifact"``. YAML may pass either a single string or a list;
+            the value is always normalized to ``list[str]``. Builders that
+            expect exactly one artifact (``diff``, ``sarif``) read element
+            zero; builders covering multi-job workflows (``bazel``) iterate
+            over the list and use whichever artifact the failing job
+            actually uploaded.
         extract_pattern: Regex pattern used by log-style context builders to
             extract relevant lines.
         code_scanning_check: If true, when the watched workflow_run
@@ -836,21 +842,51 @@ class WorkflowContextConfig:
           source: artifact
           artifact_name: clang-tidy-results
           code_scanning_check: true
+
+        # Multi-job workflow: each job uploads its own artifact on failure.
+        context:
+          type: bazel
+          source: artifact
+          artifact_name:
+            - build-failure-artifacts
+            - unittest-failure-artifacts
     """
 
     type: str = "logs"
     source: str = "artifact"
-    artifact_name: str | None = None
+    artifact_name: list[str] = field(default_factory=list)
     extract_pattern: str | None = None
     code_scanning_check: bool = False
 
     @classmethod
     def from_dict(cls, data: dict) -> "WorkflowContextConfig":
-        """Create a WorkflowContextConfig from a dictionary."""
+        """Create a WorkflowContextConfig from a dictionary.
+
+        Accepts ``artifact_name`` as a string (legacy single-artifact form)
+        or a list of strings; both are normalized to ``list[str]``. Missing
+        or ``None`` becomes an empty list.
+
+        Raises:
+            ValueError: If ``artifact_name`` is neither a string nor a list
+                of strings.
+        """
+        raw = data.get("artifact_name")
+        if raw is None:
+            artifact_names: list[str] = []
+        elif isinstance(raw, str):
+            artifact_names = [raw]
+        elif isinstance(raw, list) and all(isinstance(x, str) for x in raw):
+            artifact_names = list(raw)
+        else:
+            raise ValueError(
+                "'artifact_name' must be a string or a list of strings, "
+                f"got {type(raw).__name__}"
+            )
+
         return cls(
             type=data.get("type", cls.type),
             source=data.get("source", cls.source),
-            artifact_name=data.get("artifact_name"),
+            artifact_name=artifact_names,
             extract_pattern=data.get("extract_pattern"),
             code_scanning_check=data.get(
                 "code_scanning_check", cls.code_scanning_check

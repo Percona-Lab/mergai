@@ -27,13 +27,13 @@ class DiffContextBuilder(WorkflowContextBuilder):
             raise FileNotFoundError(
                 f"Workflow '{workflow_name}' needs artifacts_dir (diff context)"
             )
-        if not config.artifact_name:
+        if len(config.artifact_name) != 1:
             raise ValueError(
-                f"Workflow '{workflow_name}' diff context requires "
-                f"'context.artifact_name' to be set"
+                f"Workflow '{workflow_name}' diff context requires exactly one "
+                f"'context.artifact_name'; got {len(config.artifact_name)}"
             )
 
-        artifact_path = Path(artifacts_dir) / config.artifact_name
+        artifact_path = Path(artifacts_dir) / config.artifact_name[0]
         diff_file = artifact_path / "diff.patch"
         files_file = artifact_path / "files.txt"
 
