@@ -7,12 +7,14 @@ registered by appending to ``_BUILDERS``.
 
 from ...app import AppContext
 from .base import WorkflowContext, WorkflowContextBuilder
+from .bazel import BazelContextBuilder
 from .diff import DiffContextBuilder
 from .sarif import SARIFContextBuilder
 
 _BUILDERS: dict[str, type[WorkflowContextBuilder]] = {
     "diff": DiffContextBuilder,
     "sarif": SARIFContextBuilder,
+    "bazel": BazelContextBuilder,
 }
 
 
@@ -43,5 +45,6 @@ __all__ = [
     "WorkflowContextBuilder",
     "DiffContextBuilder",
     "SARIFContextBuilder",
+    "BazelContextBuilder",
     "get_context_builder",
 ]
