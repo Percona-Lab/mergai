@@ -863,6 +863,11 @@ class MergaiNote:
     user_comment: dict | None = None  # Dict with user, email, date, body
     merge_description: dict | None = None
     note_index: list[dict] | None = None
+    # `ci fix` records here when the agent diagnoses a failure but can't
+    # produce a code change. Kept separate from `solutions` so it doesn't
+    # burn a `max_attempts` slot and doesn't trigger a commit. Posted to
+    # the PR on demand via `mergai ci diagnosis post`.
+    ci_diagnoses: list[dict] | None = None
 
     # Cached repo reference (not serialized)
     _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
@@ -904,6 +909,7 @@ class MergaiNote:
             user_comment=data.get("user_comment"),
             merge_description=data.get("merge_description"),
             note_index=data.get("note_index"),
+            ci_diagnoses=data.get("ci_diagnoses"),
             _repo=repo,
         )
         return note
@@ -1083,6 +1089,49 @@ class MergaiNote:
             ) == str(run_id):
                 return solution
         return None
+
+    def get_ci_diagnosis_for_run(self, run_id: str) -> dict | None:
+        """Return the CI diagnosis for a workflow run, or None.
+
+        A diagnosis is recorded when the agent investigates a failure
+        but can't produce a code change. Used by ``mergai ci fix all``
+        and ``mergai ci list`` to skip runs that have already been
+        diagnosed, without burning a ``max_attempts`` slot.
+        """
+        if not self.ci_diagnoses:
+            return None
+        for diagnosis in self.ci_diagnoses:
+            if str(diagnosis.get("run_id")) == str(run_id):
+                return diagnosis
+        return None
+
+    def pending_ci_diagnoses(self) -> list[dict]:
+        """Return diagnoses that have not yet been posted to their PR."""
+        if not self.ci_diagnoses:
+            return []
+        return [d for d in self.ci_diagnoses if not d.get("posted_at")]
+
+    def add_ci_diagnosis(self, diagnosis: dict) -> int:
+        """Append a CI diagnosis and return its index."""
+        if self.ci_diagnoses is None:
+            self.ci_diagnoses = []
+        self.ci_diagnoses.append(diagnosis)
+        return len(self.ci_diagnoses) - 1
+
+    def mark_ci_diagnosis_posted(
+        self, run_id: str, *, posted_at: str, comment_url: str | None
+    ) -> bool:
+        """Record that a CI diagnosis has been posted to its PR.
+
+        Returns ``True`` if a matching diagnosis was found and updated,
+        ``False`` otherwise.
+        """
+        diagnosis = self.get_ci_diagnosis_for_run(run_id)
+        if diagnosis is None:
+            return False
+        diagnosis["posted_at"] = posted_at
+        diagnosis["posted_comment_url"] = comment_url
+        return True
 
     # --- Repo Binding ---
 
@@ -1580,4 +1629,6 @@ class MergaiNote:
             result["merge_description"] = self.merge_description
         if self.note_index:
             result["note_index"] = self.note_index
+        if self.ci_diagnoses:
+            result["ci_diagnoses"] = self.ci_diagnoses
         return result

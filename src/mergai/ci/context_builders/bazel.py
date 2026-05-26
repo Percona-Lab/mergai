@@ -1,23 +1,24 @@
 """Context builder for Bazel build/test workflows.
 
-Reads the Build Event Protocol (BEP) JSON stream + bazel-testlogs/
-uploaded as failure artifacts and extracts:
+Surfaces three things to the agent and lets it decide what to read:
 
-* Aborted events (build couldn't complete — analysis errors, etc.)
-* Failed actions (compile/link errors) with their stderr
-* Failed test results, augmented with each test's ``test.log``
+* A high-level summary derived from the Build Event Protocol (BEP)
+  JSON stream when present (aborted / action / test failure counts +
+  failing target labels). Just enough for the agent to know what kind
+  of failure it is.
+* Absolute paths to the failing job logs from the GitHub Actions API,
+  saved to disk under ``<artifacts_dir>/_mergai_job_logs/``. These are
+  the *general* "what happened in CI" view that applies to any
+  workflow type, not just Bazel.
+* Absolute path to the artifacts directory, which holds whatever the
+  workflow uploaded (BEP, per-target test logs, JUnit XML, etc.).
 
-Used by PSMDB's ``build-and-test`` workflow, which uploads
-``build-failure-artifacts`` (bazel-bep.json) from the build job and
-``unittest-failure-artifacts`` (bazel-bep.json + bazel-testlogs/) from
-the unittests job. The unittests job needs the build job, so a given
-failing run carries exactly one of those artifacts — listing both in
-``context.artifact_name`` lets one config entry cover the whole
-workflow.
-
-If no configured artifact is present (the job crashed before uploading
-anything), falls back to the failing job's log via the GitHub API,
-same as the SARIF builder.
+The agent uses its filesystem tools to read whatever portion is
+relevant. Mergai does not embed log contents in the prompt: full
+test.log files routinely run to multiple MB and the assertion / failure
+point sits buried in the middle, where head+tail truncation would drop
+it. Pointer-based context keeps the prompt small while giving the agent
+access to everything.
 """
 
 from __future__ import annotations
@@ -25,23 +26,30 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from ...config import WorkflowContextConfig
-from ._job_log import LOG_TAIL_BYTES, fetch_failing_job_log
+from ._job_log import _download_job_log
 from .base import WorkflowContext, WorkflowContextBuilder
 
 log = logging.getLogger(__name__)
 
-# Bounded details so prompts don't blow up. Bazel can emit MBs of BEP
-# events and tens of failing-test logs.
-_MAX_DETAILS_BYTES = 96 * 1024
-# Cap per-section so a single noisy failure doesn't crowd out others.
-_MAX_SECTION_BYTES = 16 * 1024
+# Cap the per-failure target listing in case a build aborts thousands of
+# targets — only impacts the markdown listing, not the agent's access
+# to the underlying files.
+_MAX_FAILURE_LINES = 64
 
 _LABEL_TO_PATH = re.compile(r"^//([^:]*):(.+)$")
 _SOURCE_PATH = re.compile(r"\bsrc/[\w./-]+\.(?:cpp|cc|c|h|hpp)\b")
+_SAFE_FILENAME = re.compile(r"[^\w.-]+")
+_JOB_LOGS_SUBDIR = "_mergai_job_logs"
+
+
+def _safe_filename(name: str) -> str:
+    """Coerce an arbitrary job name into a safe filename stem."""
+    return _SAFE_FILENAME.sub("_", name).strip("_") or "job"
 
 
 class BazelContextBuilder(WorkflowContextBuilder):
@@ -67,57 +75,69 @@ class BazelContextBuilder(WorkflowContextBuilder):
                 f"Bazel source '{config.source}' is not supported "
                 f"(only 'artifact')."
             )
-        if not config.artifact_name:
-            raise ValueError(
-                f"Workflow '{workflow_name}' bazel context requires at least "
-                f"one 'context.artifact_name'"
-            )
         if artifacts_dir is None:
             raise FileNotFoundError(
                 f"Workflow '{workflow_name}' needs artifacts_dir (bazel context)"
             )
 
-        artifact_dir = self._pick_artifact_dir(artifacts_dir, config.artifact_name)
-        if artifact_dir is None:
+        artifact_dir = (
+            self._pick_artifact_dir(artifacts_dir, config.artifact_name)
+            if config.artifact_name
+            else None
+        )
+
+        failures: list[dict[str, Any]] = []
+        bep_path: Path | None = None
+        if artifact_dir is not None:
+            candidate = artifact_dir / "bazel-bep.json"
+            if candidate.is_file():
+                bep_path = candidate
+                failures = self._parse_bep(candidate)
+            else:
+                log.info(
+                    "Artifact %s has no bazel-bep.json; BEP summary unavailable",
+                    artifact_dir.name,
+                )
+        else:
             log.info(
-                "No configured bazel artifact present (%s); falling back to job log",
-                ", ".join(config.artifact_name),
-            )
-            return self._build_log_fallback(
-                workflow_name=workflow_name,
-                run_id=run_id,
-                pr_number=pr_number,
-                artifacts_dir=artifacts_dir,
+                "No configured bazel artifact present (%s); "
+                "agent will work from job logs only",
+                ", ".join(config.artifact_name or ()),
             )
 
-        bep_path = artifact_dir / "bazel-bep.json"
-        testlogs_dir = artifact_dir / "bazel-testlogs"
+        job_logs = self._save_failing_job_logs(
+            run_id, Path(artifacts_dir) / _JOB_LOGS_SUBDIR
+        )
 
-        if not bep_path.is_file():
-            log.info(
-                "Artifact %s has no bazel-bep.json; falling back to job log",
-                artifact_dir.name,
-            )
-            return self._build_log_fallback(
-                workflow_name=workflow_name,
-                run_id=run_id,
-                pr_number=pr_number,
-                artifacts_dir=artifacts_dir,
-            )
-
-        failures = self._parse_bep(bep_path)
-        sections, files_affected = self._format_failures(failures, testlogs_dir)
-        details = self._truncate_total(sections, _MAX_DETAILS_BYTES)
-
+        files_affected = self._files_affected_from_failures(failures)
         n_aborted = sum(1 for f in failures if f["kind"] == "aborted")
         n_actions = sum(1 for f in failures if f["kind"] == "action")
         n_tests = sum(1 for f in failures if f["kind"] == "test")
-        summary = (
-            f"{workflow_name} failed: "
-            f"{n_aborted} aborted, "
-            f"{n_actions} action error{'s' if n_actions != 1 else ''}, "
-            f"{n_tests} test failure{'s' if n_tests != 1 else ''} "
-            f"(from {artifact_dir.name})"
+        if failures:
+            summary = (
+                f"{workflow_name} failed: "
+                f"{n_aborted} aborted, "
+                f"{n_actions} action error{'s' if n_actions != 1 else ''}, "
+                f"{n_tests} test failure{'s' if n_tests != 1 else ''} "
+                f"(from {artifact_dir.name if artifact_dir else 'BEP unavailable'})"
+            )
+        else:
+            failing_job_names = [name for name, _ in job_logs]
+            if failing_job_names:
+                summary = (
+                    f"{workflow_name} failed in "
+                    f"{len(failing_job_names)} job(s): "
+                    f"{', '.join(failing_job_names)}"
+                )
+            else:
+                summary = f"{workflow_name} failed (no parsable failure detail)"
+
+        details = self._render_details(
+            artifacts_dir=artifacts_dir,
+            artifact_dir=artifact_dir,
+            bep_path=bep_path,
+            failures=failures,
+            job_logs=job_logs,
         )
 
         return WorkflowContext(
@@ -129,7 +149,8 @@ class BazelContextBuilder(WorkflowContextBuilder):
             details=details,
             raw_data={
                 "source": "artifact",
-                "artifact_dir": artifact_dir.name,
+                "artifact_dir": artifact_dir.name if artifact_dir else None,
+                "failing_jobs": [name for name, _ in job_logs],
                 "failure_count": {
                     "aborted": n_aborted,
                     "action": n_actions,
@@ -138,6 +159,124 @@ class BazelContextBuilder(WorkflowContextBuilder):
             },
             artifacts_dir=artifacts_dir,
         )
+
+    # ---- failing-job logs --------------------------------------------------
+
+    def _save_failing_job_logs(
+        self, run_id: str, dest_dir: Path
+    ) -> list[tuple[str, Path]]:
+        """Save each failing job's full log to disk; return (name, path) pairs.
+
+        Logs are written verbatim — no truncation. The agent reads them
+        on demand. Returns an empty list when GitHub auth is missing,
+        the run can't be fetched, or no jobs failed.
+        """
+        if self.app.gh is None:
+            log.info("No GitHub token available; skipping job-log download.")
+            return []
+        try:
+            run = self.app.gh_repo.get_workflow_run(int(run_id))
+        except Exception as e:  # noqa: BLE001 — best-effort enrichment
+            log.warning("Could not fetch workflow run %s: %s", run_id, e)
+            return []
+
+        saved: list[tuple[str, Path]] = []
+        for job in run.jobs():
+            if job.conclusion != "failure":
+                continue
+            try:
+                log_text = _download_job_log(job.logs_url())
+            except FileNotFoundError as e:
+                log.warning("Could not download log for job %r: %s", job.name, e)
+                continue
+            dest_dir.mkdir(parents=True, exist_ok=True)
+            filename = _safe_filename(job.name) + ".log"
+            out_path = dest_dir / filename
+            out_path.write_text(log_text)
+            saved.append((job.name, out_path))
+            log.info("Saved failing job log: %r -> %s", job.name, out_path)
+        return saved
+
+    # ---- details rendering -------------------------------------------------
+
+    @staticmethod
+    def _render_details(
+        *,
+        artifacts_dir: str,
+        artifact_dir: Path | None,
+        bep_path: Path | None,
+        failures: list[dict[str, Any]],
+        job_logs: list[tuple[str, Path]],
+    ) -> str:
+        """Render pointer-based Markdown for the agent's prompt.
+
+        Lists failing job logs, failing bazel targets (label + kind, no
+        per-target file paths), and the artifacts directory. The agent
+        reads any file it needs with its filesystem tools.
+        """
+        sections: list[str] = []
+
+        if job_logs:
+            lines = ["## Failing job logs (full logs saved to disk)"]
+            for name, path in job_logs:
+                lines.append(f"- `{name}` -> `{path}`")
+            sections.append("\n".join(lines))
+        else:
+            sections.append(
+                "## Failing job logs\n\n"
+                "_None saved; mergai could not fetch them from the "
+                "GitHub Actions API._"
+            )
+
+        if failures:
+            lines = ["## Failing bazel targets"]
+            if bep_path is not None:
+                lines.append(f"_Source: `{bep_path}`_")
+            lines.append("")
+            for entry in failures[:_MAX_FAILURE_LINES]:
+                lines.append(f"- `{entry['label']}` ({entry['kind']})")
+            if len(failures) > _MAX_FAILURE_LINES:
+                lines.append(
+                    f"- ...{len(failures) - _MAX_FAILURE_LINES} more "
+                    f"(read `{bep_path}` for the full list)"
+                )
+            sections.append("\n".join(lines))
+
+        nav_lines = ["## Where to find more"]
+        nav_lines.append(f"- Artifacts directory: `{artifacts_dir}`")
+        if artifact_dir is not None:
+            nav_lines.append(f"- Bazel artifact directory: `{artifact_dir}`")
+        if bep_path is not None:
+            nav_lines.append(f"- Build Event Protocol stream: `{bep_path}`")
+        nav_lines.append("")
+        nav_lines.append(
+            "Use your filesystem tools (Read, Bash, Glob, Grep) to "
+            "inspect any of the files above. Per-target test outputs "
+            "(test.log, test.xml, attempt logs) live under the bazel "
+            "artifact directory if the workflow uploaded them."
+        )
+        sections.append("\n".join(nav_lines))
+
+        return "\n\n".join(sections)
+
+    @staticmethod
+    def _files_affected_from_failures(failures: list[dict[str, Any]]) -> set[str]:
+        """Derive ``files_affected`` hints from BEP failures.
+
+        Pulls source paths out of action stderr (e.g.
+        ``src/foo/bar.cpp:123:1: error: ...``) and adds the
+        ``<package>/`` directory for failing test labels. Best-effort
+        only — the agent doesn't depend on this list.
+        """
+        out: set[str] = set()
+        for entry in failures:
+            for f in BazelContextBuilder._extract_paths(entry.get("message", "")):
+                out.add(f)
+            if entry["kind"] == "test":
+                src_hint = BazelContextBuilder._label_to_source_hint(entry["label"])
+                if src_hint:
+                    out.add(src_hint)
+        return out
 
     # ---- artifact location -------------------------------------------------
 
@@ -238,59 +377,7 @@ class BazelContextBuilder(WorkflowContextBuilder):
             return f"(stderr at {uri})"
         return "(no stderr captured)"
 
-    # ---- formatting --------------------------------------------------------
-
-    @staticmethod
-    def _format_failures(
-        failures: list[dict[str, Any]], testlogs_dir: Path
-    ) -> tuple[list[str], set[str]]:
-        """Render each failure as a Markdown section. Returns (sections, files)."""
-        sections: list[str] = []
-        files_affected: set[str] = set()
-
-        for entry in failures:
-            kind = entry["kind"]
-            label = entry["label"]
-            message = entry["message"]
-
-            if kind == "test":
-                test_log = BazelContextBuilder._read_test_log(testlogs_dir, label)
-                body = test_log if test_log else f"(status: {message})"
-                header = f"### Test failed: `{label}`"
-            elif kind == "action":
-                body = message
-                header = f"### Action failed: `{label}`"
-            else:
-                body = message or "(no description)"
-                header = f"### Build aborted: {label}"
-
-            body = BazelContextBuilder._cap(body, _MAX_SECTION_BYTES)
-            sections.append(f"{header}\n\n```\n{body}\n```")
-
-            for f in BazelContextBuilder._extract_paths(message):
-                files_affected.add(f)
-            if kind == "test":
-                src_hint = BazelContextBuilder._label_to_source_hint(label)
-                if src_hint:
-                    files_affected.add(src_hint)
-
-        return sections, files_affected
-
-    @staticmethod
-    def _read_test_log(testlogs_dir: Path, label: str) -> str:
-        """Resolve ``//pkg:tgt`` → ``bazel-testlogs/pkg/tgt/test.log``."""
-        m = _LABEL_TO_PATH.match(label)
-        if not m:
-            return ""
-        pkg, tgt = m.group(1), m.group(2)
-        log_path = testlogs_dir / pkg / tgt / "test.log"
-        if not log_path.is_file():
-            return ""
-        try:
-            return log_path.read_text(errors="replace")
-        except OSError as e:
-            log.warning("Could not read %s: %s", log_path, e)
-            return ""
+    # ---- failure-derived helpers ------------------------------------------
 
     @staticmethod
     def _label_to_source_hint(label: str) -> str | None:
@@ -307,74 +394,3 @@ class BazelContextBuilder(WorkflowContextBuilder):
         parsing.
         """
         return _SOURCE_PATH.findall(text or "")
-
-    # ---- sizing ------------------------------------------------------------
-
-    @staticmethod
-    def _cap(text: str, max_bytes: int) -> str:
-        if len(text) <= max_bytes:
-            return text
-        half = max_bytes // 2
-        head = text[:half]
-        tail = text[-half:]
-        omitted = len(text) - len(head) - len(tail)
-        return f"{head}\n... ({omitted // 1024} KiB omitted) ...\n{tail}"
-
-    @staticmethod
-    def _truncate_total(sections: list[str], max_bytes: int) -> str:
-        if not sections:
-            return "(no failures parsed from bazel-bep.json)"
-
-        out: list[str] = []
-        used = 0
-        for s in sections:
-            piece = s + "\n\n"
-            if used + len(piece) > max_bytes:
-                remaining = len(sections) - len(out)
-                out.append(f"... ({remaining} more failure(s) omitted)\n")
-                break
-            out.append(piece)
-            used += len(piece)
-        return "".join(out)
-
-    # ---- fallback ----------------------------------------------------------
-
-    def _build_log_fallback(
-        self,
-        workflow_name: str,
-        run_id: str,
-        pr_number: int,
-        artifacts_dir: str,
-    ) -> WorkflowContext:
-        """Build a context from the failing job's log when no BEP is present."""
-        try:
-            job_log = fetch_failing_job_log(self.app, run_id, LOG_TAIL_BYTES)
-        except FileNotFoundError as e:
-            raise FileNotFoundError(
-                f"No bazel-bep.json found for '{workflow_name}' and {e}"
-            ) from e
-
-        step_label = (
-            f" at step '{job_log.failing_step}'" if job_log.failing_step else ""
-        )
-        summary = (
-            f"{workflow_name} failed before producing bazel-bep.json; "
-            f"using log of job '{job_log.job_name}'{step_label}"
-        )
-
-        return WorkflowContext(
-            workflow_name=workflow_name,
-            run_id=run_id,
-            pr_number=pr_number,
-            summary=summary,
-            files_affected=[],
-            details=job_log.details,
-            raw_data={
-                "fallback": "job_log",
-                "job_id": job_log.job_id,
-                "job_name": job_log.job_name,
-                "failing_step": job_log.failing_step,
-                "truncated": job_log.truncated,
-            },
-            artifacts_dir=artifacts_dir,
-        )

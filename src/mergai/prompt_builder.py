@@ -6,15 +6,11 @@ functions for prompts that don't depend on a merge note (e.g. CI fixes).
 """
 
 import json
-from typing import TYPE_CHECKING
 
 from . import prompts
 from .config import PromptConfig
 from .models import MergaiNote
 from .utils import util
-
-if TYPE_CHECKING:
-    from .ci.context_builders.base import WorkflowContext
 
 
 class PromptBuilder:
@@ -234,9 +230,7 @@ def _prepare_merge_data_for_ci_fix(
     return result
 
 
-def build_ci_fix_run_section(
-    context: "WorkflowContext", *, heading: str = "## CI Fix Context"
-) -> str:
+def build_ci_fix_run_section(context, *, heading: str = "## CI Fix Context") -> str:
     """Build the per-run section: heading + the WorkflowContext as JSON.
 
     The default heading matches the original single-run prompt shape
@@ -250,6 +244,7 @@ def build_ci_fix_run_section(
         "pr_number": context.pr_number,
         "summary": context.summary,
         "files_affected": list(context.files_affected),
+        "artifacts_dir": context.artifacts_dir,
         "details": context.details,
     }
     return (
@@ -258,7 +253,7 @@ def build_ci_fix_run_section(
 
 
 def build_ci_fix_prompt(
-    context: "WorkflowContext",
+    context,
     note: MergaiNote | None = None,
     prompt_config: PromptConfig | None = None,
 ) -> str:

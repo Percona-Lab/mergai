@@ -206,6 +206,8 @@ def _resolve_target_runs(
         run_id = str(run.id)
         if app.has_note and app.note.get_ci_solution_for_run(run_id) is not None:
             continue
+        if app.has_note and app.note.get_ci_diagnosis_for_run(run_id) is not None:
+            continue
         if not _run_is_actionable(app, run, force=force):
             continue
         selected.append(run_id)
@@ -399,6 +401,34 @@ def _fix_one_run(
             click.echo(
                 f"Handler did not produce a solution for "
                 f"'{context.workflow_name}'. Will retry on the next workflow run."
+            )
+            return
+
+        # "Unable to fix" verdict: agent investigated but produced no
+        # code change (empty resolved + modified). Record as a diagnosis
+        # so the same run isn't re-investigated next time, but don't
+        # commit and don't burn a `max_attempts` slot — the user posts
+        # the PR comment manually via `mergai ci diagnosis post`.
+        response = agent_solution.get("response", {}) or {}
+        if not response.get("resolved") and not response.get("modified"):
+            diagnosis = {
+                "workflow": context.workflow_name,
+                "run_id": run_id,
+                "pr_number": context.pr_number,
+                "attempt_number": attempt_number,
+                "context_summary": context.summary,
+                "diagnosed_at": datetime.now(timezone.utc).isoformat(),
+                "response": response,
+                "posted_at": None,
+                "posted_comment_url": None,
+            }
+            diag_idx = app.note.add_ci_diagnosis(diagnosis)
+            app.save_note(app.note)
+            click.echo(
+                f"Agent produced no code change for '{context.workflow_name}' "
+                f"run {run_id}. Recorded diagnosis (ci_diagnoses[{diag_idx}]); "
+                f"no commit, no attempt slot consumed. "
+                f"Run `mergai ci diagnosis post {run_id}` to publish a PR comment."
             )
             return
 
@@ -704,6 +734,12 @@ def _list_run_status(
         attempt = existing.get("request", {}).get("attempt_number", "?")
         return "applied", f"solutions[{idx}], attempt {attempt}"
 
+    diagnosis = app.note.get_ci_diagnosis_for_run(run_id) if app.has_note else None
+    if diagnosis is not None:
+        if diagnosis.get("posted_at"):
+            return "commented", f"diagnosis posted {diagnosis['posted_at']}"
+        return "diagnosed", "agent unable to fix; PR comment pending"
+
     config = app.config.workflows.get(run.name)
     if config is None or not config.enabled:
         return "skip", "workflow not enabled in config"
@@ -747,3 +783,202 @@ def _list_run_status(
     # action_required, neutral, etc.). Surface verbatim — these are
     # rare and worth seeing rather than silently skipping.
     return "skip", f"conclusion '{run.conclusion}'"
+
+
+# ---------------------------------------------------------------------------
+# `mergai ci diagnosis` — view and post agent diagnoses recorded by `ci fix`
+# ---------------------------------------------------------------------------
+
+
+@ci.group(name="diagnosis")
+def diagnosis() -> None:
+    """View and publish CI failure diagnoses the agent could not fix.
+
+    \b
+    When `mergai ci fix` invokes the agent and the agent investigates
+    but cannot produce a code change, the diagnosis is recorded on
+    the local note (no commit, no `max_attempts` slot consumed).
+    `mergai ci diagnosis list` shows recorded diagnoses;
+    `mergai ci diagnosis post` publishes one (or all pending) as
+    a PR comment.
+    """
+
+
+@diagnosis.command(name="list")
+@click.pass_obj
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    default=False,
+    help="Also print the rendered comment body for each entry.",
+)
+@click.option(
+    "--pending",
+    "pending_only",
+    is_flag=True,
+    default=False,
+    help="Show only diagnoses that haven't been posted yet.",
+)
+def diagnosis_list(app: AppContext, verbose: bool, pending_only: bool) -> None:
+    """List recorded CI diagnoses.
+
+    By default lists both pending and posted entries. Use ``--pending``
+    to see only what ``mergai ci diagnosis post`` would publish.
+    """
+    if not app.has_note or not app.note.ci_diagnoses:
+        click.echo("No CI diagnoses recorded.")
+        return
+
+    entries = app.note.pending_ci_diagnoses() if pending_only else app.note.ci_diagnoses
+    if not entries:
+        click.echo("No pending CI diagnoses.")
+        return
+
+    rows: list[tuple[str, ...]] = []
+    for d in entries:
+        rows.append(
+            (
+                str(d.get("run_id", "?")),
+                str(d.get("workflow", "?")),
+                str(d.get("pr_number", "?")),
+                str(d.get("diagnosed_at", "?")),
+                str(d.get("posted_at") or "pending"),
+            )
+        )
+
+    headers = ("Run ID", "Workflow", "PR", "Diagnosed at", "Posted at")
+    click.echo(_format_ascii_table(headers, rows))
+
+    if verbose:
+        for d in entries:
+            click.echo("")
+            click.echo(f"--- run {d.get('run_id')} ({d.get('workflow')}) ---")
+            click.echo(_render_diagnosis_comment(d))
+
+
+@diagnosis.command(name="post")
+@click.pass_obj
+@click.argument("target", required=False, default="all")
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Print the comment that would be posted, but don't call GitHub.",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    default=False,
+    help="Re-post even if the diagnosis was already posted.",
+)
+def diagnosis_post(app: AppContext, target: str, dry_run: bool, force: bool) -> None:
+    """Post pending CI diagnoses as PR comments.
+
+    \b
+    TARGET (optional, default "all"):
+      * "all" / omitted   — post every pending diagnosis. No-op when
+                            nothing is pending, so this is safe to run
+                            unconditionally from CI / a mergai workflow.
+      * a numeric run ID  — post the diagnosis for that run.
+    """
+    diagnoses = _resolve_diagnoses_for_post(app, target, include_posted=force)
+    if not diagnoses:
+        if target == "all":
+            click.echo("No pending CI diagnoses to post.")
+        else:
+            click.echo(f"No diagnosis found for run '{target}'.")
+        return
+
+    for d in diagnoses:
+        run_id = str(d.get("run_id"))
+        already = d.get("posted_at") is not None
+        if already and not force:
+            click.echo(
+                f"Diagnosis for run {run_id} was already posted at "
+                f"{d['posted_at']}; skipping (use --force to re-post)."
+            )
+            continue
+
+        body = _render_diagnosis_comment(d)
+        if dry_run:
+            click.echo(f"--- would post for run {run_id} ---")
+            click.echo(body)
+            click.echo("--- end ---")
+            continue
+
+        pr_number = d.get("pr_number")
+        if pr_number is None:
+            click.echo(f"Run {run_id}: no PR number recorded; cannot post.")
+            continue
+        if app.gh is None:
+            raise click.ClickException(
+                "GitHub auth not available; cannot post PR comment."
+            )
+
+        try:
+            comment = app.gh_repo.get_pull(int(pr_number)).create_issue_comment(body)
+        except Exception as e:  # noqa: BLE001 — wrap external API errors
+            raise click.ClickException(
+                f"Failed to post PR comment for run {run_id}: {e}"
+            ) from e
+        comment_url = getattr(comment, "html_url", None)
+
+        app.note.mark_ci_diagnosis_posted(
+            run_id,
+            posted_at=datetime.now(timezone.utc).isoformat(),
+            comment_url=comment_url,
+        )
+        app.save_note(app.note)
+        click.echo(f"Posted diagnosis for run {run_id}: {comment_url or '(no URL)'}")
+
+
+def _resolve_diagnoses_for_post(
+    app: AppContext, target: str, *, include_posted: bool
+) -> list[dict]:
+    """Return diagnoses matching ``target``.
+
+    ``target == "all"`` returns pending diagnoses (or all if
+    ``include_posted=True``); a specific run id returns that single
+    diagnosis (regardless of posted state — the caller's
+    skip-unless-force check applies per entry).
+    """
+    if not app.has_note or not app.note.ci_diagnoses:
+        return []
+    if target == "all":
+        if include_posted:
+            return list(app.note.ci_diagnoses)
+        return app.note.pending_ci_diagnoses()
+    diagnosis = app.note.get_ci_diagnosis_for_run(target)
+    return [diagnosis] if diagnosis is not None else []
+
+
+def _render_diagnosis_comment(diagnosis: dict) -> str:
+    """Format a CI diagnosis as Markdown for a PR comment."""
+    workflow = diagnosis.get("workflow", "?")
+    run_id = diagnosis.get("run_id", "?")
+    diagnosed_at = diagnosis.get("diagnosed_at", "?")
+    response = diagnosis.get("response") or {}
+    summary = (response.get("summary") or "").strip()
+    unresolved = response.get("unresolved") or {}
+    review_notes = (response.get("review_notes") or "").strip()
+
+    lines: list[str] = [
+        f"### mergai: unable to auto-fix `{workflow}` failure",
+        "",
+    ]
+    if summary:
+        lines += [summary, ""]
+    if unresolved:
+        lines += ["**Unresolved:**", ""]
+        for key, note in unresolved.items():
+            note_str = note.strip() if isinstance(note, str) else str(note)
+            lines.append(f"- `{key}`: {note_str}")
+        lines.append("")
+    if review_notes:
+        lines += ["**Review notes:**", "", review_notes, ""]
+    lines += [
+        f"_Workflow: `{workflow}` run {run_id}_",
+        f"_Diagnosed: {diagnosed_at}_",
+    ]
+    return "\n".join(lines)
