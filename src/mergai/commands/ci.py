@@ -858,21 +858,27 @@ def _list_run_status(
         return "pending", _failure_note(config)
 
     if run.conclusion == "success":
+        # Passing runs aren't actionable unless the workflow opts into a
+        # Code Scanning check — only those notes mention Code Scanning, so
+        # a bare "passed" means "green, nothing to do".
         if not config.context.code_scanning_check:
-            return "skip", "passed; code_scanning_check not enabled"
+            return "skip", "passed"
         if not check_findings:
-            return "pending", "would check Code Scanning"
+            return (
+                "pending",
+                "passed; Code Scanning check enabled (findings not queried)",
+            )
         pr_number = _resolve_pr_number(run)
         if pr_number is None:
-            return "skip", "no associated PR for code scanning lookup"
+            return "skip", "passed; Code Scanning check enabled, but no associated PR"
         if _code_scanning_has_findings(
             app,
             workflow_name=run.name,
             head_sha=run.head_sha,
             pr_number=pr_number,
         ):
-            return "pending", "Code Scanning has findings"
-        return "skip", "passed; no Code Scanning findings"
+            return "pending", "passed, but Code Scanning has findings"
+        return "skip", "passed; Code Scanning check enabled, no findings"
 
     # Completed but with an unusual conclusion (cancelled, timed_out,
     # action_required, neutral, etc.). Surface verbatim — these are
