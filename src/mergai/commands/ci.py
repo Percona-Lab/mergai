@@ -33,7 +33,7 @@ unprocessed actionable run on the current branch.
 
 import logging
 import tempfile
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -163,6 +163,31 @@ def fix(
         )
 
 
+def _take_workflow_runs(
+    runs: Iterable["github.WorkflowRun.WorkflowRun"], limit: int
+) -> list["github.WorkflowRun.WorkflowRun"]:
+    """Collect up to ``limit`` workflow runs, tolerating pagination races.
+
+    Iterates the ``PaginatedList`` directly and stops at ``limit`` rather
+    than slicing it (``runs[:limit]``). The slice path indexes by position
+    and trusts the pagination ``Link`` header, so it raises ``IndexError``
+    when GitHub promises more runs than a page actually returns — a race
+    seen in the seconds after a push, while new runs are still being
+    created. Plain iteration only yields what was fetched, so it degrades
+    to a short list instead of crashing ``ci list`` / ``ci fix``.
+    """
+    collected: list[github.WorkflowRun.WorkflowRun] = []
+    try:
+        for run in runs:
+            collected.append(run)
+            if len(collected) >= limit:
+                break
+    except IndexError:
+        # Defensive: a page can still come back short mid-iteration.
+        pass
+    return collected
+
+
 def _resolve_target_runs(
     app: AppContext, target: str, *, force: bool = False
 ) -> list[str]:
@@ -200,7 +225,7 @@ def _resolve_target_runs(
         ) from e
 
     runs = app.gh_repo.get_workflow_runs(branch=branch)  # type: ignore[arg-type]
-    runs_list: list[github.WorkflowRun.WorkflowRun] = list(runs[:50])
+    runs_list = _take_workflow_runs(runs, 50)
 
     selected: list[str] = []
     for run in runs_list:
@@ -716,7 +741,7 @@ def list_runs(
     runs = repo.get_workflow_runs(branch=branch)  # type: ignore[arg-type]
 
     rows: list[tuple[str, ...]] = []
-    runs_list: list[github.WorkflowRun.WorkflowRun] = list(runs[:limit])
+    runs_list = _take_workflow_runs(runs, limit)
     for run in runs_list:
         if run.name not in app.config.workflows.workflows:
             continue
