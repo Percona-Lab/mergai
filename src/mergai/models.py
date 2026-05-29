@@ -870,6 +870,13 @@ class MergaiNote:
     # Lives only in the cache note (not git notes): `ci fix` and the post
     # step run in the same CI job, so the cache persists between them.
     ci_comments: list[dict] | None = None
+    # Accumulating record of the commits absorbed by a squash finalize. Each
+    # entry is ``{"sha": <full sha>, "message": <first line>}``, oldest-first.
+    # When a squash commit (which carries this field) is itself squashed again,
+    # its entries are expanded into the new list rather than the squash commit
+    # being listed as a single line - so the "Squashed commits:" section of the
+    # merge message accumulates across repeated finalizes.
+    squashed_commits: list[dict] | None = None
 
     # Cached repo reference (not serialized)
     _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
@@ -912,6 +919,7 @@ class MergaiNote:
             merge_description=data.get("merge_description"),
             note_index=data.get("note_index"),
             ci_comments=data.get("ci_comments"),
+            squashed_commits=data.get("squashed_commits"),
             _repo=repo,
         )
         return note
@@ -1055,6 +1063,11 @@ class MergaiNote:
     def has_note_index(self) -> bool:
         """Check if note_index is present."""
         return self.note_index is not None and len(self.note_index) > 0
+
+    @property
+    def has_squashed_commits(self) -> bool:
+        """Check if squashed_commits are present."""
+        return self.squashed_commits is not None and len(self.squashed_commits) > 0
 
     def get_ci_solutions(self, workflow: str) -> list[dict]:
         """Return solutions recording successful CI fixes for ``workflow``.
@@ -1319,6 +1332,9 @@ class MergaiNote:
 
         if self.has_user_comment:
             all_fields.append("user_comment")
+
+        if self.has_squashed_commits:
+            all_fields.append("squashed_commits")
 
         if all_fields:
             self.note_index = [{"sha": commit_sha, "fields": all_fields}]
@@ -1632,4 +1648,6 @@ class MergaiNote:
             result["note_index"] = self.note_index
         if self.ci_comments:
             result["ci_comments"] = self.ci_comments
+        if self.squashed_commits:
+            result["squashed_commits"] = self.squashed_commits
         return result
