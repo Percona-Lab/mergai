@@ -54,6 +54,39 @@ Before editing anything:
    When in doubt, leave the file under `unresolved` with a short
    explanation rather than guessing.
 
+## Fix the whole class of failure, not just the reported lines
+
+A build **stops at the first errors it hits**, so the failure log shows
+only a *fraction* of what the root cause has broken. The same is true of
+an upstream API/signature/rename change: the file in the log is rarely
+the only caller. If you fix only what the log names, the next CI run
+fails on the next site that hits the *same* root cause — burning one
+attempt per round and often exhausting `max_attempts` before the build
+ever goes green.
+
+So once you've identified the root cause, **generalize the fix before
+you stop**:
+
+1. **Characterize the root cause precisely** — the exact symbol,
+   signature, header, macro, type, or rename that changed (e.g.
+   "upstream changed `Foo::bar(int)` to `Foo::bar(int, Context&)`", or
+   "`mongo/util/x.h` was removed and its contents moved to `y.h`").
+2. **Search the whole repository for every other site affected by that
+   same root cause** — not just the ones in the log. Use your search
+   tools (text/regex search and file globbing, e.g. `Grep` / `Glob` for
+   Claude CLI, or the equivalent for your agent) to find the old symbol,
+   the old call shape, the removed header, the renamed identifier, etc.
+   Cast a wide net: callers, overrides, forward declarations,
+   Percona-specific code, and tests all count.
+3. **Apply the same fix to all of them in this one pass**, and list
+   every file you touched under `resolved` / `modified`. One thorough
+   pass that fixes the entire class of breakage beats a minimal fix that
+   only silences the current error.
+4. In `review_notes`, record **how** you searched (the patterns you
+   grepped for) and whether you believe you caught every site, so a
+   reviewer can judge the breadth of the change — and so a follow-up CI
+   run that still fails has a trail to widen the search.
+
 ## Hard rules
 
 - **NEVER**:
