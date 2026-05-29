@@ -887,6 +887,117 @@ def _list_run_status(
 
 
 # ---------------------------------------------------------------------------
+# `mergai ci status` — aggregate the watched workflows' state for HEAD. The
+# gate the CI auto-fix loop reads to decide between squash / fix / wait.
+# ---------------------------------------------------------------------------
+
+
+def _watched_runs_for_head(
+    app: AppContext,
+) -> dict[str, "github.WorkflowRun.WorkflowRun"]:
+    """Latest run per watched workflow whose ``head_sha`` is the branch HEAD.
+
+    "Watched" means configured in ``.mergai/config.yml`` (``format``,
+    ``clang-tidy``, ``build-and-test``). Runs on a superseded / obsolete
+    commit are ignored — the gate only reasons about the current HEAD.
+    ``get_workflow_runs`` returns newest-first, so the first run seen per
+    workflow name is the latest one.
+    """
+    try:
+        branch = app.repo.active_branch.name
+    except TypeError as e:
+        raise click.ClickException(
+            "HEAD is detached; cannot determine the branch to gate on."
+        ) from e
+
+    runs = app.gh_repo.get_workflow_runs(branch=branch)  # type: ignore[arg-type]
+    runs_list = _take_workflow_runs(runs, 50)
+
+    latest: dict[str, github.WorkflowRun.WorkflowRun] = {}
+    for run in runs_list:
+        if run.name not in app.config.workflows.workflows:
+            continue
+        if _run_head_status(app, run) != "current":
+            continue
+        latest.setdefault(run.name, run)
+    return latest
+
+
+def _aggregate_state(
+    runs_by_workflow: dict[str, "github.WorkflowRun.WorkflowRun"],
+) -> Literal["in-progress", "success", "failure", "none"]:
+    """Reduce the per-workflow latest runs to a single gate token.
+
+    * ``none``        — no watched runs for HEAD (e.g. all skipped).
+    * ``in-progress`` — at least one watched run hasn't completed.
+    * ``success``     — every watched run completed with ``success``.
+    * ``failure``     — all completed, but at least one did not succeed
+                        (``failure`` / ``cancelled`` / ``timed_out`` / …).
+    """
+    if not runs_by_workflow:
+        return "none"
+    runs = list(runs_by_workflow.values())
+    if any(run.status != "completed" for run in runs):
+        return "in-progress"
+    if all(run.conclusion == "success" for run in runs):
+        return "success"
+    return "failure"
+
+
+@ci.command(name="status")
+@click.pass_obj
+@click.option(
+    "--state",
+    "state_only",
+    is_flag=True,
+    default=False,
+    help=(
+        "Print only the aggregate state token "
+        "(in-progress|success|failure|none) on stdout and nothing else, so "
+        "a workflow can do STATE=$(mergai ci status --state)."
+    ),
+)
+def status(app: AppContext, state_only: bool) -> None:
+    """Aggregate the watched workflows' state for the current branch HEAD.
+
+    Looks at the latest run of each watched workflow (``format``,
+    ``clang-tidy``, ``build-and-test`` from ``.mergai/config.yml``) whose
+    ``head_sha`` matches HEAD and reduces them to one token:
+
+    \b
+    * in-progress — at least one watched run for HEAD hasn't completed.
+    * success     — every watched run for HEAD completed successfully.
+    * failure     — all completed, but at least one didn't succeed.
+    * none        — no watched runs for HEAD (e.g. all skipped).
+
+    Exits 0 in every case; the state is communicated on stdout. With
+    ``--state`` only the bare token is printed (for shell capture).
+    """
+    runs_by_workflow = _watched_runs_for_head(app)
+    state = _aggregate_state(runs_by_workflow)
+
+    if state_only:
+        click.echo(state)
+        return
+
+    if runs_by_workflow:
+        headers = ("Workflow", "Run ID", "Status", "Conclusion")
+        rows: list[tuple[str, ...]] = [
+            (
+                name,
+                str(run.id),
+                run.status or "-",
+                run.conclusion or "-",
+            )
+            for name, run in sorted(runs_by_workflow.items())
+        ]
+        click.echo(_format_ascii_table(headers, rows))
+    else:
+        click.echo("No watched workflow runs for the current HEAD.")
+    click.echo(f"\nState: {state}")
+
+
+# ---------------------------------------------------------------------------
 # `mergai ci comment` — view and post the explanation `ci fix` records for
 # every attempt (a fix it applied, or a failure it couldn't fix).
 # ---------------------------------------------------------------------------
