@@ -729,11 +729,18 @@ class AppContext:
     ) -> list[dict]:
         """Build the accumulated squashed-commits record, oldest-first.
 
-        A commit whose note already carries ``squashed_commits`` is a prior
-        squash: its entries are expanded into the list so repeated finalizes
-        accumulate, rather than listing the squash commit itself. Every other
-        commit contributes a single ``{"sha", "message"}`` leaf entry.
-        Duplicate SHAs collapse to their first occurrence.
+        Each commit contributes a ``{"sha", "message"}`` entry, except:
+
+        * a commit whose note already carries ``squashed_commits`` is a prior
+          squash: its entries are expanded so repeated finalizes accumulate;
+        * a *PR merge commit* (a merge whose second parent is a review branch
+          rather than the upstream merge commit, e.g. "Merge pull request #N
+          from .../semantic") is replaced by the commits it brought in - the
+          actual solution/fix commits on its second-parent side - so the list
+          shows real work, not GitHub's merge plumbing.
+
+        The mergai merge commit itself (second parent == the upstream merge
+        commit) is kept as a leaf. Duplicate SHAs collapse to first occurrence.
 
         Args:
             commits_with_notes: List of (commit, note_dict) tuples, oldest-first.
@@ -744,19 +751,48 @@ class AppContext:
         entries: list[dict] = []
         seen: set[str] = set()
 
+        try:
+            upstream_sha = self.repo.commit(
+                self.note.merge_info.merge_commit_sha
+            ).hexsha
+        except Exception:
+            upstream_sha = None
+
         def add(sha: str, message: str) -> None:
             if sha in seen:
                 return
             seen.add(sha)
             entries.append({"sha": sha, "message": message})
 
-        for commit, note in commits_with_notes:
+        def add_commit(commit: git.Commit, note: dict | None) -> None:
             prior = note.get("squashed_commits") if note else None
             if prior:
                 for entry in prior:
                     add(entry["sha"], entry["message"])
-            else:
-                add(commit.hexsha, self._commit_subject(commit))
+                return
+
+            # A PR merge commit (second parent is a review branch, not the
+            # upstream merge commit) contributes the commits it merged in, not
+            # itself. Walk its second-parent side and add those instead.
+            if (
+                len(commit.parents) >= 2
+                and upstream_sha is not None
+                and commit.parents[1].hexsha != upstream_sha
+            ):
+                base = commit.parents[0].hexsha
+                tip = commit.parents[1].hexsha
+                merged = list(
+                    self.repo.iter_commits(f"{base}..{tip}", first_parent=True)
+                )
+                merged.reverse()  # oldest-first
+                for mc in merged:
+                    add_commit(mc, self.get_note_from_commit(mc.hexsha))
+                return
+
+            add(commit.hexsha, self._commit_subject(commit))
+
+        for commit, note in commits_with_notes:
+            add_commit(commit, note)
 
         return entries
 
