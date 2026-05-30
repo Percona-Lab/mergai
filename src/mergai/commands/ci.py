@@ -1278,11 +1278,5 @@ def _render_ci_notification(entry: dict) -> str:
 
     if entry.get("outcome") == "fixed":
         where = f" in commit `{commit_sha[:12]}`" if commit_sha else ""
-        return (
-            f"✅ mergai fixed the `{workflow}` check{where}. "
-            "See the PR description for details."
-        )
-    return (
-        f"⚠️ mergai could not auto-fix the `{workflow}` check; "
-        "it needs manual attention."
-    )
+        return f"The `{workflow}` check fixed{where}. See the PR comment for details."
+    return f"The `{workflow}` check could not be auto-fixed; it needs manual attention."
