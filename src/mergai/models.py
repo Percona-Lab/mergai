@@ -870,16 +870,6 @@ class MergaiNote:
     # Lives only in the cache note (not git notes): `ci fix` and the post
     # step run in the same CI job, so the cache persists between them.
     ci_comments: list[dict] | None = None
-    # Rolling "automated fixes" summary comment per review PR. Each entry is
-    # ``{"pr_number", "comment_id", "url"}`` — the GitHub issue-comment that
-    # `mergai ci comment post` creates once and then *edits* in place as more
-    # `ci_fix` solutions land on that PR, so the PR carries one always-current
-    # summary instead of one comment per attempt.
-    ci_summary_comments: list[dict] | None = None
-    # One-time pointer comments posted on a main PR when its fixes were
-    # relocated to a review PR. Each entry is ``{"pr_number", "review_pr",
-    # "url"}``; existence means the pointer was already posted (post-once).
-    ci_pointer_comments: list[dict] | None = None
     # Accumulating record of the commits absorbed by a squash finalize. Each
     # entry is ``{"sha": <full sha>, "message": <first line>}``, oldest-first.
     # When a squash commit (which carries this field) is itself squashed again,
@@ -929,8 +919,6 @@ class MergaiNote:
             merge_description=data.get("merge_description"),
             note_index=data.get("note_index"),
             ci_comments=data.get("ci_comments"),
-            ci_summary_comments=data.get("ci_summary_comments"),
-            ci_pointer_comments=data.get("ci_pointer_comments"),
             squashed_commits=data.get("squashed_commits"),
             _repo=repo,
         )
@@ -1158,69 +1146,6 @@ class MergaiNote:
         comment["posted_at"] = posted_at
         comment["posted_comment_url"] = comment_url
         return True
-
-    def fixed_ci_comments_for_review_pr(self, review_pr: int) -> list[dict]:
-        """Return ``fixed`` CI comments whose rolling summary lives on ``review_pr``.
-
-        A comment is assigned to a review PR via its ``review_pr`` field (set
-        by ``ci comment post`` when the summary is published; for inline fixes
-        that equals the comment's own ``pr_number``). Used to (re)build the
-        rolling "automated fixes" summary for a PR from every solution on it.
-        """
-        if not self.ci_comments:
-            return []
-        return [
-            c
-            for c in self.ci_comments
-            if c.get("outcome") == "fixed"
-            and c.get("review_pr") is not None
-            and int(c["review_pr"]) == int(review_pr)
-        ]
-
-    def get_ci_summary_comment(self, pr_number: int) -> dict | None:
-        """Return the stored rolling-summary comment for ``pr_number``, or None."""
-        if not self.ci_summary_comments:
-            return None
-        for entry in self.ci_summary_comments:
-            if int(entry.get("pr_number")) == int(pr_number):
-                return entry
-        return None
-
-    def set_ci_summary_comment(
-        self, pr_number: int, *, comment_id: int, url: str | None
-    ) -> dict:
-        """Create or update the stored rolling-summary comment for ``pr_number``."""
-        entry = self.get_ci_summary_comment(pr_number)
-        if entry is None:
-            if self.ci_summary_comments is None:
-                self.ci_summary_comments = []
-            entry = {"pr_number": int(pr_number)}
-            self.ci_summary_comments.append(entry)
-        entry["comment_id"] = comment_id
-        entry["url"] = url
-        return entry
-
-    def has_ci_pointer(self, pr_number: int) -> bool:
-        """Return True if a pointer comment was already posted on ``pr_number``."""
-        if not self.ci_pointer_comments:
-            return False
-        return any(
-            int(e.get("pr_number")) == int(pr_number) for e in self.ci_pointer_comments
-        )
-
-    def add_ci_pointer(
-        self, pr_number: int, *, review_pr: int, url: str | None
-    ) -> dict:
-        """Record that a pointer comment was posted on ``pr_number``."""
-        if self.ci_pointer_comments is None:
-            self.ci_pointer_comments = []
-        entry = {
-            "pr_number": int(pr_number),
-            "review_pr": int(review_pr),
-            "url": url,
-        }
-        self.ci_pointer_comments.append(entry)
-        return entry
 
     # --- Repo Binding ---
 
@@ -1723,10 +1648,6 @@ class MergaiNote:
             result["note_index"] = self.note_index
         if self.ci_comments:
             result["ci_comments"] = self.ci_comments
-        if self.ci_summary_comments:
-            result["ci_summary_comments"] = self.ci_summary_comments
-        if self.ci_pointer_comments:
-            result["ci_pointer_comments"] = self.ci_pointer_comments
         if self.squashed_commits:
             result["squashed_commits"] = self.squashed_commits
         return result

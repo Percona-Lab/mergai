@@ -651,6 +651,8 @@ def _detect_pr_type_from_branch(app: AppContext) -> str | None:
         return "main"
     elif parsed.branch_type == BranchType.SOLUTION.value:
         return "solution"
+    elif parsed.branch_type == BranchType.SEMANTIC.value:
+        return "semantic"
 
     return None
 
@@ -689,6 +691,9 @@ def _validate_pr_context(
             if pr_type.lower() == "solution":
                 expected_head = app.branches.solution_branch
                 expected_base = app.branches.conflict_branch
+            elif pr_type.lower() == "semantic":
+                expected_head = app.branches.semantic_branch
+                expected_base = app.branches.main_branch
             else:  # main
                 expected_head = app.branches.main_branch
                 expected_base = app.branches.target_branch
@@ -754,7 +759,7 @@ def _find_pr_for_branch(
 )
 @click.argument(
     "pr_type",
-    type=click.Choice(["main", "solution"], case_sensitive=False),
+    type=click.Choice(["main", "solution", "semantic"], case_sensitive=False),
     required=False,
 )
 def update(
@@ -769,8 +774,8 @@ def update(
     Without arguments, finds the PR by branch names and auto-detects the PR type.
     With --pr-number, updates that specific PR directly.
 
-    PR_TYPE specifies which type of body to generate ('main' or 'solution').
-    If not provided, it will be auto-detected from the current branch name.
+    PR_TYPE specifies which type of body to generate ('main', 'solution', or
+    'semantic'). If not provided, it is auto-detected from the current branch.
 
     The PR body is rebuilt using the current note data, including any solutions
     added after the PR was created (e.g., human solutions from 'mergai commit sync').
@@ -801,7 +806,7 @@ def update(
         if pr_type is None:
             raise click.ClickException(
                 "Cannot auto-detect PR type from current branch. "
-                "Please specify 'main' or 'solution' explicitly."
+                "Please specify 'main', 'solution', or 'semantic' explicitly."
             )
         click.echo(f"Auto-detected PR type: {pr_type}")
 
@@ -810,6 +815,10 @@ def update(
         head_branch = app.branches.solution_branch
         base_branch = app.branches.conflict_branch
         body = _build_solutions_pr_body(app)
+    elif pr_type.lower() == "semantic":
+        head_branch = app.branches.semantic_branch
+        base_branch = app.branches.main_branch
+        body = _build_semantic_pr_body(app)
     else:  # main
         head_branch = app.branches.main_branch
         base_branch = app.branches.target_branch

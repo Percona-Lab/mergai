@@ -1092,11 +1092,9 @@ def comment_list(app: AppContext, verbose: bool, pending_only: bool) -> None:
     type=int,
     default=None,
     help=(
-        "PR that should carry the rolling fixes summary. Use when the fixes "
-        "were relocated off the failing run's PR (e.g. a main-branch failure "
-        "whose fix lives on a semantic PR): the summary + notifications go to "
-        "this PR, and the run's original PR gets a one-time pointer to it. "
-        "When omitted, the summary lives on the run's own PR (inline fixes)."
+        "Post the notification on this PR instead of the failing run's own "
+        "PR. Use when the fix was relocated to a review PR (e.g. a main-branch "
+        "failure whose fix lives on a semantic PR)."
     ),
 )
 def comment_post(
@@ -1106,21 +1104,23 @@ def comment_post(
     force: bool,
     review_pr: int | None,
 ) -> None:
-    """Post pending CI comments to their PRs.
+    """Post a short CI-fix notification to the PR.
 
-    \b
-    Each ``fixed`` solution is folded into a single rolling "automated fixes"
-    summary comment on the review PR: created once, then edited in place as
-    more solutions land, with a short notification comment for each addition.
-    ``unfixable`` attempts post a standalone explanation. When ``--review-pr``
-    redirects the summary off the run's PR, that PR gets a one-time pointer.
+    For each recorded attempt, posts a one-line notice: which check was fixed
+    in which commit (outcome ``fixed``), or that mergai could not fix it
+    (``unfixable``). The full per-solution detail belongs in the PR body,
+    maintained by ``mergai pr update``; this command only pings the PR so
+    reviewers notice the change (body edits are silent on GitHub).
 
     \b
     TARGET (optional, default "all"):
-      * "all" / omitted   — post every pending comment. No-op when
+      * "all" / omitted   — post every pending notification. No-op when
                             nothing is pending, so this is safe to run
                             unconditionally from CI / a mergai workflow.
-      * a numeric run ID  — post the comment for that run.
+      * a numeric run ID  — post the notification for that run.
+
+    ``--review-pr`` redirects the notice to a review PR when the fix was
+    relocated off the failing run's own PR.
     """
     comments = _resolve_comments_for_post(app, target, include_posted=force)
     if not comments:
@@ -1134,9 +1134,7 @@ def comment_post(
         raise click.ClickException("GitHub auth not available; cannot post PR comment.")
 
     now = datetime.now(timezone.utc).isoformat()
-    # New ``fixed`` solutions to fold into a rolling summary, grouped by the
-    # review PR the summary lives on.
-    fixed_by_review: dict[int, list[dict]] = {}
+    posted_any = False
 
     for c in comments:
         run_id = str(c.get("run_id"))
@@ -1148,105 +1146,26 @@ def comment_post(
             continue
 
         pr_number = c.get("pr_number")
-        if pr_number is None:
+        target_pr = int(review_pr) if review_pr is not None else pr_number
+        if target_pr is None:
             click.echo(f"Run {run_id}: no PR number recorded; cannot post.")
             continue
 
-        effective_pr = int(review_pr) if review_pr is not None else int(pr_number)
-        # Record where this comment's summary lives so the summary can be
-        # rebuilt deterministically from the note across invocations.
-        c["review_pr"] = effective_pr
-
-        if c.get("outcome") == "fixed":
-            fixed_by_review.setdefault(effective_pr, []).append(c)
-        else:
-            # Unfixable attempts have no solution to summarize; post a
-            # standalone explanation on the review PR.
-            body = _render_ci_comment(c)
-            if dry_run:
-                click.echo(
-                    f"--- would post unfixable for run {run_id} on #{effective_pr} ---"
-                )
-                click.echo(body)
-                click.echo("--- end ---")
-            else:
-                posted = _create_pr_comment(app, effective_pr, body, run_id)
-                app.note.mark_ci_comment_posted(
-                    run_id, posted_at=now, comment_url=getattr(posted, "html_url", None)
-                )
-                click.echo(
-                    f"Posted unfixable comment for run {run_id} on #{effective_pr}"
-                )
-
-        # One-time pointer on the original PR when the summary was redirected.
-        if (
-            review_pr is not None
-            and int(pr_number) != effective_pr
-            and not app.note.has_ci_pointer(int(pr_number))
-        ):
-            if dry_run:
-                click.echo(
-                    f"--- would post pointer on #{pr_number} -> #{effective_pr} ---"
-                )
-            else:
-                p = _create_pr_comment(
-                    app, int(pr_number), _render_pointer_comment(effective_pr), run_id
-                )
-                app.note.add_ci_pointer(
-                    int(pr_number),
-                    review_pr=effective_pr,
-                    url=getattr(p, "html_url", None),
-                )
-                click.echo(f"Posted pointer on #{pr_number} -> #{effective_pr}")
-
-    # Build / edit the rolling summary for each affected review PR.
-    for rpr, new_entries in fixed_by_review.items():
-        all_fixed = app.note.fixed_ci_comments_for_review_pr(rpr)
-        body = _render_ci_summary(all_fixed, updated_at=now)
-        existing = app.note.get_ci_summary_comment(rpr)
-
+        body = _render_ci_notification(c)
         if dry_run:
-            verb = "edit" if existing and existing.get("comment_id") else "create"
-            click.echo(
-                f"--- would {verb} fixes summary on #{rpr} ({len(all_fixed)} solution(s)) ---"
-            )
+            click.echo(f"--- would post for run {run_id} on #{target_pr} ---")
             click.echo(body)
             click.echo("--- end ---")
             continue
 
-        if existing and existing.get("comment_id"):
-            _edit_pr_comment(app, int(existing["comment_id"]), body, rpr)
-            summary_url = existing.get("url")
-            # Notify once per newly added solution; the summary itself is the
-            # announcement on first creation, so notifications start at edit.
-            for e in new_entries:
-                _create_pr_comment(
-                    app,
-                    rpr,
-                    _render_notification_comment(e, summary_url),
-                    str(e.get("run_id")),
-                )
-            click.echo(
-                f"Updated fixes summary on #{rpr} (+{len(new_entries)} solution(s))"
-            )
-        else:
-            posted = _create_pr_comment(
-                app, rpr, body, str(new_entries[0].get("run_id"))
-            )
-            summary_url = getattr(posted, "html_url", None)
-            app.note.set_ci_summary_comment(
-                rpr, comment_id=int(posted.id), url=summary_url
-            )
-            click.echo(
-                f"Created fixes summary on #{rpr} ({len(all_fixed)} solution(s))"
-            )
+        posted = _create_pr_comment(app, int(target_pr), body, run_id)
+        app.note.mark_ci_comment_posted(
+            run_id, posted_at=now, comment_url=getattr(posted, "html_url", None)
+        )
+        posted_any = True
+        click.echo(f"Posted CI notification for run {run_id} on #{target_pr}")
 
-        for e in new_entries:
-            app.note.mark_ci_comment_posted(
-                str(e.get("run_id")), posted_at=now, comment_url=summary_url
-            )
-
-    if not dry_run:
+    if posted_any and not dry_run:
         app.save_note(app.note)
 
 
@@ -1257,18 +1176,6 @@ def _create_pr_comment(app: AppContext, pr_number: int, body: str, run_id: str) 
     except Exception as e:  # noqa: BLE001 — wrap external API errors
         raise click.ClickException(
             f"Failed to post PR comment for run {run_id} on #{pr_number}: {e}"
-        ) from e
-
-
-def _edit_pr_comment(
-    app: AppContext, comment_id: int, body: str, pr_number: int
-) -> None:
-    """Edit an existing issue comment, wrapping API errors."""
-    try:
-        app.gh_repo.get_issue_comment(int(comment_id)).edit(body)
-    except Exception as e:  # noqa: BLE001 — wrap external API errors
-        raise click.ClickException(
-            f"Failed to edit fixes summary comment {comment_id} on #{pr_number}: {e}"
         ) from e
 
 
@@ -1359,82 +1266,23 @@ def _render_ci_comment(entry: dict) -> str:
     return "\n".join(lines)
 
 
-def _render_solution_section(entry: dict, index: int) -> str:
-    """Render one fixed-solution section for the rolling summary comment."""
+def _render_ci_notification(entry: dict) -> str:
+    """Render the short PR notification for a CI-fix attempt.
+
+    A terse, one-line notice — which check was fixed in which commit, or that
+    it couldn't be fixed. The full per-solution detail lives in the PR body
+    (maintained by ``mergai pr update``); this just pings the PR.
+    """
     workflow = entry.get("workflow", "?")
-    run_id = entry.get("run_id", "?")
-    attempt = entry.get("attempt_number", "?")
     commit_sha = entry.get("commit_sha")
-    response = entry.get("response") or {}
-    summary = (response.get("summary") or "").strip()
-    review_notes = (response.get("review_notes") or "").strip()
 
-    lines: list[str] = [
-        f"#### {index}. `{workflow}` (run {run_id} · attempt {attempt})",
-        "",
-    ]
-    if summary:
-        lines += [summary, ""]
-    changed = {
-        **(response.get("resolved") or {}),
-        **(response.get("modified") or {}),
-    }
-    if changed:
-        lines += ["**Changed files:**", ""]
-        for path, note in changed.items():
-            note_str = note.strip() if isinstance(note, str) else str(note)
-            lines.append(f"- `{path}`: {note_str}" if note_str else f"- `{path}`")
-        lines.append("")
-    if review_notes:
-        lines += ["**Review notes:**", "", review_notes, ""]
-    if commit_sha:
-        lines += [f"_Commit: `{commit_sha[:12]}`_"]
-    return "\n".join(lines).rstrip()
-
-
-def _render_ci_summary(entries: list[dict], *, updated_at: str) -> str:
-    """Render the rolling 'automated fixes' summary from a PR's fixed solutions.
-
-    One comment lists every ``fixed`` ci_fix solution on the review PR; it is
-    created once and edited in place as more solutions land, so the PR always
-    carries a single up-to-date summary.
-    """
-    n = len(entries)
-    plural = "" if n == 1 else "s"
-    lines = [
-        f"### mergai automated fixes — {n} solution{plural}",
-        "",
-        "Automated fixes for CI failures on this merge. They will be squashed "
-        "into the merge commit when this PR is finalized.",
-        "",
-    ]
-    for i, entry in enumerate(entries, start=1):
-        lines.append(_render_solution_section(entry, i))
-        lines.append("")
-    lines.append(f"_Last updated: {updated_at}_")
-    return "\n".join(lines)
-
-
-def _render_pointer_comment(review_pr: int) -> str:
-    """Render the one-time pointer comment posted on a main PR.
-
-    The actual fixes live on a separate review PR (so they can be reviewed
-    before being folded into the merge commit); the main PR just links there.
-    """
+    if entry.get("outcome") == "fixed":
+        where = f" in commit `{commit_sha[:12]}`" if commit_sha else ""
+        return (
+            f"✅ mergai fixed the `{workflow}` check{where}. "
+            "See the PR description for details."
+        )
     return (
-        "### mergai automated fixes\n\n"
-        f"CI failed on this merge. mergai opened #{review_pr} with automated "
-        "fixes for review; they'll be squashed into the merge commit once that "
-        "PR is merged."
-    )
-
-
-def _render_notification_comment(entry: dict, summary_url: str | None) -> str:
-    """Render the short 'another solution' notice posted when the summary is edited."""
-    workflow = entry.get("workflow", "?")
-    attempt = entry.get("attempt_number", "?")
-    link = f"[fixes summary]({summary_url})" if summary_url else "fixes summary"
-    return (
-        f"mergai added another solution for `{workflow}` (attempt {attempt}) "
-        f"and updated the {link} ☝️."
+        f"⚠️ mergai could not auto-fix the `{workflow}` check; "
+        "it needs manual attention."
     )
