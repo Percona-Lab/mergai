@@ -227,12 +227,24 @@ def _resolve_target_runs(
     runs = app.gh_repo.get_workflow_runs(branch=branch)  # type: ignore[arg-type]
     runs_list = _take_workflow_runs(runs, 50)
 
+    # Only the newest run per workflow matters: while a slow check re-runs,
+    # GitHub may list several runs of the same workflow (re-runs / repeated
+    # triggers). Processing more than one in a single `ci fix all` is what
+    # produced duplicate / contradictory comments (e.g. fixing the latest
+    # clang-tidy run, then reporting an older clang-tidy run as "already
+    # resolved"). Iterating newest-first, take the first run per workflow and
+    # skip the rest entirely — don't fall back to an older run if the newest
+    # is already processed or not actionable.
     selected: list[str] = []
+    seen_workflows: set[str] = set()
     for run in runs_list:
         if workflow_filter is not None and run.name != workflow_filter:
             continue
         if run.name not in app.config.workflows.workflows:
             continue
+        if run.name in seen_workflows:
+            continue
+        seen_workflows.add(run.name)
         run_id = str(run.id)
         if app.has_note and app.note.get_ci_solution_for_run(run_id) is not None:
             continue
