@@ -125,6 +125,10 @@ class BranchConfig:
 
 
 DEFAULT_COMMIT_FOOTER = "Note: commit created by mergai"
+DEFAULT_CI_FIX_TITLE_FORMAT = (
+    "Fix %(workflow) failure for merge commit "
+    "%(merge_commit_short_sha) into %(target_branch)"
+)
 
 
 @dataclass
@@ -255,13 +259,21 @@ class CommitConfig:
     Attributes:
         footer: Footer text appended to all MergAI-generated commit messages.
             Set to empty string to disable the footer.
+        ci_fix_title_format: Format string for the title of CI-fix commits.
+            Uses %(token) syntax. Available tokens:
+            - %(workflow) - The failing workflow/check name
+            - %(target_branch) - The target branch name
+            - %(merge_commit_sha) - Full SHA of the merge commit (40 chars)
+            - %(merge_commit_short_sha) - Short SHA of the merge commit
 
     Example YAML config:
         commit:
           footer: "Note: commit created by mergai"
+          ci_fix_title_format: "Fix '%(workflow)' failure for merge commit '%(merge_commit_short_sha)' into '%(target_branch)'"
     """
 
     footer: str = DEFAULT_COMMIT_FOOTER
+    ci_fix_title_format: str = DEFAULT_CI_FIX_TITLE_FORMAT
 
     @classmethod
     def from_dict(cls, data: dict) -> "CommitConfig":
@@ -275,6 +287,9 @@ class CommitConfig:
         """
         return cls(
             footer=data.get("footer", cls.footer),
+            ci_fix_title_format=data.get(
+                "ci_fix_title_format", cls.ci_fix_title_format
+            ),
         )
 
 

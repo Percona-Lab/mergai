@@ -477,16 +477,20 @@ class AppContext:
         if files_to_stage:
             self.repo.index.add(files_to_stage)
 
-        # Build commit message matching mergai's voice — title mirrors
-        # `commit_solution`'s "Resolve conflicts for merge commit '...'
-        # into ..." pattern so a `git log` over a mergai branch reads
-        # as one consistent voice.
+        # Build commit message matching mergai's voice. The title is
+        # configurable (commit.ci_fix_title_format) so it can mirror the PR
+        # title style; tokens are substituted below.
         target_branch = self.note.merge_info.target_branch
         merge_sha = git_utils.short_sha(self.note.merge_info.merge_commit_sha)
-        message = (
-            f"Fix {workflow} failure for merge commit "
-            f"'{merge_sha}' into {target_branch}\n\n"
-        )
+        title = self.config.commit.ci_fix_title_format
+        for token, value in {
+            "%(workflow)": workflow,
+            "%(merge_commit_sha)": self.note.merge_info.merge_commit_sha,
+            "%(merge_commit_short_sha)": merge_sha,
+            "%(target_branch)": target_branch,
+        }.items():
+            title = title.replace(token, str(value))
+        message = f"{title}\n\n"
 
         summary = response.get("summary", "")
         if summary:
