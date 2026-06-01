@@ -25,8 +25,7 @@ class CommandHandler(WorkflowHandler):
             raise ValueError(
                 "CommandHandler requires config.command to be a non-empty string"
             )
-        self.app = app
-        self.config = config
+        super().__init__(app, config)
 
     def execute(self, context: WorkflowContext) -> dict | None:
         env = os.environ.copy()
@@ -96,6 +95,13 @@ class CommandHandler(WorkflowHandler):
 
         explanation = f"changed by '{context.workflow_name}' auto-fix"
         return {
+            # Command fixes are produced by a deterministic tool, not the AI
+            # agent or a human, so attribute them to the auto-fix itself
+            # (renders as "<workflow> auto-fix" via format_solution_author).
+            "author": {
+                "name": f"{context.workflow_name} auto-fix",
+                "type": "command",
+            },
             "response": {
                 "summary": (
                     f"{context.workflow_name} auto-fix: {len(changed)} "
