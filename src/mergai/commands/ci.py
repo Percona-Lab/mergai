@@ -152,23 +152,15 @@ def fix(
         )
         check_staleness = False
 
-    # Track the most recent fix committed in this batch. When several failing
-    # runs share a root cause, fixing the first resolves the rest: their agents
-    # then find nothing to change. That's not "unfixable" — it's "already
-    # addressed by the batch's fix", so we classify it as superseded instead.
-    prior_fix_sha: str | None = None
     for run_id in run_ids:
-        fixed_sha = _fix_one_run(
+        _fix_one_run(
             app,
             run_id,
             workflow_override=workflow,
             pr_override=pr,
             artifacts_dir_override=artifacts_dir,
             check_staleness=check_staleness,
-            prior_fix_sha=prior_fix_sha,
         )
-        if fixed_sha:
-            prior_fix_sha = fixed_sha
 
 
 def _take_workflow_runs(
@@ -358,12 +350,8 @@ def _fix_one_run(
     pr_override: int | None,
     artifacts_dir_override: str | None,
     check_staleness: bool = True,
-    prior_fix_sha: str | None = None,
-) -> str | None:
+) -> None:
     """Apply a fix for a single workflow run.
-
-    Returns the SHA of the fix commit if one was created, else None (so the
-    caller can track whether a fix was already applied in this batch).
 
     Body of the per-run flow, hoisted out so that the top-level ``fix``
     command can iterate over multiple runs for the ``all`` /
@@ -447,21 +435,21 @@ def _fix_one_run(
             return
 
         # Agent investigated but produced no code change (empty resolved +
-        # modified). Two cases:
-        #   * a fix was already applied earlier in this batch -> the failure
-        #     was most likely the same root cause, now addressed. Record it as
-        #     "superseded" (anchored to that fix) rather than alarming.
-        #   * otherwise -> genuinely "unfixable"; needs manual attention.
-        # Either way record a ci_comment so the run isn't re-investigated, but
-        # don't commit and don't burn a `max_attempts` slot.
+        # modified). The agent itself classifies why via response.status:
+        #   * "already_resolved" -> the failure no longer applies to the
+        #     current code (e.g. an earlier fix in this run addressed the same
+        #     root cause). Not a problem; recorded calmly.
+        #   * anything else ("unfixable" / missing) -> needs manual attention.
+        # Whether mergai knows it was addressed is the agent's call, not a
+        # heuristic. Either way record a ci_comment so the run isn't
+        # re-investigated, but don't commit or burn a `max_attempts` slot.
         response = agent_solution.get("response", {}) or {}
         if not response.get("resolved") and not response.get("modified"):
-            if prior_fix_sha is not None:
-                outcome: Literal["unfixable", "superseded"] = "superseded"
-                comment_commit = prior_fix_sha
-            else:
-                outcome = "unfixable"
-                comment_commit = None
+            outcome: Literal["unfixable", "already_resolved"] = (
+                "already_resolved"
+                if response.get("status") == "already_resolved"
+                else "unfixable"
+            )
             comment_idx = _record_ci_comment(
                 app,
                 outcome=outcome,
@@ -469,7 +457,7 @@ def _fix_one_run(
                 run_id=run_id,
                 attempt_number=attempt_number,
                 response=response,
-                commit_sha=comment_commit,
+                commit_sha=None,
             )
             click.echo(
                 f"Agent produced no code change for '{context.workflow_name}' "
@@ -478,7 +466,7 @@ def _fix_one_run(
                 f"no commit, no attempt slot consumed. "
                 f"Run `mergai ci comment post {run_id}` to publish a PR comment."
             )
-            return None
+            return
 
         ci_solution = {
             "type": "ci_fix",
@@ -518,13 +506,12 @@ def _fix_one_run(
             f"Recorded comment (ci_comments[{comment_idx}]); "
             f"run `mergai ci comment post {run_id}` to publish a PR comment."
         )
-        return app.repo.head.commit.hexsha
 
 
 def _record_ci_comment(
     app: AppContext,
     *,
-    outcome: Literal["fixed", "unfixable", "superseded"],
+    outcome: Literal["fixed", "unfixable", "already_resolved"],
     context: WorkflowContext,
     run_id: str,
     attempt_number: int,
@@ -1307,13 +1294,14 @@ def _render_ci_notification(entry: dict) -> str:
         where = f" in commit `{commit_sha[:12]}`" if commit_sha else ""
         return f"The `{workflow}` check fixed{where}. See the PR comment for details."
 
-    if outcome == "superseded":
-        where = f" (commit `{commit_sha[:12]}`)" if commit_sha else ""
-        return (
-            f"No separate change was needed for the `{workflow}` check — it appears "
-            f"already addressed by a fix applied in the same run{where}. "
-            "The next CI run will confirm."
-        )
+    if outcome == "already_resolved":
+        lines = [
+            f"No fix needed for the `{workflow}` check — the agent found the "
+            "failure already resolved in the current code."
+        ]
+        if summary:
+            lines += ["", summary]
+        return "\n".join(lines)
 
     # unfixable — include the agent's reasoning so reviewers know *why* it
     # could not be fixed, not just that it wasn't.

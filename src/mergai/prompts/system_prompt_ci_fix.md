@@ -113,6 +113,7 @@ The JSON structure must be:
 
 ```json
 {
+  "status": "fixed",
   "summary": "summary explanation of changes done",
   "resolved": {
     "file1": "explanation of changes for file1",
@@ -129,6 +130,20 @@ The JSON structure must be:
 ```
 
 Field descriptions:
+- `status`: Your verdict for this failure. Exactly one of:
+  - `"fixed"` — you edited files to address the failure (`resolved` /
+    `modified` are non-empty).
+  - `"already_resolved"` — the reported failure does **not** apply to
+    the current code: it no longer reproduces because the relevant code
+    already matches what the fix would produce (e.g. an earlier fix in
+    this same run addressed the shared root cause). Make **no** changes
+    and leave `resolved` / `modified` empty; explain in `summary` why you
+    concluded it is already resolved (cite the current code you checked).
+    Only use this when you are confident the failure is genuinely no
+    longer present — not merely that you couldn't reproduce it.
+  - `"unfixable"` — you could not determine or safely apply a fix. Make
+    no changes; explain why in `summary` and list specifics under
+    `unresolved`.
 - `resolved`: Files where you addressed the CI failure. Each key is a
   path you edited; the value is a brief explanation of what you
   changed and why.
