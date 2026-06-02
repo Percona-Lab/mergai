@@ -504,7 +504,35 @@ _DROP_CHOICES = list(_DROP_HANDLERS.keys()) + ["solution", "merge_info"]
     default=False,
     help="When dropping solution, drop all solutions including committed ones.",
 )
-def drop(app: AppContext, part: str | None, drop_all_solutions: bool):
+@click.option(
+    "--index",
+    "drop_indices",
+    type=int,
+    multiple=True,
+    help=(
+        "When dropping solution, drop the solution(s) at the given index. "
+        "Can be repeated to drop multiple. Remaining solutions are "
+        "compacted, so later indices may shift down."
+    ),
+)
+@click.option(
+    "--orphaned",
+    "drop_orphaned",
+    is_flag=True,
+    default=False,
+    help=(
+        "When dropping solution, drop solutions whose commit is no longer "
+        "reachable from HEAD. Useful after reverting / resetting / "
+        "force-pushing past a solution commit."
+    ),
+)
+def drop(
+    app: AppContext,
+    part: str | None,
+    drop_all_solutions: bool,
+    drop_indices: tuple[int, ...],
+    drop_orphaned: bool,
+):
     """Drop all or part of the stored context.
 
     Without arguments, drops all context (removes the entire note).
@@ -513,8 +541,12 @@ def drop(app: AppContext, part: str | None, drop_all_solutions: bool):
     \b
     Parts that can be dropped:
     - conflict: The conflict context (file diffs, conflict markers, etc.)
-    - solution: The generated/stored solution(s). By default only drops uncommitted
-                solutions. Use --all to drop all solutions including committed ones.
+    - solution: The generated/stored solution(s). Selection modes:
+                  (default)   uncommitted solutions only
+                  --all       all solutions
+                  --index N   solutions at the given index (repeatable)
+                  --orphaned  solutions whose commit isn't reachable from HEAD
+                These flags are mutually exclusive.
     - pr_comments: PR comments added to the context
     - user_comment: User-provided comments
     - merge_info: Merge initialization info (target branch, commit)
@@ -523,12 +555,24 @@ def drop(app: AppContext, part: str | None, drop_all_solutions: bool):
 
     \b
     Examples:
-        mergai context drop              # drops everything
-        mergai context drop conflict     # drops only conflict_context
-        mergai context drop solution     # drops only uncommitted solution
-        mergai context drop solution --all  # drops all solutions
-        mergai context drop pr_comments  # drops only PR comments
+        mergai context drop                           # drops everything
+        mergai context drop conflict                  # drops only conflict_context
+        mergai context drop solution                  # drops only uncommitted
+        mergai context drop solution --all            # drops all solutions
+        mergai context drop solution --index 3        # drops solutions[3]
+        mergai context drop solution --index 0 --index 4
+        mergai context drop solution --orphaned       # drops solutions whose
+                                                      # commits were reverted
+        mergai context drop pr_comments               # drops only PR comments
     """
+    selectors = sum([bool(drop_all_solutions), bool(drop_indices), bool(drop_orphaned)])
+    if selectors > 1:
+        raise click.UsageError("--all, --index, and --orphaned are mutually exclusive.")
+    if (drop_all_solutions or drop_indices or drop_orphaned) and part != "solution":
+        raise click.UsageError(
+            "--all / --index / --orphaned only apply to `drop solution`."
+        )
+
     if part is None:
         app.drop_all()
         click.echo("Dropped all context.")
@@ -543,13 +587,42 @@ def drop(app: AppContext, part: str | None, drop_all_solutions: bool):
         click.echo("No note found.")
         return
 
-    # Special case: solution has an extra parameter
+    # Special case: solution has multiple selection modes
     if part == "solution":
-        app.note.drop_solution(all=drop_all_solutions)
-        if drop_all_solutions:
-            click.echo("Dropped all solutions.")
+        if drop_indices:
+            requested = set(drop_indices)
+            existing = (
+                set(range(len(app.note.solutions)))
+                if app.note.solutions is not None
+                else set()
+            )
+            unknown = sorted(requested - existing)
+            if unknown:
+                raise click.ClickException(
+                    f"No solution at index {unknown[0]}; have "
+                    f"{len(existing)} solution(s)."
+                )
+            app.note.drop_solutions_at_indices(requested)
+            click.echo(
+                f"Dropped solution(s) at index "
+                f"{', '.join(str(i) for i in sorted(requested))}."
+            )
+        elif drop_orphaned:
+            orphaned = app.note.find_orphaned_solution_indices(app.repo)
+            if not orphaned:
+                click.echo("No orphaned solutions found.")
+                return
+            app.note.drop_solutions_at_indices(set(orphaned))
+            click.echo(
+                f"Dropped {len(orphaned)} orphaned solution(s) at index "
+                f"{', '.join(str(i) for i in orphaned)}."
+            )
         else:
-            click.echo("Dropped uncommitted solutions.")
+            app.note.drop_solution(all=drop_all_solutions)
+            if drop_all_solutions:
+                click.echo("Dropped all solutions.")
+            else:
+                click.echo("Dropped uncommitted solutions.")
     else:
         # Use handler dispatch for standard cases
         method, message = _DROP_HANDLERS[part]
