@@ -39,13 +39,18 @@ class BranchType(str, Enum):
         MAIN: Main working branch where all work for merging a given commit
               will be merged.
         CONFLICT: Branch containing a merge commit with committed merge markers.
-        SOLUTION: Branch with solution attempt(s). PRs are created from solution
-                  to conflict branch.
+        SOLUTION: Branch with solution attempt(s) for textual merge conflicts.
+                  PRs are created from solution to conflict branch.
+        SEMANTIC: Branch with fixes for semantic conflicts - the merge applied
+                  cleanly but the result is broken (failing build/tests). PRs
+                  are created from semantic to the main branch so the fixes can
+                  be reviewed before being squashed into the merge commit.
     """
 
     MAIN = "main"
     CONFLICT = "conflict"
     SOLUTION = "solution"
+    SEMANTIC = "semantic"
     TARGET = "target"
 
 
@@ -352,6 +357,16 @@ class BranchNameBuilder:
         created from solution to conflict branch.
         """
         return self._build_name(BranchType.SOLUTION)
+
+    @property
+    def semantic_branch(self) -> str:
+        """Get the semantic branch name.
+
+        The semantic branch holds fixes for semantic conflicts (a clean merge
+        whose result fails to build/test). PRs are created from semantic to the
+        main branch.
+        """
+        return self._build_name(BranchType.SEMANTIC)
 
     @property
     def target_branch(self) -> str:
