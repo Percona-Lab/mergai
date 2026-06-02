@@ -577,6 +577,91 @@ def get_prs_for_current_branch(app: AppContext) -> list[GithubPullRequest.PullRe
     )
 
 
+def _resolve_open_pr_for_type(app: AppContext, pr_type: str):
+    """Return the open PR whose head is the branch for ``pr_type``, or None.
+
+    Resolves the branch name for the given type from the note/config and
+    returns the first matching open PR. Filters on ``head.ref`` because
+    GitHub's ``head=`` query wants an ``owner:ref`` form we don't construct.
+    """
+    branch = app.branches.get_branch_name(pr_type)
+    pulls = app.gh_repo.get_pulls(state="open", sort="created", head=branch)
+    matches = [p for p in pulls if p.head.ref == branch]
+    return matches[0] if matches else None
+
+
+def _resolve_pr_type_arg(app: AppContext, pr_type: str | None) -> str:
+    """Return ``pr_type`` lowercased, auto-detecting from the branch if None."""
+    if pr_type is not None:
+        return pr_type.lower()
+    detected = _detect_pr_type_from_branch(app)
+    if detected is None:
+        raise click.ClickException(
+            "Cannot auto-detect PR type from current branch. "
+            "Please specify 'main', 'solution', or 'semantic' explicitly."
+        )
+    return detected
+
+
+@pr.command()
+@click.pass_obj
+@click.argument(
+    "pr_type",
+    type=click.Choice(["main", "solution", "semantic"], case_sensitive=False),
+    required=False,
+)
+def number(app: AppContext, pr_type: str | None):
+    """Print the number of the open PR for a branch type.
+
+    PR_TYPE is auto-detected from the current branch when omitted. Prints
+    nothing and exits 0 when no open PR exists, so callers can write:
+
+    \b
+        SEMANTIC_PR=$(mergai pr --repo owner/name number semantic)
+    """
+    pr_type = _resolve_pr_type_arg(app, pr_type)
+    pr = _resolve_open_pr_for_type(app, pr_type)
+    if pr is not None:
+        click.echo(pr.number)
+
+
+@pr.command()
+@click.pass_obj
+@click.option("--body", required=True, help="Comment body (markdown).")
+@click.option(
+    "--allow-missing",
+    is_flag=True,
+    default=False,
+    help="Warn and exit 0 if no open PR exists for the type, instead of failing.",
+)
+@click.argument(
+    "pr_type",
+    type=click.Choice(["main", "solution", "semantic"], case_sensitive=False),
+    required=False,
+)
+def comment(app: AppContext, pr_type: str | None, body: str, allow_missing: bool):
+    """Post a comment on the open PR for a branch type.
+
+    Resolves the open PR whose head is the branch for PR_TYPE (auto-detected
+    from the current branch when omitted) and posts BODY as a comment. With
+    --allow-missing, a missing PR is a warning + no-op (exit 0) rather than an
+    error -- handy for best-effort cross-PR notifications from CI.
+
+    \b
+        mergai pr --repo owner/name comment main --body "Fixes opened in #123"
+    """
+    pr_type = _resolve_pr_type_arg(app, pr_type)
+    pr = _resolve_open_pr_for_type(app, pr_type)
+    if pr is None:
+        msg = f"No open {pr_type} PR found."
+        if allow_missing:
+            click.echo(f"warning: {msg} Skipping comment.", err=True)
+            return
+        raise click.ClickException(msg)
+    pr.create_issue_comment(body)
+    click.echo(f"Commented on PR #{pr.number}: {pr.html_url}")
+
+
 def show_prs(prs):
     for pr in prs:
         click.echo(f"#{pr.number}: ({pr.html_url})")
