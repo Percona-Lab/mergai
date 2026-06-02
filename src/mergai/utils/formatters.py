@@ -286,13 +286,18 @@ def merge_context_to_text(merge_context: MergeContext) -> str:
 
 
 def merge_context_to_markdown(
-    merge_context: MergeContext, markdown_config: MarkdownConfig | None = None
+    merge_context: MergeContext,
+    markdown_config: MarkdownConfig | None = None,
+    include_commit_list: bool = True,
 ) -> str:
     """Convert MergeContext to markdown.
 
     Args:
         merge_context: MergeContext object.
         markdown_config: Optional MarkdownConfig for PR-style formatting with links.
+        include_commit_list: If False, omit the per-merged-commit table.
+            Useful when the rendered output must stay below GitHub's 65,536
+            character limit on PR/issue bodies for merges with many commits.
 
     Returns:
         Markdown formatted string.
@@ -305,7 +310,11 @@ def merge_context_to_markdown(
 
     format_sha = _create_format_sha_func(markdown_config)
     return render_template(
-        "markdown", "merge_context", merge_context=merge_context, format_sha=format_sha
+        "markdown",
+        "merge_context",
+        merge_context=merge_context,
+        format_sha=format_sha,
+        include_commit_list=include_commit_list,
     )
 
 
