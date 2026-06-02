@@ -174,6 +174,10 @@ DEFAULT_MAIN_PR_TITLE_FORMAT = "Merge %(merge_commit_short_sha) into %(target_br
 DEFAULT_SOLUTION_PR_TITLE_FORMAT = (
     "Resolve conflicts for merge %(merge_commit_short_sha) into %(target_branch)"
 )
+DEFAULT_SEMANTIC_PR_TITLE_FORMAT = (
+    "Resolve semantic conflicts for merge %(merge_commit_short_sha) "
+    "into %(target_branch)"
+)
 
 
 @dataclass
@@ -185,6 +189,7 @@ class PRConfig:
     Attributes:
         main: Configuration for main PRs (from main branch to target_branch).
         solution: Configuration for solution PRs (from solution branch to conflict branch).
+        semantic: Configuration for semantic PRs (from semantic branch to main branch).
 
     Example YAML config:
         pr:
@@ -192,6 +197,8 @@ class PRConfig:
             title_format: "[MERGE] %(merge_commit_short_sha) -> %(target_branch)"
           solution:
             title_format: "[RESOLVE] Conflicts for %(merge_commit_short_sha) into %(target_branch)"
+          semantic:
+            title_format: "[SEMANTIC] Fixes for %(merge_commit_short_sha) into %(target_branch)"
     """
 
     main: PRTypeConfig = field(
@@ -200,6 +207,11 @@ class PRConfig:
     solution: PRTypeConfig = field(
         default_factory=lambda: PRTypeConfig(
             title_format=DEFAULT_SOLUTION_PR_TITLE_FORMAT
+        )
+    )
+    semantic: PRTypeConfig = field(
+        default_factory=lambda: PRTypeConfig(
+            title_format=DEFAULT_SEMANTIC_PR_TITLE_FORMAT
         )
     )
 
@@ -221,9 +233,15 @@ class PRConfig:
             solution_data, DEFAULT_SOLUTION_PR_TITLE_FORMAT
         )
 
+        semantic_data = data.get("semantic", {})
+        semantic_config = PRTypeConfig.from_dict(
+            semantic_data, DEFAULT_SEMANTIC_PR_TITLE_FORMAT
+        )
+
         return cls(
             main=main_config,
             solution=solution_config,
+            semantic=semantic_config,
         )
 
 

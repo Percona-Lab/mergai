@@ -82,7 +82,7 @@ def create(app: AppContext, type: str):
     Creates a branch using the configured naming format and checks it out.
     Fails if the branch already exists on origin or locally.
 
-    TYPE is one of: main, conflict, solution
+    TYPE is one of: main, conflict, solution, semantic
 
     The target branch is not supported.
 
@@ -91,6 +91,8 @@ def create(app: AppContext, type: str):
     - main: Main working branch where merge resolution work is integrated
     - conflict: Contains the merge commit with committed merge markers
     - solution: Contains solution attempts; PRs go from solution to conflict
+    - semantic: Contains fixes for semantic conflicts (clean merge that fails
+      to build/test); PRs go from semantic to main
     """
     branch_name = app.branches.get_branch_name(type)
 

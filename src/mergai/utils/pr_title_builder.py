@@ -90,3 +90,11 @@ class PRTitleBuilder:
         The solution PR is from the solution branch to conflict branch.
         """
         return self._build_title(self._config.solution.title_format)
+
+    @property
+    def semantic_title(self) -> str:
+        """Get the semantic PR title.
+
+        The semantic PR is from the semantic branch to the main branch.
+        """
+        return self._build_title(self._config.semantic.title_format)

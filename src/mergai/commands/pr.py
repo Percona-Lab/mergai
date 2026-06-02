@@ -309,6 +309,51 @@ def _create_main_pr(
     )
 
 
+def _build_semantic_pr_body(app: AppContext, skip_commit_list: bool = False) -> str:
+    """Build PR body for a semantic PR (semantic-conflict fixes against main).
+
+    Semantic-conflict fixes are recorded as solutions (typically ``ci_fix``)
+    in the note, so the solutions body - which renders merge info, contexts and
+    the per-solution summaries - is the right view for reviewing them.
+    """
+    return _build_solutions_pr_body(app, skip_commit_list=skip_commit_list)
+
+
+def _create_semantic_pr(
+    app: AppContext,
+    dry_run: bool,
+    url_only: bool = False,
+    skip_body: bool = False,
+    skip_commit_list: bool = False,
+    labels: list[str] | None = None,
+) -> None:
+    """Create a PR from the semantic branch to the main branch.
+
+    Semantic conflicts surface after a clean merge (failing build/tests). Their
+    fixes live on the semantic branch and are reviewed against the main branch
+    before being squashed into the merge commit by finalize.
+    """
+
+    title = app.pr_titles.semantic_title
+
+    body = (
+        ""
+        if skip_body
+        else _build_semantic_pr_body(app, skip_commit_list=skip_commit_list)
+    )
+
+    _create_pr(
+        app,
+        title,
+        body,
+        app.branches.semantic_branch,
+        app.branches.main_branch,
+        dry_run=dry_run,
+        url_only=url_only,
+        labels=labels,
+    )
+
+
 @click.group()
 @click.pass_obj
 @click.option(
@@ -372,7 +417,7 @@ def pr(app: AppContext, repo: str | None):
     help="Skip applying any labels (ignores config labels).",
 )
 @click.argument(
-    "pr_type", type=click.Choice(["main", "solution"], case_sensitive=False)
+    "pr_type", type=click.Choice(["main", "solution", "semantic"], case_sensitive=False)
 )
 def create(
     app: AppContext,
@@ -405,6 +450,12 @@ def create(
       against the conflict branch. Uses the solution data from note for title and body.
       The PR body includes solution summary, resolved/unresolved files, review notes,
       and agent stats (hidden in a collapsible section).
+
+    \b
+    - semantic: Creates a PR from the semantic branch against the main branch.
+      Use this for semantic-conflict fixes - a clean merge whose result fails to
+      build/test - so the fixes can be reviewed before finalize squashes them
+      into the merge commit. Uses the note's solutions for title and body.
 
     \b
     Options:
@@ -443,6 +494,8 @@ def create(
     # Get config labels based on PR type
     if pr_type.lower() == "solution":
         pr_type_config = app.config.pr.solution
+    elif pr_type.lower() == "semantic":
+        pr_type_config = app.config.pr.semantic
     else:
         pr_type_config = app.config.pr.main
 
@@ -462,6 +515,10 @@ def create(
 
     if pr_type.lower() == "solution":
         _create_solution_pr(
+            app, dry_run, url_only, skip_body, skip_commit_list, final_labels
+        )
+    elif pr_type.lower() == "semantic":
+        _create_semantic_pr(
             app, dry_run, url_only, skip_body, skip_commit_list, final_labels
         )
     else:
