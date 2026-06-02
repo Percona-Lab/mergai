@@ -895,20 +895,25 @@ class AppContext:
         Raises:
             click.ClickException: If target_sha is not an ancestor of HEAD.
         """
-        commits_with_notes = []
         target_sha_full = self.repo.commit(target_sha).hexsha
 
-        for commit in self.repo.iter_commits():
-            if commit.hexsha == target_sha_full:
-                break
-            git_note = self.get_note_from_commit(commit.hexsha)
-            commits_with_notes.append((commit, git_note))
-        else:
-            # We didn't find target_sha in the history
+        try:
+            self.repo.git.merge_base("--is-ancestor", target_sha_full, "HEAD")
+        except git.GitCommandError as err:
             raise click.ClickException(
                 f"Target commit {target_sha[:11]} is not an ancestor of HEAD. "
                 "Cannot determine commits to squash."
-            )
+            ) from err
+
+        # Walk first-parent only so we collect commits added on top of
+        # target_branch_sha and don't descend into the second parent of the
+        # mergai merge commit (which would pull in the upstream history).
+        commits_with_notes = []
+        for commit in self.repo.iter_commits(
+            f"{target_sha_full}..HEAD", first_parent=True
+        ):
+            git_note = self.get_note_from_commit(commit.hexsha)
+            commits_with_notes.append((commit, git_note))
 
         # Reverse to get oldest-first order
         commits_with_notes.reverse()
