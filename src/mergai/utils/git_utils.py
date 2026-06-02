@@ -385,7 +385,12 @@ def get_conflict_context(
     blobs_map = repo.index.unmerged_blobs()
 
     ours_commit = repo.head.commit
-    theirs_commit = repo.commit("MERGE_HEAD")
+    # Read MERGE_HEAD from the worktree-local gitdir directly. GitPython's
+    # ref resolver only treats HEAD/ORIG_HEAD/FETCH_HEAD/index/logs as
+    # per-worktree, so repo.commit("MERGE_HEAD") looks in common_dir and
+    # fails inside a linked worktree.
+    merge_head_sha = (Path(repo.git_dir) / "MERGE_HEAD").read_text().strip()
+    theirs_commit = repo.commit(merge_head_sha)
     base_commit = repo.merge_base(ours_commit, theirs_commit)[0]
 
     context = {
