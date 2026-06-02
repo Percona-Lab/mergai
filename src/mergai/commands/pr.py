@@ -90,6 +90,15 @@ def _build_pr_url(
     return f"{base_url}?{urlencode(params)}"
 
 
+class PRBodyTooLongError(click.ClickException):
+    """GitHub rejected the PR because its body exceeds the 65,536 char limit.
+
+    Raised by :func:`_create_pr` so callers can optionally retry with
+    ``skip_commit_list=True`` (dropping the per-merged-commit table, which is
+    the usual cause of an oversized body).
+    """
+
+
 def _create_pr(
     app: AppContext,
     title: str,
@@ -137,6 +146,11 @@ def _create_pr(
                 raise click.ClickException(
                     "GitHub rejected the PR: branch(es) not found on remote. Push your branches first."
                 ) from e
+            if "body" in fields:
+                # The merged-commits table can push the body past GitHub's
+                # 65,536 character limit. Surface a typed error so callers
+                # opting into --skip-commit-list-on-failure can retry without it.
+                raise PRBodyTooLongError(_format_github_error(e)) from e
         raise click.ClickException(_format_github_error(e)) from e
 
 
@@ -400,6 +414,15 @@ def pr(app: AppContext, repo: str | None):
     ),
 )
 @click.option(
+    "--skip-commit-list-on-failure",
+    is_flag=True,
+    default=False,
+    help=(
+        "If PR creation fails because the body exceeds GitHub's 65,536 "
+        "character limit, retry once automatically with --skip-commit-list."
+    ),
+)
+@click.option(
     "--labels",
     "labels_arg",
     type=str,
@@ -426,6 +449,7 @@ def create(
     url_only: bool,
     skip_body: bool,
     skip_commit_list: bool,
+    skip_commit_list_on_failure: bool,
     labels_arg: str | None,
     no_labels: bool,
 ):
@@ -469,6 +493,9 @@ def create(
                     Omit the per-merged-commit table from the PR body. Use
                     this when a normal `pr create` fails GitHub validation
                     because the body exceeds the 65,536 character limit.
+        --skip-commit-list-on-failure
+                    Retry once with --skip-commit-list if PR creation fails
+                    because the body exceeds GitHub's 65,536 character limit.
         --labels    Labels to apply to the PR. By default, uses labels from config.
                     Specifying labels without +/- prefix overrides config labels.
                     Use +label to add, -label to remove from config labels.
@@ -481,6 +508,7 @@ def create(
         mergai pr create main --url-only # Get URL to create PR manually on GitHub
         mergai pr create main --skip-body # Create PR with empty body
         mergai pr create main --skip-commit-list  # Drop merged-commits table from body
+        mergai pr create main --skip-commit-list-on-failure  # Auto-retry if body too long
         mergai pr create main --labels=urgent,review  # Override config labels
         mergai pr create main --labels=+urgent,-auto  # Add/remove from config labels
         mergai pr create main --no-labels             # Create PR without any labels
@@ -513,18 +541,30 @@ def create(
     else:
         final_labels = _parse_labels_option(labels_arg, config_labels)
 
-    if pr_type.lower() == "solution":
-        _create_solution_pr(
-            app, dry_run, url_only, skip_body, skip_commit_list, final_labels
+    def _dispatch(skip_list: bool) -> None:
+        if pr_type.lower() == "solution":
+            _create_solution_pr(
+                app, dry_run, url_only, skip_body, skip_list, final_labels
+            )
+        elif pr_type.lower() == "semantic":
+            _create_semantic_pr(
+                app, dry_run, url_only, skip_body, skip_list, final_labels
+            )
+        else:
+            _create_main_pr(app, dry_run, url_only, skip_body, skip_list, final_labels)
+
+    try:
+        _dispatch(skip_commit_list)
+    except PRBodyTooLongError:
+        # Already dropping the commit list -> nothing left to trim; re-raise.
+        if not skip_commit_list_on_failure or skip_commit_list:
+            raise
+        click.echo(
+            "PR body exceeds GitHub's 65,536 character limit; retrying without "
+            "the merged-commits table (--skip-commit-list).",
+            err=True,
         )
-    elif pr_type.lower() == "semantic":
-        _create_semantic_pr(
-            app, dry_run, url_only, skip_body, skip_commit_list, final_labels
-        )
-    else:
-        _create_main_pr(
-            app, dry_run, url_only, skip_body, skip_commit_list, final_labels
-        )
+        _dispatch(True)
 
 
 def get_prs_for_current_branch(app: AppContext) -> list[GithubPullRequest.PullRequest]:
