@@ -635,6 +635,8 @@ class AppContext:
                 selective_note["user_comment"] = self.note.user_comment
             elif field == "merge_description" and self.note.has_merge_description:
                 selective_note["merge_description"] = self.note.merge_description
+            elif field == "squashed_commits" and self.note.has_squashed_commits:
+                selective_note["squashed_commits"] = self.note.squashed_commits
 
         # Write selective note to temp file and attach as git note
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
@@ -912,10 +914,91 @@ class AppContext:
         commits_with_notes.reverse()
         return commits_with_notes
 
+    @staticmethod
+    def _commit_subject(commit: git.Commit) -> str:
+        """Return the first line of a commit message."""
+        message = (
+            commit.message
+            if isinstance(commit.message, str)
+            else commit.message.decode("utf-8", errors="replace")
+        )
+        return message.split("\n")[0].strip()
+
+    def _collect_squashed_commit_entries(
+        self, commits_with_notes: list[tuple[git.Commit, dict | None]]
+    ) -> list[dict]:
+        """Build the accumulated squashed-commits record, oldest-first.
+
+        Each commit contributes a ``{"sha", "message"}`` entry, except:
+
+        * a commit whose note already carries ``squashed_commits`` is a prior
+          squash: its entries are expanded so repeated finalizes accumulate;
+        * a *PR merge commit* (a merge whose second parent is a review branch
+          rather than the upstream merge commit, e.g. "Merge pull request #N
+          from .../semantic") is replaced by the commits it brought in - the
+          actual solution/fix commits on its second-parent side - so the list
+          shows real work, not GitHub's merge plumbing.
+
+        The mergai merge commit itself (second parent == the upstream merge
+        commit) is kept as a leaf. Duplicate SHAs collapse to first occurrence.
+
+        Args:
+            commits_with_notes: List of (commit, note_dict) tuples, oldest-first.
+
+        Returns:
+            List of ``{"sha", "message"}`` dicts.
+        """
+        entries: list[dict] = []
+        seen: set[str] = set()
+
+        try:
+            upstream_sha = self.repo.commit(
+                self.note.merge_info.merge_commit_sha
+            ).hexsha
+        except Exception:
+            upstream_sha = None
+
+        def add(sha: str, message: str) -> None:
+            if sha in seen:
+                return
+            seen.add(sha)
+            entries.append({"sha": sha, "message": message})
+
+        def add_commit(commit: git.Commit, note: dict | None) -> None:
+            prior = note.get("squashed_commits") if note else None
+            if prior:
+                for entry in prior:
+                    add(entry["sha"], entry["message"])
+                return
+
+            # A PR merge commit (second parent is a review branch, not the
+            # upstream merge commit) contributes the commits it merged in, not
+            # itself. Walk its second-parent side and add those instead.
+            if (
+                len(commit.parents) >= 2
+                and upstream_sha is not None
+                and commit.parents[1].hexsha != upstream_sha
+            ):
+                base = commit.parents[0].hexsha
+                tip = commit.parents[1].hexsha
+                merged = list(
+                    self.repo.iter_commits(f"{base}..{tip}", first_parent=True)
+                )
+                merged.reverse()  # oldest-first
+                for mc in merged:
+                    add_commit(mc, self.get_note_from_commit(mc.hexsha))
+                return
+
+            add(commit.hexsha, self._commit_subject(commit))
+
+        for commit, note in commits_with_notes:
+            add_commit(commit, note)
+
+        return entries
+
     def _build_squash_commit_message(
         self,
         merge_info: dict,
-        commits_with_notes: list[tuple[git.Commit, dict | None]],
         combined_note: dict,
     ) -> str:
         """Build the commit message for the squashed merge commit.
@@ -937,10 +1020,15 @@ class AppContext:
 
             Note: commit created by mergai
 
+        Both the Modified and Squashed commits sections are sourced from the
+        combined note (solutions' ``response.modified`` and the accumulated
+        ``squashed_commits`` field respectively) so they grow across repeated
+        finalizes instead of being regenerated from the current commit range.
+
         Args:
             merge_info: The merge_info dict containing target_branch and merge_commit.
-            commits_with_notes: List of (commit, note) tuples for reference.
-            combined_note: The combined note containing solutions and conflict_context.
+            combined_note: The combined note dict (solutions, conflict_context,
+                squashed_commits).
 
         Returns:
             The formatted commit message string.
@@ -955,22 +1043,19 @@ class AppContext:
         conflict_context = combined_note.get("conflict_context", {})
         conflict_files = set(conflict_context.get("files", []))
 
-        # Collect modified files ONLY from solution commits (not from merge-related commits)
-        # Solution commits are identified by having "solutions" in their note
-        # or by NOT having "conflict_context" or "merge_context"
-        # (merge-related commits have conflict_context and/or merge_context)
-        solution_modified_files = set()
-        for commit, note in commits_with_notes:
-            # Skip if this commit has conflict_context or merge_context
-            # (these are mergai-managed commits, not solution commits)
-            if note and ("conflict_context" in note or "merge_context" in note):
-                continue
-            # Include files from commits that have a solution or no note at all
-            # (PR merge commits may not have mergai notes)
-            modified = git_utils.get_commit_modified_files(self.repo, commit)
-            solution_modified_files.update(modified)
-
-        # Modified files are those changed by solution commits but not in the conflict list
+        # Modified files are every file a solution touched, minus the conflict
+        # files already shown under Conflicts:. A solution records changes under
+        # both "resolved" (conflict files for a conflict_resolution, or the
+        # files a ci_fix changed) and "modified" (extra files). Subtracting the
+        # conflict files keeps conflict-resolution work in the Conflicts section
+        # while still surfacing ci_fix changes and non-conflict edits here.
+        # Solutions accumulate when notes are combined, so this list grows
+        # naturally across repeated finalizes.
+        solution_modified_files: set[str] = set()
+        for solution in combined_note.get("solutions", []):
+            response = solution.get("response", {})
+            solution_modified_files.update(response.get("resolved", {}).keys())
+            solution_modified_files.update(response.get("modified", {}).keys())
         modified_files = solution_modified_files - conflict_files
 
         # Conflicts + Modified sections (Modified = solution-touched files that
@@ -978,24 +1063,79 @@ class AppContext:
         message += _format_file_section("Conflicts", sorted(conflict_files))
         message += _format_file_section("Modified", sorted(modified_files))
 
-        # Include original commit messages as reference
-        message += "Squashed commits:\n"
-        for commit, _ in commits_with_notes:
-            short_sha = git_utils.short_sha(commit.hexsha)
-            # Get first line of commit message
-            commit_message = (
-                commit.message
-                if isinstance(commit.message, str)
-                else commit.message.decode("utf-8", errors="replace")
-            )
-            first_line = commit_message.split("\n")[0].strip()
-            message += f"\t{short_sha} {first_line}\n"
-        message += "\n"
+        # Squashed commits section, taken from the accumulated note field.
+        squashed_commits = combined_note.get("squashed_commits", [])
+        if squashed_commits:
+            message += "Squashed commits:\n"
+            for entry in squashed_commits:
+                message += f"\t{git_utils.short_sha(entry['sha'])} {entry['message']}\n"
+            message += "\n"
 
         # Add MergAI footer
         message += self.commit_footer
 
         return message
+
+    def _validate_squash_notes(
+        self, commits_with_notes: list[tuple[git.Commit, dict | None]]
+    ) -> None:
+        """Ensure every commit in the squash range carries a mergai note.
+
+        The only commit allowed to be noteless is the PR merge commit at HEAD:
+        it is created on GitHub when the solution PR is merged, so it cannot
+        carry a note. Any other noteless commit signals an incomplete state:
+
+        - a noteless single-parent commit is unsynced human work
+          (``mergai commit sync`` records it), and
+        - a noteless merge commit elsewhere in the range is an unexpected merge.
+
+        Args:
+            commits_with_notes: List of (commit, note_dict) tuples for the range.
+
+        Raises:
+            click.ClickException: If any disallowed noteless commit is found.
+        """
+        head_sha = self.repo.head.commit.hexsha
+        unsynced: list[git.Commit] = []
+        stray_merges: list[git.Commit] = []
+
+        for commit, note in commits_with_notes:
+            if note is not None:
+                continue
+            is_merge = len(commit.parents) >= 2
+            if commit.hexsha == head_sha and is_merge:
+                # PR merge commit - legitimately has no note.
+                continue
+            if is_merge:
+                stray_merges.append(commit)
+            else:
+                unsynced.append(commit)
+
+        if not unsynced and not stray_merges:
+            return
+
+        lines: list[str] = []
+        if unsynced:
+            lines.append(
+                "Commits without a mergai note "
+                "(run `mergai commit sync` first to record them):"
+            )
+            for commit in unsynced:
+                lines.append(
+                    f"\t{git_utils.short_sha(commit.hexsha)} "
+                    f"{self._commit_subject(commit)}"
+                )
+        if stray_merges:
+            lines.append(
+                "Unexpected merge commit(s) without a mergai note in the squash range:"
+            )
+            for commit in stray_merges:
+                lines.append(
+                    f"\t{git_utils.short_sha(commit.hexsha)} "
+                    f"{self._commit_subject(commit)}"
+                )
+
+        raise click.ClickException("\n".join(lines))
 
     def squash_to_merge(self):
         """Squash all commits from HEAD to merge commit into a single merge commit.
@@ -1047,6 +1187,11 @@ class AppContext:
 
         click.echo(f"Found {len(commits_with_notes)} commit(s) to squash.")
 
+        # Every commit in the range must carry a mergai note so the squash
+        # message and combined note are complete. The PR merge commit at HEAD
+        # is the one exception (created on GitHub, it cannot have a note).
+        self._validate_squash_notes(commits_with_notes)
+
         # Check if there's only 1 commit and it's already a proper merge commit
         # with the expected parents (target_branch_sha, merge_commit_sha).
         # In this case, squashing is a no-op - the commit is already in the desired state.
@@ -1078,10 +1223,16 @@ class AppContext:
         if combined_note.merge_info is None:
             combined_note.merge_info = self.note.merge_info
 
+        # Accumulate the squashed-commits record, expanding any prior squashes
+        # so the list grows across repeated finalizes.
+        combined_note.squashed_commits = self._collect_squashed_commit_entries(
+            commits_with_notes
+        )
+
         # Build commit message
         merge_info_dict = combined_note.merge_info.to_dict()
         message = self._build_squash_commit_message(
-            merge_info_dict, commits_with_notes, combined_note.to_dict()
+            merge_info_dict, combined_note.to_dict()
         )
 
         # Create commit with two parents: target_branch_sha (first parent) and merge_commit_sha (second parent)
