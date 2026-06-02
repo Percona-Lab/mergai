@@ -22,11 +22,14 @@ from . import git_utils
 def gh_auth_token() -> str | None:
     import os
 
+    # Test truthiness, not `is not None`: an env var set to the empty string
+    # is present but useless, and would otherwise short-circuit here and never
+    # fall through to the next source (GH_TOKEN or `gh auth token`).
     token = os.getenv("GITHUB_TOKEN")
-    if token is not None:
+    if token:
         return token
     token = os.getenv("GH_TOKEN")
-    if token is not None:
+    if token:
         return token
 
     try:
