@@ -588,20 +588,6 @@ def _get_rebase_commit_message(app: AppContext) -> str | None:
     return None
 
 
-def _content_has_conflict_markers(content: str) -> bool:
-    """Check if content contains git conflict markers.
-
-    Args:
-        content: File content to check.
-
-    Returns:
-        True if conflict markers are found.
-    """
-    has_start = bool(re.search(r"^<{7}", content, re.MULTILINE))
-    has_end = bool(re.search(r"^>{7}", content, re.MULTILINE))
-    return has_start and has_end
-
-
 def _apply_file_resolution(
     app: AppContext,
     file_path: str,
@@ -629,7 +615,7 @@ def _apply_file_resolution(
         return False
 
     # Verify no conflict markers in the resolved content
-    if _content_has_conflict_markers(content):
+    if git_utils.content_has_conflict_markers(content):
         return False
 
     # Write to working directory

@@ -997,6 +997,18 @@ class MergaiNote:
         return self.solutions is not None and len(self.solutions) > 0
 
     @property
+    def has_unresolved_conflicts(self) -> bool:
+        """Check if any solution reports files left with conflict markers.
+
+        A solution's ``response.unresolved`` dict maps file paths to reasons.
+        Any non-empty ``unresolved`` on any solution means the agent could not
+        fully resolve conflicts and the PR still contains conflict markers.
+        """
+        if not self.has_solutions or self.solutions is None:
+            return False
+        return any(s.get("response", {}).get("unresolved") for s in self.solutions)
+
+    @property
     def has_pr_comments(self) -> bool:
         """Check if pr_comments are present."""
         return self.pr_comments is not None and len(self.pr_comments) > 0
