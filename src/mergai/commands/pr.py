@@ -381,9 +381,17 @@ def create(
 
     # Get config labels based on PR type
     if pr_type.lower() == "solution":
-        config_labels = app.config.pr.solution.labels
+        pr_type_config = app.config.pr.solution
     else:
-        config_labels = app.config.pr.main.labels
+        pr_type_config = app.config.pr.main
+
+    config_labels = list(pr_type_config.labels)
+    if app.note.has_unresolved_conflicts:
+        config_labels.extend(
+            lbl
+            for lbl in pr_type_config.labels_on_unresolved
+            if lbl not in config_labels
+        )
 
     # Compute final labels
     if no_labels:
