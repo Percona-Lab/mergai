@@ -137,18 +137,53 @@ def _create_pr(
                 raise click.ClickException(
                     "GitHub rejected the PR: branch(es) not found on remote. Push your branches first."
                 ) from e
-        msg = e.data.get("message", str(e)) if isinstance(e.data, dict) else str(e)
-        raise click.ClickException(f"GitHub API error: {msg}") from e
+        raise click.ClickException(_format_github_error(e)) from e
 
 
-def _build_solutions_pr_body(app: AppContext) -> str:
+def _format_github_error(e: GithubException) -> str:
+    """Format a GithubException with details from response payload.
+
+    GitHub's 422 validation errors carry the actual reason in
+    `errors[*].message` (or `errors[*].code`), not in the top-level
+    `message` field. Surface those so callers see *why* validation failed
+    (e.g. "Body is too long (maximum is 65536 characters)") instead of the
+    generic "Validation Failed".
+    """
+    data = e.data if isinstance(e.data, dict) else {}
+    top = data.get("message") or str(e)
+    parts: list[str] = []
+    for err in data.get("errors") or []:
+        if not isinstance(err, dict):
+            continue
+        # Prefer human message; fall back to field+code.
+        msg = err.get("message")
+        if not msg:
+            field = err.get("field")
+            code = err.get("code")
+            if field and code:
+                msg = f"{field}: {code}"
+            elif code:
+                msg = code
+            elif field:
+                msg = field
+        if msg:
+            parts.append(msg)
+    detail = "; ".join(parts)
+    if detail:
+        return f"GitHub API error ({e.status}): {top} — {detail}"
+    return f"GitHub API error ({e.status}): {top}"
+
+
+def _build_solutions_pr_body(app: AppContext, skip_commit_list: bool = False) -> str:
     markdown_config = MarkdownConfig.for_pr(app.repo)
 
     body = formatters.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
     if app.note.has_merge_context and app.note.merge_context is not None:
         body += formatters.merge_context_to_markdown(
-            app.note.merge_context, markdown_config
+            app.note.merge_context,
+            markdown_config,
+            include_commit_list=not skip_commit_list,
         )
         body += "\n\n"
     if app.note.has_merge_description and app.note.merge_description is not None:
@@ -167,14 +202,16 @@ def _build_solutions_pr_body(app: AppContext) -> str:
     return body
 
 
-def _build_merge_pr_body(app: AppContext) -> str:
+def _build_merge_pr_body(app: AppContext, skip_commit_list: bool = False) -> str:
     markdown_config = MarkdownConfig.for_pr(app.repo)
 
     body = formatters.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
     if app.note.has_merge_context and app.note.merge_context is not None:
         body += formatters.merge_context_to_markdown(
-            app.note.merge_context, markdown_config
+            app.note.merge_context,
+            markdown_config,
+            include_commit_list=not skip_commit_list,
         )
         body += "\n\n"
     if app.note.has_merge_description and app.note.merge_description is not None:
@@ -190,6 +227,7 @@ def _create_solution_pr(
     dry_run: bool,
     url_only: bool = False,
     skip_body: bool = False,
+    skip_commit_list: bool = False,
     labels: list[str] | None = None,
 ) -> None:
     """Create a PR from the current branch (with existing solution commits) to the conflict branch."""
@@ -208,7 +246,11 @@ def _create_solution_pr(
 
     title = app.pr_titles.solution_title
 
-    body = "" if skip_body else _build_solutions_pr_body(app)
+    body = (
+        ""
+        if skip_body
+        else _build_solutions_pr_body(app, skip_commit_list=skip_commit_list)
+    )
 
     _create_pr(
         app,
@@ -222,15 +264,15 @@ def _create_solution_pr(
     )
 
 
-def _build_main_pr_body(app: AppContext) -> str:
+def _build_main_pr_body(app: AppContext, skip_commit_list: bool = False) -> str:
     """Build PR body for main PR from merge_context or conflict resolution data."""
     # If we have solutions (from any source - AI, human, or synced), include them
     if app.note.has_solutions:
-        return _build_solutions_pr_body(app)
+        return _build_solutions_pr_body(app, skip_commit_list=skip_commit_list)
 
     # No solutions - use merge PR body if we have merge_context
     if app.note.has_merge_context:
-        return _build_merge_pr_body(app)
+        return _build_merge_pr_body(app, skip_commit_list=skip_commit_list)
 
     raise click.ClickException(
         "No merge_context or solutions found. "
@@ -244,13 +286,16 @@ def _create_main_pr(
     dry_run: bool,
     url_only: bool = False,
     skip_body: bool = False,
+    skip_commit_list: bool = False,
     labels: list[str] | None = None,
 ) -> None:
     """Create a PR from the main branch to target_branch (merge or conflict resolution)."""
 
     title = app.pr_titles.main_title
 
-    body = "" if skip_body else _build_main_pr_body(app)
+    body = (
+        "" if skip_body else _build_main_pr_body(app, skip_commit_list=skip_commit_list)
+    )
 
     _create_pr(
         app,
@@ -300,6 +345,16 @@ def pr(app: AppContext, repo: str | None):
     help="Skip creating a body for the PR (create with empty body).",
 )
 @click.option(
+    "--skip-commit-list",
+    is_flag=True,
+    default=False,
+    help=(
+        "Omit the per-merged-commit table from the PR body. "
+        "Use this when the body would otherwise exceed GitHub's 65,536 "
+        "character limit (typical for merges with hundreds of commits)."
+    ),
+)
+@click.option(
     "--labels",
     "labels_arg",
     type=str,
@@ -325,6 +380,7 @@ def create(
     dry_run: bool,
     url_only: bool,
     skip_body: bool,
+    skip_commit_list: bool,
     labels_arg: str | None,
     no_labels: bool,
 ):
@@ -358,6 +414,10 @@ def create(
                     fields pre-filled (title, body, branches). You can review
                     and edit everything before submitting.
         --skip-body Skip creating a body for the PR (create with empty body).
+        --skip-commit-list
+                    Omit the per-merged-commit table from the PR body. Use
+                    this when a normal `pr create` fails GitHub validation
+                    because the body exceeds the 65,536 character limit.
         --labels    Labels to apply to the PR. By default, uses labels from config.
                     Specifying labels without +/- prefix overrides config labels.
                     Use +label to add, -label to remove from config labels.
@@ -369,6 +429,7 @@ def create(
         mergai pr create solution        # Create PR from solution branch to conflict branch
         mergai pr create main --url-only # Get URL to create PR manually on GitHub
         mergai pr create main --skip-body # Create PR with empty body
+        mergai pr create main --skip-commit-list  # Drop merged-commits table from body
         mergai pr create main --labels=urgent,review  # Override config labels
         mergai pr create main --labels=+urgent,-auto  # Add/remove from config labels
         mergai pr create main --no-labels             # Create PR without any labels
@@ -400,9 +461,13 @@ def create(
         final_labels = _parse_labels_option(labels_arg, config_labels)
 
     if pr_type.lower() == "solution":
-        _create_solution_pr(app, dry_run, url_only, skip_body, final_labels)
+        _create_solution_pr(
+            app, dry_run, url_only, skip_body, skip_commit_list, final_labels
+        )
     else:
-        _create_main_pr(app, dry_run, url_only, skip_body, final_labels)
+        _create_main_pr(
+            app, dry_run, url_only, skip_body, skip_commit_list, final_labels
+        )
 
 
 def get_prs_for_current_branch(app: AppContext) -> list[GithubPullRequest.PullRequest]:

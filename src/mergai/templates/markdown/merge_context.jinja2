@@ -23,6 +23,7 @@ No files were auto-merged.
 **Merged with strategy:** {{ merge_context.auto_merged.strategy }}
 {% endif %}
 {% endif %}
+{% if include_commit_list | default(true) %}
 
 <details>
 <summary>Show details</summary>
@@ -34,3 +35,4 @@ No files were auto-merged.
 {%- endfor %}
 
 </details>
+{% endif %}
