@@ -537,55 +537,6 @@ def log(app: AppContext, ref: str):
     util.print_or_page(output_str, format="text")
 
 
-@click.command()
-@click.pass_obj
-def prompt(app: AppContext):
-    try:
-        if not app.has_note:
-            click.echo("No note found. Please prepare the context first.")
-            click.echo("Use `mergai create-conflict-context` to add conflict context.")
-            click.echo(
-                "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
-            )
-            sys.exit(1)
-        prompt_text = app.prompt_builder.build_resolve_prompt()
-        util.print_or_page(prompt_text, format="markdown")
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        sys.exit(1)
-
-
-@click.command()
-@click.pass_obj
-def merge_prompt(app: AppContext):
-    try:
-        if not app.has_note:
-            click.echo("No note found. Please prepare the context first.")
-            click.echo("Use `mergai create-conflict-context` to add conflict context.")
-            click.echo(
-                "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
-            )
-            sys.exit(1)
-        # The describe prompt is grounded in the merge-base..merge-commit diff,
-        # so resolve the diff base first (same as AppContext.describe()).
-        merge_base_sha = app.resolve_merge_diff_base()
-        if merge_base_sha is None:
-            click.echo(
-                "Could not resolve a diff base for "
-                f"{app.note.merge_info.merge_commit_sha} "
-                "(unrelated histories or no boundary parent); "
-                "cannot build a merge description prompt."
-            )
-            sys.exit(1)
-        prompt_text = app.prompt_builder.build_describe_prompt(
-            merge_base_sha=merge_base_sha
-        )
-        util.print_or_page(prompt_text, format="markdown")
-    except Exception as e:
-        click.echo(f"Error: {e}")
-        sys.exit(1)
-
-
 COMMENT_FILE_TEMPLATE = """\
 
 # MergAI comment

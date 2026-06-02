@@ -1,0 +1,98 @@
+"""Base types for workflow context builders."""
+
+from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
+from typing import Any
+
+from ...app import AppContext
+from ...config import WorkflowContextConfig
+
+
+@dataclass
+class WorkflowContext:
+    """Structured context extracted from a failed CI workflow run.
+
+    Context builders populate this from workflow artifacts, the GitHub API,
+    or logs. Handlers consume it: ``CommandHandler`` mostly uses it for
+    reporting, while ``ResolveHandler`` feeds ``summary`` + ``details`` +
+    ``files_affected`` into the AI prompt.
+
+    Attributes:
+        workflow_name: The failing workflow's name (e.g. ``"format"``).
+        run_id: GitHub workflow run ID that produced this failure.
+        pr_number: Pull request number the run is associated with.
+        summary: One-line human-readable summary of the failure.
+        files_affected: Paths (repo-relative) implicated by the failure.
+        details: Full text content for the AI prompt (the diff, SARIF
+            findings, log excerpt — whatever the builder extracts).
+        raw_data: Original parsed data, kept for storage/debugging.
+        artifacts_dir: Directory where the run's artifacts are extracted.
+            Each artifact lives at ``<artifacts_dir>/<artifact_name>/``.
+            ``None`` when the trigger is a ``check_run`` event (no run
+            artifacts to download). Surfaced to ``CommandHandler`` as
+            ``$MERGAI_ARTIFACTS_DIR`` so deterministic auto-fixers can
+            apply pre-computed patches directly.
+    """
+
+    workflow_name: str
+    run_id: str
+    pr_number: int
+    summary: str
+    files_affected: list[str] = field(default_factory=list)
+    details: str = ""
+    raw_data: dict[str, Any] = field(default_factory=dict)
+    artifacts_dir: str | None = None
+
+
+class WorkflowContextBuilder(ABC):
+    """Abstract base class for context builders.
+
+    A builder maps a ``WorkflowContextConfig`` (with a ``type`` and
+    ``source``) to a concrete :class:`WorkflowContext`. Subclasses are
+    registered by type via
+    :func:`mergai.ci.context_builders.get_context_builder`.
+
+    Builders receive the active :class:`~mergai.app.AppContext` so they
+    can fall back to GitHub-API sources (e.g. job logs) when the expected
+    artifact is missing — the SARIF builder uses this when the workflow
+    failed before producing its SARIF report.
+    """
+
+    def __init__(self, app: AppContext):
+        self.app = app
+
+    @abstractmethod
+    def build_context(
+        self,
+        config: WorkflowContextConfig,
+        workflow_name: str,
+        run_id: str,
+        pr_number: int,
+        artifacts_dir: str | None,
+        head_sha: str | None = None,
+    ) -> WorkflowContext:
+        """Build a :class:`WorkflowContext` for a given failed run.
+
+        Args:
+            config: The per-workflow context config (``type``, ``source``,
+                ``artifact_name``).
+            workflow_name: Name of the failing workflow.
+            run_id: GitHub workflow run ID.
+            pr_number: PR number.
+            artifacts_dir: Directory with downloaded workflow artifacts.
+                Each artifact is extracted into a subdirectory named after
+                the artifact. ``None`` when the trigger is a ``check_run``
+                event (the failure isn't a workflow run, so there's
+                nothing to download).
+            head_sha: Head commit SHA of the run that produced the
+                failure. Required for the ``check_run`` trigger so the
+                SARIF builder can fetch findings from Code Scanning.
+                ``None`` is fine for the workflow_run trigger.
+
+        Returns:
+            Populated WorkflowContext.
+
+        Raises:
+            FileNotFoundError: If the expected artifact is missing.
+            ValueError: If the artifact content can't be parsed.
+        """
