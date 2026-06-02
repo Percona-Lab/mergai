@@ -32,6 +32,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
+from .solution_types import CI_FIX
+
 T = TypeVar("T", bound="MergaiNote")
 
 if TYPE_CHECKING:
@@ -827,7 +829,11 @@ class MergaiNote:
         mergai_version: Required version of mergai that created/modified this note.
         conflict_context: Optional context for merge conflicts.
         merge_context: Optional context for successful merges.
-        solutions: Optional list of AI-generated solutions.
+        solutions: Optional list of agent / human solutions. Each solution
+            carries a ``type`` field (``"conflict_resolution"`` or
+            ``"ci_fix"``); CI fixes also carry a ``request`` dict with
+            ``workflow``, ``run_id``, ``pr_number``, ``attempt_number``,
+            and ``context_summary``.
         pr_comments: Optional list of PR comments.
         user_comment: Optional user-provided comment.
         merge_description: Optional AI-generated merge description.
@@ -843,6 +849,13 @@ class MergaiNote:
     user_comment: dict | None = None  # Dict with user, email, date, body
     merge_description: dict | None = None
     note_index: list[dict] | None = None
+    # `ci fix` records one entry here per investigable attempt, whether it
+    # fixed the failure (`outcome="fixed"`, with a `commit_sha`) or could
+    # not (`outcome="unfixable"`, no commit). Each entry is a self-contained
+    # PR-comment payload, posted on demand via `mergai ci comment post`.
+    # Lives only in the cache note (not git notes): `ci fix` and the post
+    # step run in the same CI job, so the cache persists between them.
+    ci_comments: list[dict] | None = None
 
     # Cached repo reference (not serialized)
     _repo: Optional["Repo"] = field(default=None, repr=False, compare=False)
@@ -884,6 +897,7 @@ class MergaiNote:
             user_comment=data.get("user_comment"),
             merge_description=data.get("merge_description"),
             note_index=data.get("note_index"),
+            ci_comments=data.get("ci_comments"),
             _repo=repo,
         )
         return note
@@ -1027,6 +1041,84 @@ class MergaiNote:
     def has_note_index(self) -> bool:
         """Check if note_index is present."""
         return self.note_index is not None and len(self.note_index) > 0
+
+    def get_ci_solutions(self, workflow: str) -> list[dict]:
+        """Return solutions recording successful CI fixes for ``workflow``.
+
+        Filters ``solutions`` to entries with ``type == "ci_fix"`` and
+        ``request.workflow == workflow``. Used by ``mergai ci fix``
+        to count prior fix attempts against ``max_attempts``: each
+        applied (committed) fix is one attempt.
+
+        Failed agent runs that didn't produce a commit are *not*
+        counted — they leave no solution behind, so the next workflow
+        run gets a fresh attempt.
+        """
+        if not self.solutions:
+            return []
+        return [
+            s
+            for s in self.solutions
+            if s.get("type") == CI_FIX
+            and s.get("request", {}).get("workflow") == workflow
+        ]
+
+    def get_ci_solution_for_run(self, run_id: str) -> dict | None:
+        """Return the CI fix solution for a workflow run, or None.
+
+        Used by ``mergai ci list`` and ``mergai ci fix all`` to skip
+        already-processed runs.
+        """
+        if not self.solutions:
+            return None
+        for solution in self.solutions:
+            if solution.get("type") == CI_FIX and str(
+                solution.get("request", {}).get("run_id")
+            ) == str(run_id):
+                return solution
+        return None
+
+    def get_ci_comment_for_run(self, run_id: str) -> dict | None:
+        """Return the recorded CI comment for a workflow run, or None.
+
+        ``ci fix`` records one comment per investigable run (whether it
+        was fixed or judged unfixable). Used by ``mergai ci fix all`` and
+        ``mergai ci list`` to skip runs that have already been processed.
+        """
+        if not self.ci_comments:
+            return None
+        for comment in self.ci_comments:
+            if str(comment.get("run_id")) == str(run_id):
+                return comment
+        return None
+
+    def pending_ci_comments(self) -> list[dict]:
+        """Return comments that have not yet been posted to their PR."""
+        if not self.ci_comments:
+            return []
+        return [c for c in self.ci_comments if not c.get("posted_at")]
+
+    def add_ci_comment(self, comment: dict) -> int:
+        """Append a CI comment and return its index."""
+        if self.ci_comments is None:
+            self.ci_comments = []
+        self.ci_comments.append(comment)
+        return len(self.ci_comments) - 1
+
+    def mark_ci_comment_posted(
+        self, run_id: str, *, posted_at: str, comment_url: str | None
+    ) -> bool:
+        """Record that a CI comment has been posted to its PR.
+
+        Returns ``True`` if a matching comment was found and updated,
+        ``False`` otherwise.
+        """
+        comment = self.get_ci_comment_for_run(run_id)
+        if comment is None:
+            return False
+        comment["posted_at"] = posted_at
+        comment["posted_comment_url"] = comment_url
+        return True
 
     # --- Repo Binding ---
 
@@ -1420,4 +1512,6 @@ class MergaiNote:
             result["merge_description"] = self.merge_description
         if self.note_index:
             result["note_index"] = self.note_index
+        if self.ci_comments:
+            result["ci_comments"] = self.ci_comments
         return result

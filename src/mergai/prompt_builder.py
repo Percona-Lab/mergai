@@ -1,7 +1,8 @@
 """Prompt building utilities for MergAI.
 
 This module provides the PromptBuilder class which encapsulates all logic
-for building prompts for AI agents from MergaiNote data.
+for building prompts for AI agents from MergaiNote data, plus free
+functions for prompts that don't depend on a merge note (e.g. CI fixes).
 """
 
 import json
@@ -10,6 +11,36 @@ from . import prompts
 from .config import PromptConfig
 from .models import MergaiNote
 from .utils import util
+
+
+def serialize_note_for_prompt(
+    note: MergaiNote,
+    prompt_config: PromptConfig,
+    *,
+    include_solutions: bool = False,
+) -> dict:
+    """Serialize a merge note's context fields for embedding in a prompt.
+
+    Single source of truth shared by the resolve/describe prompts
+    (:meth:`PromptBuilder._prepare_note_for_prompt`) and the CI-fix prompt
+    (:func:`build_ci_fix_preamble`). Context fields are hydrated with the
+    configurable serialization settings; ``include_solutions`` adds the
+    note's prior solutions (prior conflict resolutions and CI fixes), which
+    the CI-fix prompt wants but the resolve prompt doesn't.
+    """
+    serialization_config = prompt_config.to_prompt_serialization_config()
+    result: dict = {"merge_info": note.merge_info.to_dict()}
+    if note.has_conflict_context and note.conflict_context is not None:
+        result["conflict_context"] = note.conflict_context.to_dict(serialization_config)
+    if note.has_merge_context and note.merge_context is not None:
+        result["merge_context"] = note.merge_context.to_dict(serialization_config)
+    if include_solutions and note.has_solutions and note.solutions is not None:
+        result["solutions"] = note.solutions
+    if note.has_pr_comments and note.pr_comments is not None:
+        result["pr_comments"] = note.pr_comments
+    if note.has_user_comment and note.user_comment is not None:
+        result["user_comment"] = note.user_comment
+    return result
 
 
 class PromptBuilder:
@@ -224,35 +255,10 @@ class PromptBuilder:
     def _prepare_note_for_prompt(self) -> dict:
         """Prepare note data for prompt serialization.
 
-        Hydrates context fields (conflict_context, merge_context) using the
-        configurable prompt serialization settings from config.
-
-        Returns:
-            A dict with context fields hydrated for prompt use.
+        Thin wrapper over :func:`serialize_note_for_prompt` — the resolve and
+        describe prompts don't include prior solutions.
         """
-        prompt_serialization_config = (
-            self.prompt_config.to_prompt_serialization_config()
-        )
-
-        result: dict = {"merge_info": self.note.merge_info.to_dict()}
-
-        if self.note.has_conflict_context and self.note.conflict_context is not None:
-            result["conflict_context"] = self.note.conflict_context.to_dict(
-                prompt_serialization_config
-            )
-
-        if self.note.has_merge_context and self.note.merge_context is not None:
-            result["merge_context"] = self.note.merge_context.to_dict(
-                prompt_serialization_config
-            )
-
-        if self.note.has_pr_comments and self.note.pr_comments is not None:
-            result["pr_comments"] = self.note.pr_comments
-
-        if self.note.has_user_comment and self.note.user_comment is not None:
-            result["user_comment"] = self.note.user_comment
-
-        return result
+        return serialize_note_for_prompt(self.note, self.prompt_config)
 
     @staticmethod
     def error_to_prompt(error: str) -> str:
@@ -268,3 +274,107 @@ class PromptBuilder:
             Formatted prompt string describing the error.
         """
         return f"An error occurred while trying to process the output: {error}"
+
+
+def build_ci_fix_preamble(
+    note: MergaiNote | None = None,
+    prompt_config: PromptConfig | None = None,
+) -> str:
+    """Build the common prefix shared by all CI-fix prompts.
+
+    Layout:
+      1. System prompt for CI fixes
+         (``prompts/system_prompt_ci_fix.md``).
+      2. Project invariants from ``.mergai/invariants.md`` if present.
+      3. ``Merge Context`` section with ``merge_info`` /
+         ``merge_context`` / ``conflict_context`` / ``solutions`` /
+         ``pr_comments`` / ``user_comment`` from the merge note —
+         only when ``note`` and ``prompt_config`` are both provided.
+         Tells the agent it's on a post-merge branch and lets it
+         diagnose root cause against the actual merge.
+      4. ``CI Fix Context`` description
+         (``prompts/ci_fix_context.md``) explaining the per-run JSON
+         shape.
+
+    The preamble doesn't depend on any specific
+    :class:`WorkflowContext`, so multi-run renderings
+    (``mergai prompt ci all``) can emit it once and follow with one
+    :func:`build_ci_fix_run_section` per run.
+    """
+    system_prompt = prompts.load_system_prompt_ci_fix()
+    project_invariants = util.load_if_exists(".mergai/invariants.md")
+
+    parts: list[str] = [system_prompt, "\n\n"]
+    if project_invariants:
+        parts.extend([project_invariants, "\n\n"])
+
+    if note is not None and prompt_config is not None:
+        merge_data = serialize_note_for_prompt(
+            note, prompt_config, include_solutions=True
+        )
+        if merge_data:
+            parts.extend([prompts.load_merge_context_for_ci_fix_prompt(), "\n\n"])
+            parts.append("## Merge Context\n\n")
+            parts.append("```json\n")
+            parts.append(json.dumps(merge_data, indent=2))
+            parts.append("\n```\n\n")
+
+    parts.extend([prompts.load_ci_fix_context_prompt(), "\n\n"])
+    return "".join(parts)
+
+
+def build_ci_fix_run_section(context, *, heading: str = "## CI Fix Context") -> str:
+    """Build the per-run section: heading + the WorkflowContext as JSON.
+
+    The default heading matches the original single-run prompt shape
+    (so the agent sees the same text it always has). Multi-run callers
+    pass a per-run heading like ``"## Run 12345 — clang-tidy"`` to
+    disambiguate.
+    """
+    context_dict = {
+        "workflow_name": context.workflow_name,
+        "run_id": context.run_id,
+        "pr_number": context.pr_number,
+        "summary": context.summary,
+        "files_affected": list(context.files_affected),
+        "artifacts_dir": context.artifacts_dir,
+        "details": context.details,
+    }
+    return (
+        f"{heading}\n\n" + "```json\n" + json.dumps(context_dict, indent=2) + "\n```\n"
+    )
+
+
+def build_ci_fix_prompt(
+    context,
+    note: MergaiNote | None = None,
+    prompt_config: PromptConfig | None = None,
+) -> str:
+    """Build the full single-run CI-fix prompt.
+
+    Mirrors the structure of :meth:`PromptBuilder.build_resolve_prompt`:
+    system prompt + project invariants + (optional) merge context +
+    per-context section + a JSON serialization of the input data. The
+    agent is told to write a response with the same shape as the
+    resolve flow
+    (``resolved``/``unresolved``/``modified``/``summary``/``review_notes``)
+    so the post-processing pipeline (validators, commit message, note
+    attachment) can be shared.
+
+    When ``note`` and ``prompt_config`` are both supplied, the prompt
+    embeds the merge note (merge_info, merge_context, conflict_context,
+    prior solutions, etc.) so the agent can diagnose the CI failure
+    against what was just merged in instead of treating the failure as
+    an isolated build issue. Always pass them when available.
+
+    This is what :class:`ResolveHandler` feeds to the agent. For the
+    inspection command ``mergai prompt ci`` with multi-run targets, see
+    :func:`build_ci_fix_preamble` + :func:`build_ci_fix_run_section`.
+
+    Free function rather than a ``PromptBuilder`` method so callers
+    that don't have a note (e.g. ``mergai prompt ci`` invoked outside
+    a mergai working tree for debugging) can still render the prompt.
+    """
+    return build_ci_fix_preamble(
+        note=note, prompt_config=prompt_config
+    ) + build_ci_fix_run_section(context)

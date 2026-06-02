@@ -105,9 +105,13 @@ class BranchConfig:
             SHA token variants:
             - %(merge_commit_sha) - Full SHA of the merge commit (40 chars)
             - %(merge_commit_short_sha) - Short SHA of the merge commit (11 chars)
+        working_prefix: Branch-namespace prefix mergai treats as its own when
+            deciding whether to act on a CI workflow run. Should match the
+            prefix that ``name_format`` produces.
     """
 
     name_format: str = "mergai/%(target_branch)-%(merge_commit_short_sha)/%(type)"
+    working_prefix: str = "mergai/"
 
     @classmethod
     def from_dict(cls, data: dict) -> "BranchConfig":
@@ -121,10 +125,15 @@ class BranchConfig:
         """
         return cls(
             name_format=data.get("name_format", cls.name_format),
+            working_prefix=data.get("working_prefix", cls.working_prefix),
         )
 
 
 DEFAULT_COMMIT_FOOTER = "Note: commit created by mergai"
+DEFAULT_CI_FIX_TITLE_FORMAT = (
+    "Fix %(workflow) failure for merge commit "
+    "%(merge_commit_short_sha) into %(target_branch)"
+)
 
 
 @dataclass
@@ -255,13 +264,21 @@ class CommitConfig:
     Attributes:
         footer: Footer text appended to all MergAI-generated commit messages.
             Set to empty string to disable the footer.
+        ci_fix_title_format: Format string for the title of CI-fix commits.
+            Uses %(token) syntax. Available tokens:
+            - %(workflow) - The failing workflow/check name
+            - %(target_branch) - The target branch name
+            - %(merge_commit_sha) - Full SHA of the merge commit (40 chars)
+            - %(merge_commit_short_sha) - Short SHA of the merge commit
 
     Example YAML config:
         commit:
           footer: "Note: commit created by mergai"
+          ci_fix_title_format: "Fix '%(workflow)' failure for merge commit '%(merge_commit_short_sha)' into '%(target_branch)'"
     """
 
     footer: str = DEFAULT_COMMIT_FOOTER
+    ci_fix_title_format: str = DEFAULT_CI_FIX_TITLE_FORMAT
 
     @classmethod
     def from_dict(cls, data: dict) -> "CommitConfig":
@@ -275,6 +292,9 @@ class CommitConfig:
         """
         return cls(
             footer=data.get("footer", cls.footer),
+            ci_fix_title_format=data.get(
+                "ci_fix_title_format", cls.ci_fix_title_format
+            ),
         )
 
 
@@ -818,6 +838,225 @@ class InitConfig:
         )
 
 
+# Valid values for workflow action_type config
+WORKFLOW_ACTION_COMMAND = "command"
+WORKFLOW_ACTION_RESOLVE = "resolve"
+VALID_WORKFLOW_ACTION_TYPES = [WORKFLOW_ACTION_COMMAND, WORKFLOW_ACTION_RESOLVE]
+
+
+@dataclass
+class WorkflowContextConfig:
+    """Configuration for extracting failure context from a CI workflow run.
+
+    Resolved at runtime by the ``mergai.ci.context_builders`` factory, which
+    maps ``type`` to a concrete builder. Unknown types are rejected there,
+    not here, so new builders can be added without touching config parsing.
+
+    Attributes:
+        type: Context type (e.g. ``"diff"``, ``"sarif"``, ``"bazel"``).
+            Resolved against the context-builder registry at runtime.
+        source: Where to read the context from. Currently ``"artifact"``
+            (downloaded workflow artifact).
+        artifact_name: Names of artifacts to inspect when ``source`` is
+            ``"artifact"``. YAML may pass either a single string or a list;
+            the value is always normalized to ``list[str]``. Builders that
+            expect exactly one artifact (``diff``, ``sarif``) read element
+            zero; builders covering multi-job workflows (``bazel``) iterate
+            over the list and use whichever artifact the failing job
+            actually uploaded.
+        code_scanning_check: If true, when the watched workflow_run
+            *passes*, also consult GitHub Code Scanning for findings on
+            the run's commit. If the latest analysis for the configured
+            tool has any results, build a context from that SARIF and
+            run the handler. Only meaningful for SARIF-emitting tools
+            whose workflow uploads to Code Scanning (e.g. clang-tidy).
+        code_scanning_tool_name: Code Scanning tool/driver name to query for
+            findings. Defaults to the workflow name; set only when the tool
+            name differs from it.
+
+    Example YAML config::
+
+        context:
+          type: sarif
+          source: artifact
+          artifact_name: clang-tidy-results
+          code_scanning_check: true
+
+        # Multi-job workflow: each job uploads its own artifact on failure.
+        context:
+          type: bazel
+          source: artifact
+          artifact_name:
+            - build-failure-artifacts
+            - unittest-failure-artifacts
+    """
+
+    type: str = "diff"
+    source: str = "artifact"
+    artifact_name: list[str] = field(default_factory=list)
+    code_scanning_check: bool = False
+    code_scanning_tool_name: str | None = None
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WorkflowContextConfig":
+        """Create a WorkflowContextConfig from a dictionary.
+
+        Accepts ``artifact_name`` as a string (legacy single-artifact form)
+        or a list of strings; both are normalized to ``list[str]``. Missing
+        or ``None`` becomes an empty list.
+
+        Raises:
+            ValueError: If ``artifact_name`` is neither a string nor a list
+                of strings.
+        """
+        raw = data.get("artifact_name")
+        if raw is None:
+            artifact_names: list[str] = []
+        elif isinstance(raw, str):
+            artifact_names = [raw]
+        elif isinstance(raw, list) and all(isinstance(x, str) for x in raw):
+            artifact_names = list(raw)
+        else:
+            raise ValueError(
+                "'artifact_name' must be a string or a list of strings, "
+                f"got {type(raw).__name__}"
+            )
+
+        return cls(
+            type=data.get("type", cls.type),
+            source=data.get("source", cls.source),
+            artifact_name=artifact_names,
+            code_scanning_check=data.get(
+                "code_scanning_check", cls.code_scanning_check
+            ),
+            code_scanning_tool_name=data.get("code_scanning_tool_name"),
+        )
+
+
+@dataclass
+class WorkflowConfig:
+    """Configuration for handling failures of a specific CI workflow.
+
+    Attributes:
+        enabled: Whether mergai will attempt fixes for this workflow.
+        max_attempts: Cap on the number of fix attempts mergai makes across
+            successive workflow runs before giving up and posting a PR comment.
+        agent_retries: Retry budget for the AI agent within a single fix
+            invocation (``action_type: resolve``). When unset, falls back to
+            ``max_attempts``.
+        action_type: How to attempt the fix. Either ``"command"`` (run a
+            shell command) or ``"resolve"`` (invoke the AI agent via the
+            existing ``AgentExecutor`` retry loop).
+        command: Shell command to run when ``action_type`` is ``"command"``.
+            Receives ``TARGET_BRANCH``, ``PR_NUMBER``, and ``WORKFLOW_NAME``
+            as environment variables.
+        context: Configuration for extracting failure context for this
+            workflow (used to build the AI prompt and/or for logging).
+
+    Example YAML config::
+
+        format:
+          enabled: true
+          max_attempts: 3
+          action_type: command
+          command: "git apply ${MERGAI_ARTIFACTS_DIR}/format-results/diff.patch"
+          context:
+            type: diff
+            source: artifact
+            artifact_name: format-results
+    """
+
+    enabled: bool = False
+    max_attempts: int = 3
+    agent_retries: int | None = None
+    action_type: str = WORKFLOW_ACTION_RESOLVE
+    command: str | None = None
+    context: WorkflowContextConfig = field(default_factory=WorkflowContextConfig)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WorkflowConfig":
+        """Create a WorkflowConfig from a dictionary.
+
+        Raises:
+            ValueError: If ``action_type`` is not one of
+                ``VALID_WORKFLOW_ACTION_TYPES``, or if ``action_type`` is
+                ``"command"`` without a non-empty ``command``.
+        """
+        action_type = data.get("action_type", cls.action_type)
+        if action_type not in VALID_WORKFLOW_ACTION_TYPES:
+            raise ValueError(
+                f"Invalid workflow action_type: '{action_type}'. "
+                f"Valid values are: {', '.join(VALID_WORKFLOW_ACTION_TYPES)}"
+            )
+
+        command = data.get("command")
+        if action_type == WORKFLOW_ACTION_COMMAND and not command:
+            raise ValueError(
+                "Workflow action_type 'command' requires a non-empty 'command' field"
+            )
+
+        context_data = data.get("context", {})
+        context = (
+            WorkflowContextConfig.from_dict(context_data)
+            if context_data
+            else WorkflowContextConfig()
+        )
+
+        return cls(
+            enabled=data.get("enabled", cls.enabled),
+            max_attempts=data.get("max_attempts", cls.max_attempts),
+            agent_retries=data.get("agent_retries"),
+            action_type=action_type,
+            command=command,
+            context=context,
+        )
+
+
+@dataclass
+class WorkflowsConfig:
+    """Configuration for CI workflow failure handlers, keyed by workflow name.
+
+    The workflow name is the value of ``name:`` in the GitHub Actions
+    workflow file (e.g. ``"format"``, ``"clang-tidy"``). When a ``workflow_run``
+    event fires, mergai looks up the matching ``WorkflowConfig`` here.
+
+    Example YAML config::
+
+        workflows:
+          format:
+            enabled: true
+            max_attempts: 3
+            action_type: command
+            command: "git apply ${MERGAI_ARTIFACTS_DIR}/format-results/diff.patch"
+            context:
+              type: diff
+              source: artifact
+              artifact_name: format-results
+          clang-tidy:
+            enabled: true
+            max_attempts: 2
+            action_type: resolve
+            context:
+              type: sarif
+              source: artifact
+              artifact_name: clang-tidy-results
+    """
+
+    workflows: dict[str, WorkflowConfig] = field(default_factory=dict)
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "WorkflowsConfig":
+        """Create a WorkflowsConfig from a dictionary of workflow-name → config."""
+        workflows: dict[str, WorkflowConfig] = {}
+        for name, wf_data in data.items():
+            workflows[name] = WorkflowConfig.from_dict(wf_data or {})
+        return cls(workflows=workflows)
+
+    def get(self, name: str) -> WorkflowConfig | None:
+        """Look up a workflow's config by name. Returns None if absent."""
+        return self.workflows.get(name)
+
+
 @dataclass
 class MergaiConfig:
     """Configuration settings for MergAI.
@@ -835,6 +1074,7 @@ class MergaiConfig:
         merge: Configuration for the merge command.
         context: Configuration for context creation (conflict context, etc.).
         config: Configuration for the 'mergai config' command.
+        workflows: Configuration for CI workflow failure handlers.
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
 
@@ -848,6 +1088,7 @@ class MergaiConfig:
     merge: MergeConfig = field(default_factory=MergeConfig)
     context: ContextConfig = field(default_factory=ContextConfig)
     config: InitConfig = field(default_factory=InitConfig)
+    workflows: WorkflowsConfig = field(default_factory=WorkflowsConfig)
     _raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -947,6 +1188,14 @@ class MergaiConfig:
             else InitConfig()
         )
 
+        # Parse workflows section if present
+        workflows_data = data.get("workflows", {})
+        workflows_config = (
+            WorkflowsConfig.from_dict(workflows_data)
+            if workflows_data
+            else WorkflowsConfig()
+        )
+
         return cls(
             fork=fork_config,
             resolve=resolve_config,
@@ -958,6 +1207,7 @@ class MergaiConfig:
             merge=merge_config,
             context=context_config,
             config=config_config,
+            workflows=workflows_config,
             _raw=data,
         )
 
