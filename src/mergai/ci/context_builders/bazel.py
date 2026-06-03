@@ -32,6 +32,7 @@ from typing import Any
 
 from ...config import WorkflowContextConfig
 from ._job_log import _download_job_log
+from .artifacts import resolve_artifact_dir
 from .base import WorkflowContext, WorkflowContextBuilder
 
 log = logging.getLogger(__name__)
@@ -81,7 +82,7 @@ class BazelContextBuilder(WorkflowContextBuilder):
             )
 
         artifact_dir = (
-            self._pick_artifact_dir(artifacts_dir, config.artifact_name)
+            resolve_artifact_dir(artifacts_dir, config.artifact_name)
             if config.artifact_name
             else None
         )
@@ -279,16 +280,6 @@ class BazelContextBuilder(WorkflowContextBuilder):
         return out
 
     # ---- artifact location -------------------------------------------------
-
-    @staticmethod
-    def _pick_artifact_dir(artifacts_dir: str, candidates: list[str]) -> Path | None:
-        """Return the first existing artifact subdirectory, or None."""
-        root = Path(artifacts_dir)
-        for name in candidates:
-            d = root / name
-            if d.is_dir():
-                return d
-        return None
 
     # ---- BEP parsing -------------------------------------------------------
 

@@ -22,6 +22,7 @@ from ..prompt_builder import (
     build_ci_fix_run_section,
 )
 from ..utils import util
+from .util import ensure_gh_repo
 
 
 @click.group()
@@ -120,11 +121,7 @@ def prompt_ci(
     but stops before invoking the agent and prints the rendered prompt
     instead. Multiple prompts are separated by a header line.
     """
-    if repo is None:
-        raise click.ClickException(
-            "GitHub repository not set. Use --repo or set GH_REPO environment variable."
-        )
-    app.gh_repo_str = repo
+    ensure_gh_repo(app, repo)
 
     if target.isdigit():
         run_ids = [target]

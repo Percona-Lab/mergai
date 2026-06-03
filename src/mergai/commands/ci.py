@@ -56,6 +56,7 @@ from ..ci.gate import _aggregate_state, _list_run_status, _watched_runs_for_head
 from ..ci.handlers import get_handler
 from ..solution_types import CI_FIX
 from ..utils.formatters import format_ascii_table
+from .util import ensure_gh_repo
 
 
 @click.group()
@@ -70,11 +71,7 @@ from ..utils.formatters import format_ascii_table
 )
 def ci(app: AppContext, repo: str | None):
     """CI workflow integration commands."""
-    if repo is None:
-        raise click.ClickException(
-            "GitHub repository not set. Use --repo or set GH_REPO environment variable."
-        )
-    app.gh_repo_str = repo
+    ensure_gh_repo(app, repo)
 
 
 @ci.command()

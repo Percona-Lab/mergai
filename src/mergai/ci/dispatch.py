@@ -8,11 +8,11 @@ from pathlib import Path
 from typing import Literal
 
 import click
-import git
 import github
 
 from ..app import AppContext
 from ..config import WorkflowConfig
+from ..utils import git_utils
 from ..utils.artifact_downloader import download_workflow_run_artifacts
 from .context_builders import WorkflowContext, get_context_builder
 from .context_builders.sarif import SARIFContextBuilder
@@ -323,14 +323,12 @@ def _run_head_status(
     head_sha = app.repo.head.commit.hexsha
     if run.head_sha == head_sha:
         return "current"
-    try:
-        app.repo.git.merge_base("--is-ancestor", run.head_sha, "HEAD")
+    # Ancestor of HEAD → superseded (newer commits since the run); not
+    # reachable at all (status 1, or an unknown SHA) → obsolete: we can't act
+    # on a SHA we don't have or can't reach.
+    if git_utils.is_ancestor(app.repo, run.head_sha):
         return "superseded"
-    except git.GitCommandError:
-        # status 1 → not an ancestor; anything else (e.g. unknown SHA) →
-        # also obsolete from our perspective. We can't act on a SHA we
-        # don't have or can't reach.
-        return "obsolete"
+    return "obsolete"
 
 
 def _skip_message(

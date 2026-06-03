@@ -10,6 +10,20 @@ from ..utils import formatters, git_utils, util
 from ..utils.output import OutputFormat, format_option
 
 
+def ensure_gh_repo(app: AppContext, repo: str | None) -> None:
+    """Set the GitHub repo on ``app`` from ``--repo`` / ``GH_REPO``, or raise.
+
+    Shared by the ``ci`` / ``pr`` / ``prompt`` command groups, which all
+    accept the repo via a ``--repo`` option defaulting to the ``GH_REPO``
+    environment variable.
+    """
+    if repo is None:
+        raise click.ClickException(
+            "GitHub repository not set. Use --repo or set GH_REPO environment variable."
+        )
+    app.gh_repo_str = repo
+
+
 @click.command()
 @click.pass_obj
 @click.option(

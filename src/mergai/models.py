@@ -467,13 +467,11 @@ def _sha_reachable_from_head(repo: "Repo", sha: str) -> bool:
     solutions whose commit no longer exists in the current branch
     history (revert / reset / force-push).
     """
-    import git
+    # Lazy import: models is low-level and ``mergai.utils`` eagerly imports
+    # modules that depend on models, so importing at module scope would cycle.
+    from .utils import git_utils
 
-    try:
-        repo.git.merge_base("--is-ancestor", sha, "HEAD")
-        return True
-    except git.GitCommandError:
-        return False
+    return git_utils.is_ancestor(repo, sha)
 
 
 def _commit_to_dict(commit: "Commit", config: CommitSerializationConfig) -> dict | str:

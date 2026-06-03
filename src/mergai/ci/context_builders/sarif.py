@@ -32,6 +32,7 @@ from typing import Any
 from ...config import WorkflowContextConfig
 from ._job_log import LOG_TAIL_BYTES as _LOG_TAIL_BYTES
 from ._job_log import fetch_failing_job_log
+from .artifacts import require_single_artifact_name
 from .base import WorkflowContext, WorkflowContextBuilder
 
 log = logging.getLogger(__name__)
@@ -59,7 +60,7 @@ class SARIFContextBuilder(WorkflowContextBuilder):
             )
         if head_sha is not None:
             return self._build_from_code_scanning(
-                workflow_name, run_id, pr_number, head_sha
+                config, workflow_name, run_id, pr_number, head_sha
             )
         raise FileNotFoundError(
             f"SARIF context for '{workflow_name}' needs either an "
@@ -85,15 +86,11 @@ class SARIFContextBuilder(WorkflowContextBuilder):
                 f"SARIF source '{config.source}' is not supported yet "
                 f"(only 'artifact')."
             )
-        if len(config.artifact_name) != 1:
-            raise ValueError(
-                f"Workflow '{workflow_name}' sarif context requires exactly one "
-                f"'context.artifact_name'; got {len(config.artifact_name)}"
-            )
-
-        sarif_path = self._try_find_sarif(
-            artifacts_dir, config.artifact_name[0], workflow_name
+        artifact_name = require_single_artifact_name(
+            config, workflow_name, context_label="sarif"
         )
+
+        sarif_path = self._try_find_sarif(artifacts_dir, artifact_name, workflow_name)
         if sarif_path is None:
             return self._build_log_fallback_context(
                 workflow_name=workflow_name,
@@ -114,6 +111,7 @@ class SARIFContextBuilder(WorkflowContextBuilder):
 
     def _build_from_code_scanning(
         self,
+        config: WorkflowContextConfig,
         workflow_name: str,
         run_id: str,
         pr_number: int,
@@ -124,7 +122,13 @@ class SARIFContextBuilder(WorkflowContextBuilder):
         Used when the watched workflow_run *passed* but the per-workflow
         config opts in via ``code_scanning_check: true`` — Code Scanning
         flagged findings even though the build itself was clean.
+
+        The Code Scanning tool/driver name to query is
+        ``config.code_scanning_tool_name`` when set, else the workflow name —
+        the same resolution the ``ci`` dispatch uses to decide actionability,
+        so the two never disagree.
         """
+        tool_name = config.code_scanning_tool_name or workflow_name
         if self.app.gh is None:
             raise FileNotFoundError(
                 f"Cannot fetch Code Scanning SARIF for '{workflow_name}': "
@@ -132,11 +136,11 @@ class SARIFContextBuilder(WorkflowContextBuilder):
             )
 
         analysis = self.find_code_scanning_analysis(
-            tool_name=workflow_name, head_sha=head_sha, pr_number=pr_number
+            tool_name=tool_name, head_sha=head_sha, pr_number=pr_number
         )
         if analysis is None:
             raise FileNotFoundError(
-                f"No Code Scanning analyses found for tool '{workflow_name}' "
+                f"No Code Scanning analyses found for tool '{tool_name}' "
                 f"on refs/pull/{pr_number}/merge."
             )
         sarif_data = self._download_sarif_for_analysis(analysis["id"])

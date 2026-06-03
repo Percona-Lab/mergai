@@ -8,6 +8,7 @@ Used by the ``format`` workflow: format.yml writes ``diff.patch``
 from pathlib import Path
 
 from ...config import WorkflowContextConfig
+from .artifacts import require_single_artifact_name
 from .base import WorkflowContext, WorkflowContextBuilder
 
 
@@ -27,13 +28,10 @@ class DiffContextBuilder(WorkflowContextBuilder):
             raise FileNotFoundError(
                 f"Workflow '{workflow_name}' needs artifacts_dir (diff context)"
             )
-        if len(config.artifact_name) != 1:
-            raise ValueError(
-                f"Workflow '{workflow_name}' diff context requires exactly one "
-                f"'context.artifact_name'; got {len(config.artifact_name)}"
-            )
-
-        artifact_path = Path(artifacts_dir) / config.artifact_name[0]
+        artifact_name = require_single_artifact_name(
+            config, workflow_name, context_label="diff"
+        )
+        artifact_path = Path(artifacts_dir) / artifact_name
         diff_file = artifact_path / "diff.patch"
         files_file = artifact_path / "files.txt"
 
