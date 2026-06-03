@@ -15,13 +15,13 @@ Three subtypes share one entry point:
 import click
 
 from ..app import AppContext
+from ..ci.dispatch import _resolve_target_runs, build_workflow_context_for_run
 from ..prompt_builder import (
     build_ci_fix_preamble,
     build_ci_fix_prompt,
     build_ci_fix_run_section,
 )
 from ..utils import util
-from .ci import _resolve_target_runs, build_workflow_context_for_run
 
 
 @click.group()
