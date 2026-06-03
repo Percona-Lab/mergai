@@ -60,6 +60,37 @@ class ForkConfig:
 
 
 @dataclass
+class ProjectConfig:
+    """Project identity and wording for AI prompts.
+
+    Substituted into the CI-fix prompts so the prompt text shipped in mergai
+    stays project-agnostic and each downstream fork supplies its own terms.
+
+    Attributes:
+        name: Full display name of the project/product (optional).
+        fork_term: Adjectival name of the fork (downstream) side. Rendered in
+            prompts as ``"{fork_term} fork"``, ``"the {fork_term} branch"``,
+            ``"{fork_term}-specific"``. The default reads naturally without
+            configuration; a fork sets it to its own name (e.g. ``"Percona"``).
+        upstream_term: Adjectival name of the upstream side (e.g.
+            ``"upstream"``, or a project name like ``"MongoDB"``).
+    """
+
+    name: str = ""
+    fork_term: str = "downstream"
+    upstream_term: str = "upstream"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ProjectConfig":
+        """Create a ProjectConfig from a dictionary."""
+        return cls(
+            name=data.get("name", cls.name),
+            fork_term=data.get("fork_term", cls.fork_term),
+            upstream_term=data.get("upstream_term", cls.upstream_term),
+        )
+
+
+@dataclass
 class ResolveConfig:
     """Configuration for the resolve command.
 
@@ -1064,6 +1095,7 @@ class MergaiConfig:
     All settings are optional and have sensible defaults.
 
     Attributes:
+        project: Project identity/wording substituted into AI prompts.
         fork: Configuration for the fork subcommand (includes merge_picks).
         resolve: Configuration for the resolve command.
         branch: Configuration for branch naming.
@@ -1078,6 +1110,7 @@ class MergaiConfig:
         _raw: Raw dictionary data for accessing arbitrary sections.
     """
 
+    project: ProjectConfig = field(default_factory=ProjectConfig)
     fork: ForkConfig = field(default_factory=ForkConfig)
     resolve: ResolveConfig = field(default_factory=ResolveConfig)
     branch: BranchConfig = field(default_factory=BranchConfig)
@@ -1128,6 +1161,12 @@ class MergaiConfig:
         Returns:
             MergaiConfig instance with values from data, using defaults for missing keys.
         """
+        # Parse project section if present
+        project_data = data.get("project", {})
+        project_config = (
+            ProjectConfig.from_dict(project_data) if project_data else ProjectConfig()
+        )
+
         # Parse fork section if present
         fork_data = data.get("fork", {})
         fork_config = ForkConfig.from_dict(fork_data) if fork_data else ForkConfig()
@@ -1197,6 +1236,7 @@ class MergaiConfig:
         )
 
         return cls(
+            project=project_config,
             fork=fork_config,
             resolve=resolve_config,
             branch=branch_config,

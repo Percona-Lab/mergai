@@ -43,13 +43,23 @@ class ResolveHandler(WorkflowHandler):
         """
         note = self.app.note if self.app.has_note else None
         prompt = build_ci_fix_prompt(
-            context, note=note, prompt_config=self.app.config.prompt
+            context,
+            note=note,
+            prompt_config=self.app.config.prompt,
+            project_config=self.app.config.project,
         )
         agent = self.app.get_agent(yolo=True)
+        # agent_retries is the per-invocation agent retry budget; falls back to
+        # max_attempts (the per-workflow fix cap) when unset.
+        agent_retries = (
+            self.config.agent_retries
+            if self.config.agent_retries is not None
+            else self.config.max_attempts
+        )
         executor = AgentExecutor(
             agent=agent,
             state_dir=self.app.state.path,
-            max_attempts=self.config.max_attempts,
+            max_attempts=agent_retries,
             repo=self.app.repo,
         )
 
