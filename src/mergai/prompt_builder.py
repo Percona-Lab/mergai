@@ -8,9 +8,24 @@ functions for prompts that don't depend on a merge note (e.g. CI fixes).
 import json
 
 from . import prompts
-from .config import PromptConfig
+from .config import ProjectConfig, PromptConfig
 from .models import MergaiNote
 from .utils import util
+
+
+def _project_prompt_context(project_config: ProjectConfig | None) -> dict:
+    """Build the render-context for the CI-fix prompt templates.
+
+    Falls back to :class:`ProjectConfig` defaults (neutral wording) when no
+    project config is supplied, so the templates always render — never leaving
+    raw ``{{ ... }}`` markers in the prompt.
+    """
+    pc = project_config if project_config is not None else ProjectConfig()
+    return {
+        "name": pc.name,
+        "fork_term": pc.fork_term,
+        "upstream_term": pc.upstream_term,
+    }
 
 
 def serialize_note_for_prompt(
@@ -279,6 +294,7 @@ class PromptBuilder:
 def build_ci_fix_preamble(
     note: MergaiNote | None = None,
     prompt_config: PromptConfig | None = None,
+    project_config: ProjectConfig | None = None,
 ) -> str:
     """Build the common prefix shared by all CI-fix prompts.
 
@@ -301,7 +317,8 @@ def build_ci_fix_preamble(
     (``mergai prompt ci all``) can emit it once and follow with one
     :func:`build_ci_fix_run_section` per run.
     """
-    system_prompt = prompts.load_system_prompt_ci_fix()
+    project_context = _project_prompt_context(project_config)
+    system_prompt = prompts.load_system_prompt_ci_fix(project_context)
     project_invariants = util.load_if_exists(".mergai/invariants.md")
 
     parts: list[str] = [system_prompt, "\n\n"]
@@ -313,8 +330,15 @@ def build_ci_fix_preamble(
             note, prompt_config, include_solutions=True
         )
         if merge_data:
-            parts.extend([prompts.load_merge_context_for_ci_fix_prompt(), "\n\n"])
-            parts.append("## Merge Context\n\n")
+            # merge_context_for_ci_fix.md already opens with a `## Merge Context`
+            # heading; the JSON block follows the explanation under it (no second
+            # heading).
+            parts.extend(
+                [
+                    prompts.load_merge_context_for_ci_fix_prompt(project_context),
+                    "\n\n",
+                ]
+            )
             parts.append("```json\n")
             parts.append(json.dumps(merge_data, indent=2))
             parts.append("\n```\n\n")
@@ -324,12 +348,12 @@ def build_ci_fix_preamble(
 
 
 def build_ci_fix_run_section(context, *, heading: str = "## CI Fix Context") -> str:
-    """Build the per-run section: heading + the WorkflowContext as JSON.
+    """Build the per-run section: optional heading + the WorkflowContext JSON.
 
-    The default heading matches the original single-run prompt shape
-    (so the agent sees the same text it always has). Multi-run callers
-    pass a per-run heading like ``"## Run 12345 — clang-tidy"`` to
-    disambiguate.
+    Multi-run callers pass a per-run heading like ``"## Run 12345 — clang-tidy"``
+    to disambiguate. The single-run prompt passes ``heading=""`` because
+    ``ci_fix_context.md`` already supplies the ``## CI Fix Context`` heading;
+    an empty heading emits just the JSON block (no duplicate header).
     """
     context_dict = {
         "workflow_name": context.workflow_name,
@@ -340,15 +364,15 @@ def build_ci_fix_run_section(context, *, heading: str = "## CI Fix Context") -> 
         "artifacts_dir": context.artifacts_dir,
         "details": context.details,
     }
-    return (
-        f"{heading}\n\n" + "```json\n" + json.dumps(context_dict, indent=2) + "\n```\n"
-    )
+    prefix = f"{heading}\n\n" if heading else ""
+    return prefix + "```json\n" + json.dumps(context_dict, indent=2) + "\n```\n"
 
 
 def build_ci_fix_prompt(
     context,
     note: MergaiNote | None = None,
     prompt_config: PromptConfig | None = None,
+    project_config: ProjectConfig | None = None,
 ) -> str:
     """Build the full single-run CI-fix prompt.
 
@@ -376,5 +400,5 @@ def build_ci_fix_prompt(
     a mergai working tree for debugging) can still render the prompt.
     """
     return build_ci_fix_preamble(
-        note=note, prompt_config=prompt_config
-    ) + build_ci_fix_run_section(context)
+        note=note, prompt_config=prompt_config, project_config=project_config
+    ) + build_ci_fix_run_section(context, heading="")

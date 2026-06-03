@@ -140,6 +140,7 @@ def prompt_ci(
     # preamble just skips the merge section in that case.
     note = app.note if app.has_note else None
     prompt_config = app.config.prompt
+    project_config = app.config.project
 
     # Single run renders as the agent would see it (full prompt). Multi
     # run shares the system prompt + invariants + merge context +
@@ -158,7 +159,12 @@ def prompt_ci(
                 return
             context, _config = built
             util.print_or_page(
-                build_ci_fix_prompt(context, note=note, prompt_config=prompt_config),
+                build_ci_fix_prompt(
+                    context,
+                    note=note,
+                    prompt_config=prompt_config,
+                    project_config=project_config,
+                ),
                 format="markdown",
             )
         return
@@ -181,7 +187,9 @@ def prompt_ci(
     if not sections:
         return
     util.print_or_page(
-        build_ci_fix_preamble(note=note, prompt_config=prompt_config)
+        build_ci_fix_preamble(
+            note=note, prompt_config=prompt_config, project_config=project_config
+        )
         + "\n".join(sections),
         format="markdown",
     )
