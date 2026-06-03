@@ -29,6 +29,20 @@ def short_sha(sha: str) -> str:
     return sha[:11]
 
 
+def is_ancestor(repo: Repo, sha: str, ref: str = "HEAD") -> bool:
+    """Return True if ``sha`` is an ancestor of (or equal to) ``ref``.
+
+    Wraps ``git merge-base --is-ancestor``: exit 0 → ancestor (True), exit 1
+    → not an ancestor (False). Any other ``GitCommandError`` (e.g. a SHA that
+    isn't present / can't be reached) is also treated as not reachable.
+    """
+    try:
+        repo.git.merge_base("--is-ancestor", sha, ref)
+        return True
+    except git.GitCommandError:
+        return False
+
+
 def is_merge_commit(commit: Commit) -> bool:
     return len(commit.parents) > 1
 

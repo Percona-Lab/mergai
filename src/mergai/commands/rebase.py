@@ -981,17 +981,12 @@ def _handle_rebase(
         return
 
     # Check if onto is an ancestor of current base (would be a backwards rebase)
-    try:
-        app.repo.git.merge_base("--is-ancestor", onto_sha, current_base_sha)
-        # If the above doesn't raise, onto is an ancestor of current base
+    if git_utils.is_ancestor(app.repo, onto_sha, current_base_sha):
         click.echo(
             f"Warning: {onto} ({git_utils.short_sha(onto_sha)}) is an ancestor of "
             f"current base ({git_utils.short_sha(current_base_sha)})."
         )
         click.echo("This would move the branch backwards. Proceeding anyway...")
-    except Exception:
-        # Not an ancestor - this is the normal case (moving forward)
-        pass
 
     # Collect commits info
     click.echo(

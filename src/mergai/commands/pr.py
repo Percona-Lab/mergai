@@ -1,3 +1,5 @@
+from collections.abc import Callable
+from dataclasses import dataclass
 from urllib.parse import quote, urlencode
 
 import click
@@ -6,8 +8,9 @@ from github import PullRequest as GithubPullRequest
 
 from ..app import AppContext
 from ..models import MarkdownConfig
-from ..utils import formatters, git_utils
+from ..utils import formatters, git_utils, util
 from ..utils.branch_name_builder import BranchNameBuilder, BranchType
+from .util import ensure_gh_repo
 
 
 def _parse_labels_option(labels_arg: str | None, config_labels: list[str]) -> list[str]:
@@ -127,7 +130,7 @@ def _create_pr(
 
     if dry_run:
         click.echo("--- body ---")
-        click.echo(body)
+        util.print_or_page(body, format="markdown")
         click.echo("--- end ---")
         return None
 
@@ -368,6 +371,43 @@ def _create_semantic_pr(
     )
 
 
+@dataclass(frozen=True)
+class _PRKind:
+    """Per-PR-kind dispatch table entry.
+
+    Maps a PR type to how it is created, how its body is built, and which
+    ``app.branches`` attributes give its expected head/base branches. Adding a
+    new PR kind is a single entry in ``_PR_KINDS`` rather than a new arm in
+    every ``if pr_type == ...`` chain.
+    """
+
+    create: Callable[..., None]
+    body_builder: Callable[[AppContext], str]
+    head_attr: str
+    base_attr: str
+
+
+_PR_KINDS: dict[str, _PRKind] = {
+    "main": _PRKind(
+        _create_main_pr, _build_main_pr_body, "main_branch", "target_branch"
+    ),
+    "solution": _PRKind(
+        _create_solution_pr,
+        _build_solutions_pr_body,
+        "solution_branch",
+        "conflict_branch",
+    ),
+    "semantic": _PRKind(
+        _create_semantic_pr, _build_semantic_pr_body, "semantic_branch", "main_branch"
+    ),
+}
+
+
+def _pr_kind(pr_type: str) -> _PRKind:
+    """Resolve a PR-type string to its dispatch entry (defaults to ``main``)."""
+    return _PR_KINDS.get(pr_type.lower(), _PR_KINDS["main"])
+
+
 @click.group()
 @click.pass_obj
 @click.option(
@@ -379,13 +419,7 @@ def _create_semantic_pr(
     help="The repository where the PR is located.",
 )
 def pr(app: AppContext, repo: str | None):
-    if repo is None:
-        raise click.ClickException(
-            "GitHub repository not set. Use --repo or set GH_REPO environment variable."
-        )
-
-    app.gh_repo_str = repo
-    pass
+    ensure_gh_repo(app, repo)
 
 
 @pr.command()
@@ -519,13 +553,8 @@ def create(
     if no_labels and labels_arg is not None:
         raise click.ClickException("Cannot use --no-labels and --labels together.")
 
-    # Get config labels based on PR type
-    if pr_type.lower() == "solution":
-        pr_type_config = app.config.pr.solution
-    elif pr_type.lower() == "semantic":
-        pr_type_config = app.config.pr.semantic
-    else:
-        pr_type_config = app.config.pr.main
+    # Get config labels based on PR type (config attrs are named per kind)
+    pr_type_config = getattr(app.config.pr, pr_type.lower(), app.config.pr.main)
 
     config_labels = list(pr_type_config.labels)
     if app.note.has_unresolved_conflicts:
@@ -542,16 +571,9 @@ def create(
         final_labels = _parse_labels_option(labels_arg, config_labels)
 
     def _dispatch(skip_list: bool) -> None:
-        if pr_type.lower() == "solution":
-            _create_solution_pr(
-                app, dry_run, url_only, skip_body, skip_list, final_labels
-            )
-        elif pr_type.lower() == "semantic":
-            _create_semantic_pr(
-                app, dry_run, url_only, skip_body, skip_list, final_labels
-            )
-        else:
-            _create_main_pr(app, dry_run, url_only, skip_body, skip_list, final_labels)
+        _pr_kind(pr_type).create(
+            app, dry_run, url_only, skip_body, skip_list, final_labels
+        )
 
     try:
         _dispatch(skip_commit_list)
@@ -567,25 +589,33 @@ def create(
         _dispatch(True)
 
 
+def _head_filter(app: AppContext, branch: str) -> str:
+    """Return the ``OWNER:branch`` head qualifier GitHub's pulls API expects.
+
+    ``GET /pulls?head=`` wants ``OWNER:ref``; a bare branch name can raise a
+    422 or silently fail to filter server-side. Callers still re-check
+    ``pr.head.ref`` locally as defense in depth.
+    """
+    owner = app.gh_repo.full_name.split("/")[0]
+    return f"{owner}:{branch}"
+
+
 def get_prs_for_current_branch(app: AppContext) -> list[GithubPullRequest.PullRequest]:
-    # TODO: the head should include the repo owner
-    pulls = app.gh_repo.get_pulls(
-        sort="created", head=git_utils.get_current_branch(app.repo)
-    )
-    return list(
-        filter(lambda pr: pr.head.ref == git_utils.get_current_branch(app.repo), pulls)
-    )
+    branch = git_utils.get_current_branch(app.repo)
+    pulls = app.gh_repo.get_pulls(sort="created", head=_head_filter(app, branch))
+    return list(filter(lambda pr: pr.head.ref == branch, pulls))
 
 
 def _resolve_open_pr_for_type(app: AppContext, pr_type: str):
     """Return the open PR whose head is the branch for ``pr_type``, or None.
 
     Resolves the branch name for the given type from the note/config and
-    returns the first matching open PR. Filters on ``head.ref`` because
-    GitHub's ``head=`` query wants an ``owner:ref`` form we don't construct.
+    returns the first matching open PR. Also re-checks ``head.ref`` locally.
     """
     branch = app.branches.get_branch_name(pr_type)
-    pulls = app.gh_repo.get_pulls(state="open", sort="created", head=branch)
+    pulls = app.gh_repo.get_pulls(
+        state="open", sort="created", head=_head_filter(app, branch)
+    )
     matches = [p for p in pulls if p.head.ref == branch]
     return matches[0] if matches else None
 
@@ -813,15 +843,9 @@ def _validate_pr_context(
     # If we have a pr_type and note, validate against expected branches
     if pr_type is not None:
         try:
-            if pr_type.lower() == "solution":
-                expected_head = app.branches.solution_branch
-                expected_base = app.branches.conflict_branch
-            elif pr_type.lower() == "semantic":
-                expected_head = app.branches.semantic_branch
-                expected_base = app.branches.main_branch
-            else:  # main
-                expected_head = app.branches.main_branch
-                expected_base = app.branches.target_branch
+            kind = _pr_kind(pr_type)
+            expected_head = getattr(app.branches, kind.head_attr)
+            expected_base = getattr(app.branches, kind.base_attr)
 
             if pr.head.ref != expected_head:
                 warnings.append(
@@ -853,7 +877,9 @@ def _find_pr_for_branch(
     Returns:
         PullRequest if found, None otherwise.
     """
-    pulls = app.gh_repo.get_pulls(state="open", head=head_branch, base=base_branch)
+    pulls = app.gh_repo.get_pulls(
+        state="open", head=_head_filter(app, head_branch), base=base_branch
+    )
     for pr in pulls:
         if pr.head.ref == head_branch and pr.base.ref == base_branch:
             return pr
@@ -936,18 +962,10 @@ def update(
         click.echo(f"Auto-detected PR type: {pr_type}")
 
     # Determine branches and body based on PR type
-    if pr_type.lower() == "solution":
-        head_branch = app.branches.solution_branch
-        base_branch = app.branches.conflict_branch
-        body = _build_solutions_pr_body(app)
-    elif pr_type.lower() == "semantic":
-        head_branch = app.branches.semantic_branch
-        base_branch = app.branches.main_branch
-        body = _build_semantic_pr_body(app)
-    else:  # main
-        head_branch = app.branches.main_branch
-        base_branch = app.branches.target_branch
-        body = _build_main_pr_body(app)
+    kind = _pr_kind(pr_type)
+    head_branch = getattr(app.branches, kind.head_attr)
+    base_branch = getattr(app.branches, kind.base_attr)
+    body = kind.body_builder(app)
 
     # If PR number is provided, fetch directly by number
     pr: GithubPullRequest.PullRequest | None = None
@@ -976,7 +994,7 @@ def update(
         if dry_run:
             click.echo(f"Would update PR from {head_branch} to {base_branch}")
             click.echo("--- new body ---")
-            click.echo(body)
+            util.print_or_page(body, format="markdown")
             click.echo("--- end ---")
             return
 
@@ -991,7 +1009,7 @@ def update(
     if dry_run:
         click.echo(f"Would update PR #{pr.number} from {head_branch} to {base_branch}")
         click.echo("--- new body ---")
-        click.echo(body)
+        util.print_or_page(body, format="markdown")
         click.echo("--- end ---")
         return
 

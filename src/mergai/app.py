@@ -779,13 +779,11 @@ class AppContext:
         """
         target_sha_full = self.repo.commit(target_sha).hexsha
 
-        try:
-            self.repo.git.merge_base("--is-ancestor", target_sha_full, "HEAD")
-        except git.GitCommandError as err:
+        if not git_utils.is_ancestor(self.repo, target_sha_full):
             raise click.ClickException(
                 f"Target commit {target_sha[:11]} is not an ancestor of HEAD. "
                 "Cannot determine commits to squash."
-            ) from err
+            )
 
         # Walk first-parent only so we collect commits added on top of
         # target_branch_sha and don't descend into the second parent of the
