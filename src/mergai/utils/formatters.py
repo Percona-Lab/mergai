@@ -5,7 +5,8 @@ to various output formats (text, markdown, JSON).
 """
 
 import json
-from collections.abc import Callable
+import textwrap
+from collections.abc import Callable, Iterable
 
 import git
 
@@ -23,6 +24,46 @@ from .templates import render_template
 # =============================================================================
 # Helper Functions
 # =============================================================================
+
+
+def _format_file_section(label: str, files: Iterable[str]) -> str:
+    """Render a tab-indented commit-message file section.
+
+    Produces ``"{label}:\n\t{file}\n...\n\n"`` for the given files, or an
+    empty string when ``files`` is empty (so callers can append it
+    unconditionally). Iteration order is preserved — callers that want a
+    sorted list sort before calling.
+    """
+    files = list(files)
+    if not files:
+        return ""
+    lines = [f"{label}:", *(f"\t{f}" for f in files)]
+    return "\n".join(lines) + "\n\n"
+
+
+def _render_solution_body(
+    summary: str,
+    resolved: Iterable[str],
+    unresolved: Iterable[str],
+    modified: Iterable[str],
+    *,
+    unresolved_label: str = "Unresolved",
+) -> str:
+    """Render the shared solution commit-message body.
+
+    A wrapped summary followed by the Resolved / Unresolved / Modified file
+    sections (each omitted when empty). The title and any trailer are the
+    caller's responsibility, as are side effects like staging unresolved
+    files — this only builds the string. ``unresolved_label`` lets the
+    conflict-resolution path use "Unresolved (contains conflict markers)".
+    """
+    body = ""
+    if summary:
+        body += textwrap.fill(summary, width=72) + "\n\n"
+    body += _format_file_section("Resolved", resolved)
+    body += _format_file_section(unresolved_label, unresolved)
+    body += _format_file_section("Modified", modified)
+    return body
 
 
 def _create_format_sha_func(
@@ -828,3 +869,25 @@ def commit_to_summary_str(commit: git.Commit) -> str:
     )
     output_str += "\n"
     return output_str
+
+
+def format_ascii_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> str:
+    """Render a plain-ASCII table with `|` columns and `-` rules.
+
+    No Unicode box-drawing characters — works in any terminal /
+    log-aggregator without font surprises. Columns are padded to the
+    widest cell; the last column is left as-is so long notes don't
+    force wide gutters on everything else.
+    """
+    cols = list(zip(headers, *rows, strict=False))
+    widths = [max(len(str(cell)) for cell in col) for col in cols]
+
+    def render_row(row: tuple[str, ...]) -> str:
+        return "  ".join(
+            str(cell).ljust(width) for cell, width in zip(row, widths, strict=False)
+        ).rstrip()
+
+    rule = "  ".join("-" * w for w in widths)
+    lines = [render_row(headers), rule]
+    lines.extend(render_row(row) for row in rows)
+    return "\n".join(lines)
