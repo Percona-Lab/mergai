@@ -13,6 +13,10 @@ def load_system_prompt_describe() -> str:
     return load_prompt("system_prompt_describe.md")
 
 
+def load_system_prompt_describe_verify() -> str:
+    return load_prompt("system_prompt_describe_verify.md")
+
+
 def load_pr_comments_prompt() -> str:
     return load_prompt("pr_comments.md")
 

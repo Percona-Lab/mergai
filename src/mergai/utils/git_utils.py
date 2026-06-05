@@ -1121,6 +1121,33 @@ def file_has_conflict_markers_in_workdir(file_path: str) -> bool:
         return False
 
 
+def get_merge_base(
+    repo: Repo,
+    target_branch: str,
+    merge_commit: str,
+) -> str | None:
+    """Return the merge-base SHA between target_branch and merge_commit.
+
+    The merge-base is the common ancestor where the fork diverged from
+    upstream. Diffing ``merge_base..merge_commit`` yields exactly the changes
+    the merge pulls in (upstream's contribution), whereas diffing the fork tip
+    against ``merge_commit`` directly would surface the fork's own
+    customizations as spurious changes.
+
+    Args:
+        repo: GitPython Repo object.
+        target_branch: The branch (or ref/SHA) being merged into.
+        merge_commit: The commit (or ref/SHA) being merged.
+
+    Returns:
+        Full 40-char merge-base SHA, or None if there is no common ancestor.
+    """
+    bases = repo.merge_base(repo.commit(target_branch), repo.commit(merge_commit))
+    if not bases:
+        return None
+    return bases[0].hexsha
+
+
 def get_merged_commits(
     repo: Repo,
     target_branch: str,
@@ -1155,6 +1182,40 @@ def get_merged_commits(
     commits = list(repo.iter_commits(f"{base.hexsha}..{merge.hexsha}"))
 
     return [commit.hexsha for commit in commits]
+
+
+def get_merge_diff_base(repo: Repo, merged_commit_shas: list[str]) -> str | None:
+    """Return the diff base for a set of merged commits.
+
+    The base is the boundary parent: the parent of the merged set that lies
+    *outside* the set (for the common linear import this is the parent of the
+    oldest merged commit). Diffing ``base..merge_commit`` then yields exactly
+    the changes the merge introduced.
+
+    This is derived from the captured ``merged_commits`` list rather than from
+    ``merge_base(target_branch, merge_commit)``, because by the time a merge is
+    described the target branch has usually advanced to *include* the merge
+    commit. In that case ``merge_base`` collapses to the merge commit itself and
+    the diff is empty, even though the merge really did pull in changes.
+
+    Args:
+        repo: GitPython Repo object.
+        merged_commit_shas: Commit SHAs being merged, newest-first (as returned
+            by :func:`get_merged_commits`).
+
+    Returns:
+        Full 40-char base SHA, or None if no boundary parent exists (e.g. the
+        merged set reaches a root commit).
+    """
+    if not merged_commit_shas:
+        return None
+    in_set = set(merged_commit_shas)
+    # Walk oldest-first so the boundary parent of a linear chain is found first.
+    for sha in reversed(merged_commit_shas):
+        for parent in repo.commit(sha).parents:
+            if parent.hexsha not in in_set:
+                return parent.hexsha
+    return None
 
 
 def _normalize_branch_name(branch: str, remote_prefixes: set[str]) -> str:

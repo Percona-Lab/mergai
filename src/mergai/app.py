@@ -25,6 +25,12 @@ from .utils.state_store import StateStore
 log = logging.getLogger(__name__)
 
 
+# Number of generate -> verify -> regenerate cycles for `describe`. Kept small
+# and separate from `max_attempts` (the per-run retry budget) so the two don't
+# multiply into an expensive worst case.
+DEFAULT_DESCRIBE_VERIFY_ROUNDS = 2
+
+
 class AppContext:
     def __init__(self, config: MergaiConfig | None = None):
         self.config: MergaiConfig = config if config is not None else MergaiConfig()
@@ -274,6 +280,9 @@ class AppContext:
         force: bool,
         max_attempts: int | None = None,
         agent_desc: str | None = None,
+        yolo: bool = False,
+        verify: bool = True,
+        verify_rounds: int = DEFAULT_DESCRIBE_VERIFY_ROUNDS,
     ):
         """Generate a description of the merge using an AI agent.
 
@@ -281,11 +290,27 @@ class AppContext:
         a description without modifying any files. The description is stored
         in the note as 'merge_description'.
 
+        The agent is expected to inspect the real diff (via git) rather than
+        infer changes from commit summaries — which requires ``yolo=True`` so it
+        can run git commands. Accuracy is enforced in two ways:
+        - a programmatic guard rejecting descriptions of files outside the
+          merge's changeset, and
+        - when ``verify`` is set, a second agent pass that fact-checks each
+          claim against the diff and triggers a regeneration (with feedback)
+          when it finds unsupported claims.
+
         Args:
             force: If True, overwrite existing merge_description.
-            max_attempts: Maximum number of retry attempts on validation failure.
+            max_attempts: Per-run retry budget passed to each AgentExecutor
+                (describe and verifier) for validation failures.
             agent_desc: Agent descriptor (e.g., "gemini-cli", "opencode:model").
                        If None, uses the value from config.resolve.agent.
+            yolo: Enable YOLO mode so the agent can run git to inspect the diff.
+            verify: Run the fact-checking verifier pass and regenerate on
+                unsupported claims.
+            verify_rounds: Maximum number of generate -> verify -> regenerate
+                cycles (only meaningful when ``verify`` is True). Kept separate
+                from ``max_attempts`` so the two don't multiply.
 
         Raises:
             Exception: If no note found, merge_description exists (without force),
@@ -293,6 +318,23 @@ class AppContext:
         """
         if max_attempts is None:
             max_attempts = self.config.resolve.max_attempts
+        # Guard against a misconfigured/non-positive value: the generate loop
+        # below must run at least once, otherwise `description` stays None.
+        if max_attempts < 1:
+            max_attempts = 1
+
+        # Verification needs the agent to read the real diff via git, which only
+        # works in yolo mode. Without it the verifier can't fact-check, so skip
+        # it rather than burn an extra agent run that can't add confidence.
+        if verify and not yolo:
+            click.echo(
+                "Skipping description verification: it requires --yolo so the "
+                "agent can run git to read the diff."
+            )
+            verify = False
+
+        # At least one generate round must run regardless of configuration.
+        total_rounds = max(1, verify_rounds) if verify else 1
 
         if self.note.has_merge_description and not force:
             raise Exception(
@@ -302,15 +344,32 @@ class AppContext:
         if self.note.has_merge_description:
             self.note.drop_merge_description()
 
-        prompt = self.prompt_builder.build_describe_prompt()
-
-        # No yolo mode for describe - agents are granted specific write permissions
-        # for the response file only via allowed_write_paths in agent_executor.
-        # The validator ensures no repo files are modified.
-        agent = self.get_agent(agent_desc=agent_desc, yolo=False)
+        # The agent gets only response-file write permission via
+        # allowed_write_paths; the validator ensures no repo files are modified
+        # even in yolo mode (yolo is needed so the agent can run git to read the
+        # real diff instead of guessing from commit summaries).
+        agent = self.get_agent(agent_desc=agent_desc, yolo=yolo)
 
         # Check repo state before running agent
         was_dirty_before = self.repo.is_dirty(untracked_files=True)
+
+        # Files the agent is allowed to describe (the merge's auto-merged files).
+        allowed_files = self._describe_allowed_files()
+
+        # The diff base: changes the merge pulls in are merge_base..merge_commit,
+        # NOT target..merge_commit (which would surface the fork's own
+        # customizations as spurious merge changes).
+        merge_base_sha = self.resolve_merge_diff_base()
+        # Without a base there is no meaningful "incoming changes" diff to ground
+        # the description in. Refuse rather than let the agent diff against
+        # nothing and fabricate changes.
+        if merge_base_sha is None:
+            raise Exception(
+                "Could not resolve a diff base for "
+                f"{self.note.merge_info.merge_commit_sha} "
+                "(unrelated histories or no boundary parent); "
+                "cannot ground a merge description in the incoming diff."
+            )
 
         executor = AgentExecutor(
             agent=agent,
@@ -318,17 +377,157 @@ class AppContext:
             max_attempts=max_attempts,
             repo=self.repo,
         )
+        validator = executor.create_describe_validator(was_dirty_before, allowed_files)
 
-        try:
-            description = executor.run_with_retry(
-                prompt=prompt,
-                validator=executor.create_describe_validator(was_dirty_before),
+        feedback: list[dict] | None = None
+        description: dict | None = None
+
+        for round_index in range(total_rounds):
+            prompt = self.prompt_builder.build_describe_prompt(
+                verification_feedback=feedback,
+                merge_base_sha=merge_base_sha,
             )
-        except AgentExecutionError as e:
-            raise Exception(str(e)) from e
+            try:
+                description = executor.run_with_retry(
+                    prompt=prompt,
+                    validator=validator,
+                )
+            except AgentExecutionError as e:
+                raise Exception(str(e)) from e
 
+            if not verify:
+                break
+
+            issues = self._verify_description(
+                description,
+                agent_desc=agent_desc,
+                yolo=yolo,
+                was_dirty_before=was_dirty_before,
+                max_attempts=max_attempts,
+                merge_base_sha=merge_base_sha,
+            )
+            if not issues:
+                break
+
+            if round_index == total_rounds - 1:
+                click.echo(
+                    f"Verifier still found {len(issues)} unsupported claim(s) "
+                    "after the final round; storing the latest description."
+                )
+                break
+
+            click.echo(
+                f"Verifier found {len(issues)} unsupported claim(s); "
+                "regenerating description with feedback..."
+            )
+            feedback = issues
+
+        assert description is not None
         self.note.set_merge_description(description)
         self.save_note(self.note)
+
+    def resolve_merge_diff_base(self) -> str | None:
+        """Resolve the diff base for grounding the merge description.
+
+        Prefers the boundary parent derived from the captured ``merged_commits``
+        list, which is stable even after the target branch advances to include
+        the merge. Falls back to ``merge_base(target_branch, merge_commit)`` when
+        no merge context (and therefore no commit list) is recorded.
+        """
+        if (
+            self.note.has_merge_context
+            and self.note.merge_context is not None
+            and self.note.merge_context.merged_commits_shas
+        ):
+            return git_utils.get_merge_diff_base(
+                self.repo, self.note.merge_context.merged_commits_shas
+            )
+        return git_utils.get_merge_base(
+            self.repo,
+            self.note.merge_info.target_branch_sha,
+            self.note.merge_info.merge_commit_sha,
+        )
+
+    def _describe_allowed_files(self) -> set[str] | None:
+        """Set of files the describe agent may describe (auto-merged files).
+
+        Returns the merge's auto-merged file list as a set. An empty set (when
+        the merge has zero auto-merged files) still enforces the guard — the
+        agent may then describe no files. Returns None only when there is no
+        ground truth to check against (no merge context, or no auto-merged file
+        list recorded), which skips the programmatic changeset guard.
+        """
+        if not self.note.has_merge_context or self.note.merge_context is None:
+            return None
+        auto_merged = self.note.merge_context.auto_merged
+        if not auto_merged:
+            return None
+        files = auto_merged.get("files")
+        if files is None:
+            return None
+        return set(files)
+
+    def _verify_description(
+        self,
+        description: dict,
+        agent_desc: str | None,
+        yolo: bool,
+        was_dirty_before: bool,
+        max_attempts: int,
+        merge_base_sha: str,
+    ) -> list[dict]:
+        """Fact-check a draft description against the real diff via an agent.
+
+        Runs a fresh agent (independent of the drafting session) that inspects
+        the diff and returns any claims it cannot support.
+
+        Args:
+            description: The describe result dict (with a "response" draft).
+            agent_desc: Agent descriptor; None uses config.resolve.agent.
+            yolo: Enable YOLO mode so the verifier can run git.
+            was_dirty_before: Repo dirty state before the describe run.
+            max_attempts: Max retry attempts for the verifier agent itself.
+            merge_base_sha: Merge-base SHA the verifier must diff against.
+
+        Returns:
+            A list of issue dicts (location/claim/reason). Empty when the
+            description is accurate or the verifier could not run.
+        """
+        draft = description.get("response", description)
+
+        verify_agent = self.get_agent(agent_desc=agent_desc, yolo=yolo)
+        verify_executor = AgentExecutor(
+            agent=verify_agent,
+            state_dir=self.state.path,
+            max_attempts=max_attempts,
+            repo=self.repo,
+        )
+        prompt = self.prompt_builder.build_describe_verify_prompt(
+            draft, merge_base_sha=merge_base_sha
+        )
+
+        def verify_validator(result: dict) -> str | None:
+            format_error = verify_executor.validate_describe_verify_response(
+                result["response"]
+            )
+            if format_error:
+                return format_error
+            return verify_executor.validate_no_file_modifications(was_dirty_before)
+
+        try:
+            verdict = verify_executor.run_with_retry(
+                prompt=prompt,
+                validator=verify_validator,
+            )
+        except AgentExecutionError as e:
+            click.echo(f"Verifier failed to run ({e}); keeping the description as-is.")
+            return []
+
+        response = verdict.get("response", {})
+        if response.get("accurate") is True:
+            return []
+        issues = response.get("issues") or []
+        return issues if isinstance(issues, list) else []
 
     def add_note(self, commit: str):
         self.repo.git.notes(

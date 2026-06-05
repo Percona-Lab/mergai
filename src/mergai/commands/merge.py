@@ -23,7 +23,10 @@ EXIT_ERROR = 2
 
 
 def _maybe_run_describe(
-    app: AppContext, merge_outcome: str, agent_desc: str | None = None
+    app: AppContext,
+    merge_outcome: str,
+    agent_desc: str | None = None,
+    yolo: bool = False,
 ) -> None:
     """Run describe command if configured for the given merge outcome.
 
@@ -32,6 +35,9 @@ def _maybe_run_describe(
         merge_outcome: Either "success" or "conflict".
         agent_desc: Agent descriptor (e.g., "gemini-cli", "opencode:model").
                    If None, uses the value from config.resolve.agent.
+        yolo: Enable YOLO mode so the describe agent can run git to inspect the
+            real diff. Without it, the agent cannot read the diff and will leave
+            uncertain file descriptions empty.
 
     Note:
         This function catches all exceptions and prints warnings instead of
@@ -51,6 +57,7 @@ def _maybe_run_describe(
             force=False,
             max_attempts=app.config.resolve.max_attempts,
             agent_desc=agent_desc,
+            yolo=yolo,
         )
         click.echo("Created merge_description.")
     except Exception as e:
@@ -206,6 +213,7 @@ def _handle_merge_success(
     no_context: bool,
     force: bool,
     agent_desc: str | None = None,
+    yolo: bool = False,
 ) -> None:
     """Handle successful merge (no conflicts).
 
@@ -218,6 +226,7 @@ def _handle_merge_success(
         no_context: If True, skip context creation.
         force: If True, overwrite existing contexts.
         agent_desc: Agent descriptor for describe command.
+        yolo: Enable YOLO mode for the describe agent (lets it inspect the diff).
 
     Raises:
         SystemExit: Always raises with EXIT_SUCCESS.
@@ -236,7 +245,9 @@ def _handle_merge_success(
 
     if not no_context:
         _create_and_save_merge_context(app, parsed, force)
-        _maybe_run_describe(app, MERGE_DESCRIBE_SUCCESS, agent_desc=agent_desc)
+        _maybe_run_describe(
+            app, MERGE_DESCRIBE_SUCCESS, agent_desc=agent_desc, yolo=yolo
+        )
 
     raise SystemExit(EXIT_SUCCESS)
 
@@ -247,6 +258,7 @@ def _handle_merge_conflict(
     no_context: bool,
     force: bool,
     agent_desc: str | None = None,
+    yolo: bool = False,
 ) -> None:
     """Handle merge with conflicts.
 
@@ -259,6 +271,7 @@ def _handle_merge_conflict(
         no_context: If True, skip context creation.
         force: If True, overwrite existing contexts.
         agent_desc: Agent descriptor for describe command.
+        yolo: Enable YOLO mode for the describe agent (lets it inspect the diff).
 
     Raises:
         SystemExit: Always raises with EXIT_CONFLICT.
@@ -287,7 +300,9 @@ def _handle_merge_conflict(
         # Create conflict context
         _create_and_save_conflict_context(app, force)
 
-        _maybe_run_describe(app, MERGE_DESCRIBE_CONFLICT, agent_desc=agent_desc)
+        _maybe_run_describe(
+            app, MERGE_DESCRIBE_CONFLICT, agent_desc=agent_desc, yolo=yolo
+        )
 
     raise SystemExit(EXIT_CONFLICT) from error
 
@@ -310,6 +325,17 @@ def _handle_merge_conflict(
     help="Overwrite existing merge_context and conflict_context.",
 )
 @click.option(
+    "-y/--yolo",
+    "yolo",
+    is_flag=True,
+    default=False,
+    help=(
+        "Enable YOLO mode for the auto-run describe agent so it can inspect the "
+        "real diff (run git). Without it, uncertain file descriptions are left "
+        "empty."
+    ),
+)
+@click.option(
     "--agent",
     "-a",
     "agent",
@@ -317,7 +343,9 @@ def _handle_merge_conflict(
     default=None,
     help="Override the agent:model to use for describe (e.g., 'gemini-cli:gemini-2.5-pro').",
 )
-def merge(app: AppContext, no_context: bool, force: bool, agent: str | None):
+def merge(
+    app: AppContext, no_context: bool, force: bool, yolo: bool, agent: str | None
+):
     """Perform a git merge using the commit from merge_info.
 
     Executes 'git merge --no-commit --no-ff <sha>' where <sha> is
@@ -359,13 +387,17 @@ def merge(app: AppContext, no_context: bool, force: bool, agent: str | None):
 
     try:
         output = app.repo.git.merge("--no-commit", "--no-ff", merge_commit_sha)
-        _handle_merge_success(app, output, no_context, force, agent_desc=agent)
+        _handle_merge_success(
+            app, output, no_context, force, agent_desc=agent, yolo=yolo
+        )
 
     except GitCommandError as e:
         # GitCommandError is raised when merge has conflicts
         # Git returns exit code 1 for conflicts
         if e.status == 1:
-            _handle_merge_conflict(app, e, no_context, force, agent_desc=agent)
+            _handle_merge_conflict(
+                app, e, no_context, force, agent_desc=agent, yolo=yolo
+            )
         else:
             # Other git errors (e.g., invalid ref, not a git repo)
             click.echo(f"Error: Git merge failed with status {e.status}")

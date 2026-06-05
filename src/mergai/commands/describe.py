@@ -13,6 +13,27 @@ from ..app import AppContext
     help="Overwrite existing merge description.",
 )
 @click.option(
+    "-y/--yolo",
+    "yolo",
+    is_flag=True,
+    default=False,
+    help=(
+        "Enable YOLO mode. Required for the agent to inspect the real diff "
+        "(run git) while describing; the no-file-modification check still guards "
+        "against repo changes."
+    ),
+)
+@click.option(
+    "--verify/--no-verify",
+    "verify",
+    default=True,
+    help=(
+        "Run a second agent pass that fact-checks the description against the "
+        "actual diff and regenerates it when unsupported claims are found "
+        "(enabled by default)."
+    ),
+)
+@click.option(
     "--agent",
     "-a",
     "agent",
@@ -23,6 +44,8 @@ from ..app import AppContext
 def describe(
     app: AppContext,
     force: bool,
+    yolo: bool,
+    verify: bool,
     agent: str | None,
 ):
     """Generate a description of the merge based on the note context.
@@ -38,7 +61,11 @@ def describe(
     click.echo("")
     try:
         app.describe(
-            force, max_attempts=app.config.resolve.max_attempts, agent_desc=agent
+            force,
+            max_attempts=app.config.resolve.max_attempts,
+            agent_desc=agent,
+            yolo=yolo,
+            verify=verify,
         )
     except Exception as e:
         click.echo(f"Error: {e}")
