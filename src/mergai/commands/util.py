@@ -1,4 +1,5 @@
 import json
+import sys
 
 import click
 import git
@@ -220,7 +221,7 @@ def show(
                 raise Exception("No solutions found in the note.")
             elif solution_index < 0 or solution_index >= len(solutions):
                 raise Exception(
-                    f"Solution index {solution_index} out of range. Available: 0-{len(solutions)-1}"
+                    f"Solution index {solution_index} out of range. Available: 0-{len(solutions) - 1}"
                 )
             else:
                 output_str += formatters.conflict_solution_to_str(
@@ -248,7 +249,7 @@ def show(
 
     except Exception as e:
         click.echo(f"Error: {e}")
-        exit(1)
+        sys.exit(1)
 
 
 def convert_note_to_text_summary(note: dict) -> str:
@@ -500,7 +501,7 @@ def status(app: AppContext, format: str):
     """
     if not app.has_note:
         click.echo("No note found in the state store.")
-        exit(0)
+        sys.exit(0)
     note_dict = app.note.to_dict()
     util.print_or_page(
         convert_note(note_dict, format=format, repo=app.repo, pretty=True),
@@ -546,12 +547,12 @@ def prompt(app: AppContext):
             click.echo(
                 "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
             )
-            exit(1)
+            sys.exit(1)
         prompt_text = app.prompt_builder.build_resolve_prompt()
         util.print_or_page(prompt_text, format="markdown")
     except Exception as e:
         click.echo(f"Error: {e}")
-        exit(1)
+        sys.exit(1)
 
 
 @click.command()
@@ -564,12 +565,25 @@ def merge_prompt(app: AppContext):
             click.echo(
                 "Use `mergai pr-add-comments-to-context` to add PR comments to the context."
             )
-            exit(1)
-        prompt_text = app.prompt_builder.build_describe_prompt()
+            sys.exit(1)
+        # The describe prompt is grounded in the merge-base..merge-commit diff,
+        # so resolve the diff base first (same as AppContext.describe()).
+        merge_base_sha = app.resolve_merge_diff_base()
+        if merge_base_sha is None:
+            click.echo(
+                "Could not resolve a diff base for "
+                f"{app.note.merge_info.merge_commit_sha} "
+                "(unrelated histories or no boundary parent); "
+                "cannot build a merge description prompt."
+            )
+            sys.exit(1)
+        prompt_text = app.prompt_builder.build_describe_prompt(
+            merge_base_sha=merge_base_sha
+        )
         util.print_or_page(prompt_text, format="markdown")
     except Exception as e:
         click.echo(f"Error: {e}")
-        exit(1)
+        sys.exit(1)
 
 
 COMMENT_FILE_TEMPLATE = """\
@@ -647,7 +661,7 @@ def comment(app: AppContext, file: str, force: bool, body: str):
 
     if not stripped:
         click.echo("Empty comment, cancelling.")
-        exit(0)
+        sys.exit(0)
 
     comment_dict = {
         "user": app.repo.git.config("user.name"),

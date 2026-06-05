@@ -334,6 +334,91 @@ class AgentExecutor:
 
         return None
 
+    def validate_describe_files_in_changeset(
+        self, response: dict, allowed_files: set[str] | None
+    ) -> str | None:
+        """Validate that every described file is actually part of the merge.
+
+        Guards against the agent describing a file that is not in the changeset
+        (a fabricated or misattributed path). ``allowed_files`` is the set of
+        files the agent is permitted to describe (typically the merge's
+        auto-merged files); ``None`` skips the check (no ground truth available).
+
+        Args:
+            response: The describe response dict (expects an ``auto_merged`` map).
+            allowed_files: Set of file paths legitimately in the changeset, or
+                None to skip the check.
+
+        Returns:
+            None if all described files are in the changeset, or an error message
+            naming the offending files otherwise.
+        """
+        if allowed_files is None:
+            return None
+
+        auto_merged = response.get("auto_merged")
+        if not isinstance(auto_merged, dict):
+            return None
+
+        unknown = [path for path in auto_merged if path not in allowed_files]
+        if unknown:
+            return (
+                "Described files are not part of this merge's changeset: "
+                f"{', '.join(sorted(unknown))}. Only describe files listed in "
+                "merge_context.auto_merged.files, and read each file's diff "
+                "before describing it."
+            )
+        return None
+
+    def validate_describe_verify_response(self, response: dict) -> str | None:
+        """Validate the format of a describe-verifier verdict.
+
+        Enforces a self-consistent verdict so a malformed or contradictory
+        response can't be silently treated as "accurate":
+
+        - ``accurate`` must be a boolean;
+        - ``issues`` must be a list of objects, each with **present**,
+          non-empty string ``location`` / ``claim`` / ``reason`` fields;
+        - ``accurate: false`` requires at least one issue (otherwise the
+          verdict says "inaccurate" but gives nothing to act on, and the
+          description would be accepted unchanged);
+        - ``accurate: true`` requires an empty issue list (otherwise the
+          issues would be silently ignored, defeating the fact-check).
+
+        Args:
+            response: The verdict dict from the verifier agent.
+
+        Returns:
+            None if valid, or an error message string if invalid.
+        """
+        accurate = response.get("accurate")
+        if not isinstance(accurate, bool):
+            return "'accurate' field must be a boolean"
+
+        issues = response.get("issues", [])
+        if not isinstance(issues, list):
+            return "'issues' field must be a list"
+
+        for index, issue in enumerate(issues):
+            if not isinstance(issue, dict):
+                return f"issues[{index}] must be an object"
+            for key in ("location", "claim", "reason"):
+                value = issue.get(key)
+                if not isinstance(value, str) or not value.strip():
+                    return f"issues[{index}].{key} must be a non-empty string"
+
+        if not accurate and not issues:
+            return (
+                "'accurate' is false but 'issues' is empty; list each "
+                "unsupported claim, or set 'accurate' to true."
+            )
+        if accurate and issues:
+            return (
+                "'accurate' is true but 'issues' is non-empty; either drop the "
+                "issues or set 'accurate' to false."
+            )
+        return None
+
     def validate_no_file_modifications(self, was_dirty_before: bool) -> str | None:
         """Validate that no new files were modified during execution.
 
@@ -386,14 +471,18 @@ class AgentExecutor:
         return None
 
     def create_describe_validator(
-        self, was_dirty_before: bool
+        self, was_dirty_before: bool, allowed_files: set[str] | None = None
     ) -> Callable[[dict], str | None]:
         """Create a composite validator for describe operations.
 
-        Combines response format validation and file modification validation.
+        Combines response format validation, a programmatic changeset check
+        (described files must be part of the merge), and file modification
+        validation.
 
         Args:
             was_dirty_before: Whether the repo was dirty before execution.
+            allowed_files: Set of file paths the agent is allowed to describe
+                (the merge's auto-merged files). None skips the changeset check.
 
         Returns:
             A validator function suitable for use with run_with_retry.
@@ -404,6 +493,13 @@ class AgentExecutor:
             format_error = self.validate_describe_response(result["response"])
             if format_error:
                 return format_error
+
+            # Reject descriptions referencing files outside the changeset
+            changeset_error = self.validate_describe_files_in_changeset(
+                result["response"], allowed_files
+            )
+            if changeset_error:
+                return changeset_error
 
             # Validate no file modifications
             return self.validate_no_file_modifications(was_dirty_before)
