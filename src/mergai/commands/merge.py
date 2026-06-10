@@ -276,8 +276,13 @@ def _handle_merge_conflict(
     Raises:
         SystemExit: Always raises with EXIT_CONFLICT.
     """
-    # Parse output from stderr (where git writes merge info)
-    output = error.stderr if error.stderr else (error.stdout if error.stdout else "")
+    # GitPython wraps the captured streams as "\n  stdout: '<content>'"; undecorate
+    # them so the leading wrapper doesn't swallow the first "Auto-merging" line.
+    stdout = git_utils.undecorate_git_stream(error.stdout)
+    stderr = git_utils.undecorate_git_stream(error.stderr)
+    # git writes Auto-merging/CONFLICT info to stdout, but keep stderr too so
+    # warnings/errors aren't lost from the printed or parsed output.
+    output = "\n".join(part for part in (stdout, stderr) if part)
 
     # Print git merge output first
     if output:
