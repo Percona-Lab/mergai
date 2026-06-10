@@ -604,6 +604,39 @@ class GitMergeOutput:
     raw_output: str
 
 
+def undecorate_git_stream(text: str | None) -> str:
+    """Recover the raw git stream from a GitCommandError's decorated attribute.
+
+    When a git command exits non-zero, GitPython raises ``GitCommandError`` and
+    stores the captured streams wrapped for display as::
+
+        self.stdout = "\\n  stdout: '<content>'"
+        self.stderr = "\\n  stderr: '<content>'"
+
+    That wrapper glues ``  stdout: '`` onto the first line of the real output,
+    which breaks line-anchored parsing (e.g. ``^Auto-merging`` matches every
+    line except the first). Strip the wrapper so the content can be parsed
+    line-by-line. Input without the wrapper (or empty) is returned unchanged.
+
+    Args:
+        text: A ``GitCommandError.stdout`` / ``.stderr`` value, or any string.
+
+    Returns:
+        The unwrapped content, or the input unchanged if no wrapper is present.
+    """
+    if not text:
+        return text or ""
+    body = text.lstrip("\n ")
+    for label in ("stdout", "stderr"):
+        prefix = f"{label}: '"
+        if body.startswith(prefix):
+            content = body[len(prefix) :]
+            if content.endswith("'"):
+                content = content[:-1]
+            return content
+    return text
+
+
 def parse_git_merge_output(output: str, repo: Repo | None = None) -> GitMergeOutput:
     """Parse the output of a git merge command.
 
@@ -645,9 +678,16 @@ def parse_git_merge_output(output: str, repo: Repo | None = None) -> GitMergeOut
     strategy = None
     success = True
 
-    for line in output.splitlines():
-        # Check for auto-merged files
-        match = re.match(r"^Auto-merging (.+)$", line)
+    # Tolerate a GitCommandError-decorated string ("\n  stdout: '<content>'").
+    # The caller normally undecorates first, but do it here too so the
+    # line-anchored matches below never lose the first line. Parse the
+    # normalized form while preserving the original in raw_output.
+    normalized_output = undecorate_git_stream(output)
+
+    for line in normalized_output.splitlines():
+        # Check for auto-merged files. Allow a leading "'" so a residual
+        # GitPython wrapper on the first line can't swallow it.
+        match = re.match(r"^'?Auto-merging (.+)$", line)
         if match:
             auto_merged_files.append(match.group(1))
             continue
@@ -663,7 +703,7 @@ def parse_git_merge_output(output: str, repo: Repo | None = None) -> GitMergeOut
         # Example: "CONFLICT (content): Merge conflict in file1.txt"
         # Example: "CONFLICT (modify/delete): file.txt deleted in HEAD..."
         match = re.match(
-            r"^CONFLICT \(([^)]+)\):\s*(?:Merge conflict in\s+)?(.+?)(?:\s+deleted.*)?$",
+            r"^'?CONFLICT \(([^)]+)\):\s*(?:Merge conflict in\s+)?(.+?)(?:\s+deleted.*)?$",
             line,
         )
         if match:
