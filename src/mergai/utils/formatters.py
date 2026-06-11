@@ -139,22 +139,6 @@ def is_human_solution(solution: dict) -> bool:
     return "author" in solution and solution.get("author", {}).get("type") == "human"
 
 
-def get_comments_stats(comments: dict) -> dict:
-    """Get statistics about PR comments grouped by user.
-
-    Args:
-        comments: Dict of comment_id -> comment data.
-
-    Returns:
-        Dict mapping user names to comment counts.
-    """
-    stats: dict[str, int] = {}
-    for comment in comments.values():
-        stats.setdefault(comment["user"], 0)
-        stats[comment["user"]] += 1
-    return stats
-
-
 def get_solution_stats(solution: dict) -> dict:
     """Get statistics about a solution's resolved/unresolved/modified files.
 
@@ -485,76 +469,6 @@ def solutions_to_markdown(solutions: list) -> str:
 
 
 # =============================================================================
-# PR Comments Formatters
-# =============================================================================
-
-
-def pr_comments_to_text(comments: dict) -> str:
-    """Convert PR comments to text format."""
-    return render_template("text", "pr_comments", comments=comments)
-
-
-def pr_comments_to_markdown(comments: dict) -> str:
-    """Convert PR comments to markdown format."""
-    return render_template("markdown", "pr_comments", comments=comments)
-
-
-def pr_comments_to_str(comments: dict, format: str, pretty: bool = False) -> str:
-    """Convert PR comments to string in specified format.
-
-    Args:
-        comments: Dict of comment_id -> comment data.
-        format: Output format ('json', 'markdown', or 'text').
-        pretty: If True, format JSON with indentation.
-
-    Returns:
-        Formatted string representation.
-    """
-    if format == OutputFormat.JSON.value or format == "json":
-        return json.dumps(comments, default=str, indent=2 if pretty else None) + "\n"
-    elif format == OutputFormat.MARKDOWN.value or format == "markdown":
-        return pr_comments_to_markdown(comments) + "\n"
-    else:
-        return pr_comments_to_text(comments) + "\n"
-
-
-# =============================================================================
-# User Comment Formatters
-# =============================================================================
-
-
-def user_comment_to_text(user_comment: dict) -> str:
-    """Convert user comment to text format."""
-    return render_template("text", "user_comment", user_comment=user_comment)
-
-
-def user_comment_to_markdown(user_comment: dict) -> str:
-    """Convert user comment to markdown format."""
-    return render_template("markdown", "user_comment", user_comment=user_comment)
-
-
-def user_comment_to_str(user_comment: dict, format: str, pretty: bool = False) -> str:
-    """Convert user comment to string in specified format.
-
-    Args:
-        user_comment: User comment dict with date, user, email, body.
-        format: Output format ('json', 'markdown', or 'text').
-        pretty: If True, format JSON with indentation.
-
-    Returns:
-        Formatted string representation.
-    """
-    if format == OutputFormat.JSON.value or format == "json":
-        return (
-            json.dumps(user_comment, default=str, indent=2 if pretty else None) + "\n"
-        )
-    elif format == OutputFormat.MARKDOWN.value or format == "markdown":
-        return user_comment_to_markdown(user_comment) + "\n"
-    else:
-        return user_comment_to_text(user_comment) + "\n"
-
-
-# =============================================================================
 # Merge Description Formatters
 # =============================================================================
 
@@ -665,12 +579,6 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
         output_str += f"    - Base Commit: {base_sha}\n"
         output_str += f"    - Ours Commit: {ours_sha}\n"
         output_str += f"    - Theirs Commit: {theirs_sha}\n"
-    if "pr_comments" in note:
-        output_str += f"  - PR Comments (total: {len(note['pr_comments'])})\n"
-        stats = get_comments_stats(note["pr_comments"])
-        for user, count in stats.items():
-            if user != "total_comments":
-                output_str += f"    - {user}: {count} comment(s)\n"
 
     if "solutions" in note:
         output_str += f"  - Solutions ({len(note['solutions'])})\n"
@@ -688,15 +596,6 @@ def commit_note_to_summary_text(commit: git.Commit, note: dict) -> str:
         response = merge_desc.get("response", {})
         auto_merged_count = len(response.get("auto_merged", {}))
         output_str += f"    - Auto-Merged Files: {auto_merged_count}\n"
-
-    if "user_comment" in note:
-        output_str += "\n"
-        output_str += "User Comment:"
-        output_str += f" {note['user_comment'].get('user', 'unknown')}"
-        output_str += f" <{note['user_comment'].get('email', 'unknown')}>"
-        output_str += f" at {note['user_comment'].get('date', 'unknown')}\n"
-        output_str += f"{note['user_comment'].get('body', '')}\n"
-        output_str += "\n"
 
     message = (
         commit.message
@@ -746,10 +645,6 @@ def commit_note_to_summary_markdown(commit: git.Commit, note: dict) -> str:
         output_str += "  - Merge Context (use mergai show --merge-context to see the merge context.)\n"
     if "conflict_context" in note:
         output_str += "  - Conflict Context (use mergai show --context to see the conflict context.)\n"
-    if "pr_comments" in note:
-        output_str += (
-            "  - PR Comments (use mergai show --pr-comments to see the PR comments.)\n"
-        )
 
     # Handle both legacy "solution" and new "solutions" array
     if "solutions" in note:
@@ -810,13 +705,8 @@ def commit_note_to_summary_json(
         summary["content"]["merge_context"] = True
     if "conflict_context" in note:
         summary["content"]["conflict_context"] = True
-    if "pr_comments" in note:
-        summary["content"]["pr_comments"] = True
     if "solutions" in note:
         summary["content"]["solutions"] = len(note["solutions"])
-    if "user_comment" in note:
-        summary["content"]["user_comment"] = True
-        summary["user_comment"] = note["user_comment"]
     if "merge_description" in note:
         summary["content"]["merge_description"] = True
 

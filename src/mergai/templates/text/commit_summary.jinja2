@@ -21,14 +21,6 @@ Content:
     - Ours Commit: {{ note.conflict_context.ours_commit }}
     - Theirs Commit: {{ note.conflict_context.theirs_commit }}
 {%- endif %}
-{%- if note.pr_comments is defined %}
-  - PR Comments (total: {{ note.pr_comments | length }})
-{%- for user, count in get_comments_stats(note.pr_comments).items() %}
-{%- if user != 'total_comments' %}
-    - {{ user }}: {{ count }} comment(s)
-{%- endif %}
-{%- endfor %}
-{%- endif %}
 {%- if note.solutions is defined %}
   - Solutions ({{ note.solutions | length }})
 {%- for solution in note.solutions %}
@@ -48,12 +40,6 @@ Content:
 {%- if note.merge_description is defined %}
   - Merge Description
     - Auto-Merged Files: {{ note.merge_description.response.auto_merged | length | default(0) }}
-{%- endif %}
-{%- if note.user_comment is defined %}
-
-User Comment: {{ note.user_comment.user | default('unknown') }} <{{ note.user_comment.email | default('unknown') }}> at {{ note.user_comment.date | default('unknown') }}
-{{ note.user_comment.body | default('') }}
-
 {%- endif %}
 Message:
     {{ commit.message.strip().replace('\n', '\n    ') }}

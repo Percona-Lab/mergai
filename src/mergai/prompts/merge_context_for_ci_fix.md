@@ -27,9 +27,6 @@ branch. Use it as the starting point for diagnosing the CI failure.
   Skim these to know what's already been done; you can also run
   `mergai show <commit>` to view the full note attached to any
   specific commit.
-- `pr_comments`: review feedback on the PR (when present). Sometimes
-  reviewers point at the actual root cause.
-- `user_comment`: the maintainer's free-form comment (when present).
 
 ### How to use it
 

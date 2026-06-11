@@ -476,8 +476,6 @@ def create_merge(app: AppContext, force: bool, from_stdin: bool, strategy: str):
 # Used by the 'drop' command to dispatch to the appropriate MergaiNote method.
 _DROP_HANDLERS: dict[str, tuple[Callable[[MergaiNote], MergaiNote], str]] = {
     "conflict": (MergaiNote.drop_conflict_context, "Dropped conflict context."),
-    "pr_comments": (MergaiNote.drop_pr_comments, "Dropped PR comments."),
-    "user_comment": (MergaiNote.drop_user_comment, "Dropped user comment."),
     "merge_context": (MergaiNote.drop_merge_context, "Dropped merge context."),
     "merge_description": (
         MergaiNote.drop_merge_description,
@@ -547,8 +545,6 @@ def drop(
                   --index N   solutions at the given index (repeatable)
                   --orphaned  solutions whose commit isn't reachable from HEAD
                 These flags are mutually exclusive.
-    - pr_comments: PR comments added to the context
-    - user_comment: User-provided comments
     - merge_info: Merge initialization info (target branch, commit)
     - merge_context: Merge context (list of merged commits, important files)
     - merge_description: AI-generated merge description
@@ -563,7 +559,6 @@ def drop(
         mergai context drop solution --index 0 --index 4
         mergai context drop solution --orphaned       # drops solutions whose
                                                       # commits were reverted
-        mergai context drop pr_comments               # drops only PR comments
     """
     selectors = sum([bool(drop_all_solutions), bool(drop_indices), bool(drop_orphaned)])
     if selectors > 1:

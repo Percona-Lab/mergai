@@ -273,10 +273,6 @@ def format_note_summary(note: dict | None) -> str:
         fields.append(f"solutions[{len(note['solutions'])}]")
     if "merge_description" in note:
         fields.append("merge_description")
-    if "pr_comments" in note:
-        fields.append("pr_comments")
-    if "user_comment" in note:
-        fields.append("user_comment")
 
     return ", ".join(fields) if fields else "(no recognized fields)"
 

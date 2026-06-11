@@ -588,10 +588,6 @@ class AppContext:
                 selective_note["conflict_context"] = note_dict["conflict_context"]
             elif field == "merge_context" and self.note.has_merge_context:
                 selective_note["merge_context"] = note_dict["merge_context"]
-            elif field == "pr_comments" and self.note.has_pr_comments:
-                selective_note["pr_comments"] = self.note.pr_comments
-            elif field == "user_comment" and self.note.has_user_comment:
-                selective_note["user_comment"] = self.note.user_comment
             elif field == "merge_description" and self.note.has_merge_description:
                 selective_note["merge_description"] = self.note.merge_description
             elif field == "squashed_commits" and self.note.has_squashed_commits:
@@ -1249,10 +1245,6 @@ class AppContext:
                 fields.append(f"solutions({count})")
         if "merge_description" in note:
             fields.append("merge_description")
-        if "pr_comments" in note:
-            fields.append("pr_comments")
-        if "user_comment" in note:
-            fields.append("user_comment")
 
         return ", ".join(fields) if fields else "(empty)"
 
@@ -1452,16 +1444,6 @@ class AppContext:
             if "merge_description" in git_note and "merge_description" not in note_dict:
                 note_dict["merge_description"] = git_note["merge_description"]
                 fields_for_this_commit.append("merge_description")
-
-            # Handle pr_comments
-            if "pr_comments" in git_note and "pr_comments" not in note_dict:
-                note_dict["pr_comments"] = git_note["pr_comments"]
-                fields_for_this_commit.append("pr_comments")
-
-            # Handle user_comment
-            if "user_comment" in git_note and "user_comment" not in note_dict:
-                note_dict["user_comment"] = git_note["user_comment"]
-                fields_for_this_commit.append("user_comment")
 
             # Add to note_index if we collected any fields
             if fields_for_this_commit:

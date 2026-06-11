@@ -30,12 +30,11 @@ def register_commands(cli):
 
     cli.add_command(pr)
 
-    from .commands.util import comment, log, show, status
+    from .commands.util import log, show, status
 
     cli.add_command(show)
     cli.add_command(status)
     cli.add_command(log)
-    cli.add_command(comment)
 
     from .commands.prompt import prompt
 
