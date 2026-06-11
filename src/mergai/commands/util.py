@@ -76,20 +76,6 @@ def ensure_gh_repo(app: AppContext, repo: str | None) -> None:
     help="Show all solutions.",
 )
 @click.option(
-    "--pr-comments",
-    "show_pr_comments",
-    is_flag=True,
-    default=False,
-    help="Show the PR comments.",
-)
-@click.option(
-    "--user-comment",
-    "show_user_comment",
-    is_flag=True,
-    default=False,
-    help="Show the user comment.",
-)
-@click.option(
     "--merge-description",
     "show_merge_description",
     is_flag=True,
@@ -119,8 +105,6 @@ def show(
     show_conflict_context: bool,
     solution_index: int,
     show_solutions: bool,
-    show_pr_comments: bool,
-    show_user_comment: bool,
     show_merge_description: bool,
     show_prompt: bool,
     format: str,
@@ -154,8 +138,6 @@ def show(
             or show_conflict_context
             or solution_index is not None
             or show_solutions
-            or show_pr_comments
-            or show_user_comment
             or show_merge_description
             or show_prompt
             or show_raw
@@ -202,22 +184,6 @@ def show(
             )
             output_str += formatters.conflict_context_to_str(
                 conflict_context, format, pretty=True
-            )
-
-        if show_pr_comments:
-            pr_comments = note.get("pr_comments")
-            if not pr_comments:
-                raise Exception("No PR comments found in the note.")
-            output_str += formatters.pr_comments_to_str(
-                pr_comments, format, pretty=True
-            )
-
-        if show_user_comment:
-            user_comment = note.get("user_comment")
-            if not user_comment:
-                raise Exception("No user comment found in the note.")
-            output_str += formatters.user_comment_to_str(
-                user_comment, format, pretty=True
             )
 
         if show_merge_description:
@@ -366,23 +332,6 @@ def convert_note_to_text_summary(note: dict) -> str:
                 output.append(f"        Commit: {sol['commit_sha'][:11]}")
         output.append("")
 
-    # PR Comments
-    if "pr_comments" in note:
-        comments = note["pr_comments"]
-        output.append(f"  PR Comments ({len(comments)}):")
-        stats = formatters.get_comments_stats(comments)
-        for user, count in stats.items():
-            output.append(f"    {user}: {count} comment(s)")
-        output.append("")
-
-    # User Comment
-    if "user_comment" in note:
-        uc = note["user_comment"]
-        output.append("  User Comment:")
-        output.append(f"    By: {uc.get('user', 'unknown')} <{uc.get('email', '')}>")
-        output.append(f"    Date: {uc.get('date', 'unknown')}")
-        output.append("")
-
     # Merge Description
     if "merge_description" in note:
         md = note["merge_description"]
@@ -437,8 +386,6 @@ def convert_note(
     pretty: bool = False,
     show_context: bool = True,
     show_solution: bool = True,
-    show_pr_comments: bool = True,
-    show_user_comment: bool = True,
     show_summary: bool = True,
     show_merge_info: bool = True,
     show_merge_context: bool = True,
@@ -453,8 +400,6 @@ def convert_note(
         pretty: If True, format JSON with indentation.
         show_context: Include conflict_context in output.
         show_solution: Include solutions in output.
-        show_pr_comments: Include PR comments in output.
-        show_user_comment: Include user comment in output.
         show_summary: Include summary in output.
         show_merge_info: Include merge_info in output.
         show_merge_context: Include merge_context in output.
@@ -482,12 +427,6 @@ def convert_note(
         if show_context and "conflict_context" in note:
             conflict_ctx = ConflictContext.from_dict(note["conflict_context"], repo)
             output_str += formatters.conflict_context_to_markdown(conflict_ctx) + "\n"
-        if show_pr_comments and "pr_comments" in note:
-            output_str += formatters.pr_comments_to_markdown(note["pr_comments"]) + "\n"
-        if show_user_comment and "user_comment" in note:
-            output_str += (
-                formatters.user_comment_to_markdown(note["user_comment"]) + "\n"
-            )
         if show_solution and note.get("solutions"):
             output_str += (
                 formatters.solutions_to_markdown(note.get("solutions", [])) + "\n"
@@ -549,92 +488,3 @@ def log(app: AppContext, ref: str):
             break
 
     util.print_or_page(output_str, format="text")
-
-
-COMMENT_FILE_TEMPLATE = """\
-
-# MergAI comment
-#
-# Please write your comment below. Lines starting with '#' will be ignored.
-# An empty comment will abort the operation.
-#
-# TODO:
-# - add support for having comments per file
-"""
-
-
-def strip_comment_lines(edited: str) -> str:
-    lines = edited.splitlines()
-    stripped_lines = [line for line in lines if not line.strip().startswith("#")]
-    return "\n".join(stripped_lines).strip()
-
-
-def now_utc_iso() -> str:
-    from datetime import datetime, timezone
-
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-def get_cur_comment(c: dict) -> str:
-    if not c:
-        return ""
-    return f"# Date: {c.get('date')}\n# User: {c.get('user', '')} [{c.get('email')}]\n\n{c.get('body') or ''}\n"
-
-
-def get_comment_from_cli(body: str, file: str) -> str:
-    parts = []
-    if body:
-        parts.append(body)
-    if file:
-        with open(file) as f:
-            parts.append("```")
-            parts.append(f.read())
-            parts.append("```")
-    stripped = "\n".join(parts).strip()
-    return stripped
-
-
-@click.command()
-@click.pass_obj
-@click.option(
-    "--file",
-    type=click.Path(exists=True),
-    help="Path to a file containing the comment.",
-)
-@click.option(
-    "-f/--force", "force", is_flag=True, default=False, help="Force overwrite."
-)
-@click.argument("body", required=False)
-def comment(app: AppContext, file: str, force: bool, body: str):
-    # TODO: support multiple comments
-    cur_comment = ""
-    if app.note.has_user_comment and app.note.user_comment is not None:
-        cur_comment = get_cur_comment(app.note.user_comment)
-
-    if (body or file) and app.note.has_user_comment and not force:
-        raise click.ClickException(
-            "Comment already exists. Use -f/--force to overwrite."
-        )
-
-    if body or file:
-        stripped = get_comment_from_cli(body, file)
-    else:
-        edited = click.edit(cur_comment + COMMENT_FILE_TEMPLATE + "\n", extension=".sh")
-        if edited is None:
-            raise click.ClickException("No comment provided, aborting.")
-        stripped = strip_comment_lines(edited)
-
-    if not stripped:
-        click.echo("Empty comment, cancelling.")
-        sys.exit(0)
-
-    comment_dict = {
-        "user": app.repo.git.config("user.name"),
-        "email": app.repo.git.config("user.email"),
-        "date": now_utc_iso(),
-        "body": stripped,
-    }
-
-    app.note.set_user_comment(comment_dict)
-
-    app.save_note(app.note)

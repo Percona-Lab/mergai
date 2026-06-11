@@ -51,10 +51,6 @@ def serialize_note_for_prompt(
         result["merge_context"] = note.merge_context.to_dict(serialization_config)
     if include_solutions and note.has_solutions and note.solutions is not None:
         result["solutions"] = note.solutions
-    if note.has_pr_comments and note.pr_comments is not None:
-        result["pr_comments"] = note.pr_comments
-    if note.has_user_comment and note.user_comment is not None:
-        result["user_comment"] = note.user_comment
     return result
 
 
@@ -92,8 +88,6 @@ class PromptBuilder:
         - System prompt for resolution
         - Project invariants (if present)
         - Conflict context prompt (if conflict_context exists)
-        - PR comments prompt (if PR comments exist)
-        - User comment prompt (if user comment exists)
         - Serialized note data as JSON
 
         Returns:
@@ -109,12 +103,6 @@ class PromptBuilder:
 
         if self.note.has_conflict_context:
             prompt += prompts.load_conflict_context_prompt() + "\n\n"
-
-        if self.note.has_pr_comments:
-            prompt += prompts.load_pr_comments_prompt() + "\n\n"
-
-        if self.note.has_user_comment:
-            prompt += prompts.load_user_comment_prompt() + "\n\n"
 
         # Prepare note data for prompt serialization
         # Hydrate conflict_context with configurable commit fields
@@ -303,8 +291,8 @@ def build_ci_fix_preamble(
          (``prompts/system_prompt_ci_fix.md``).
       2. Project invariants from ``.mergai/invariants.md`` if present.
       3. ``Merge Context`` section with ``merge_info`` /
-         ``merge_context`` / ``conflict_context`` / ``solutions`` /
-         ``pr_comments`` / ``user_comment`` from the merge note —
+         ``merge_context`` / ``conflict_context`` / ``solutions``
+         from the merge note —
          only when ``note`` and ``prompt_config`` are both provided.
          Tells the agent it's on a post-merge branch and lets it
          diagnose root cause against the actual merge.

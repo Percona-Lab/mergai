@@ -14,9 +14,6 @@
 {%- if note.conflict_context is defined %}
   - Conflict Context (use mergai show --context to see the conflict context.)
 {%- endif %}
-{%- if note.pr_comments is defined %}
-  - PR Comments (use mergai show --pr-comments to see the PR comments.)
-{%- endif %}
 {%- if note.solutions is defined %}
   - Solutions ({{ note.solutions | length }}) (use mergai show --solution to see the conflict solutions.)
 {%- elif note.solution is defined %}

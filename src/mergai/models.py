@@ -848,8 +848,6 @@ class MergaiNote:
             ``"ci_fix"``); CI fixes also carry a ``request`` dict with
             ``workflow``, ``run_id``, ``pr_number``, ``attempt_number``,
             and ``context_summary``.
-        pr_comments: Optional list of PR comments.
-        user_comment: Optional user-provided comment.
         merge_description: Optional AI-generated merge description.
         note_index: Optional index tracking which commits have which fields.
     """
@@ -859,8 +857,6 @@ class MergaiNote:
     conflict_context: ConflictContext | None = None
     merge_context: MergeContext | None = None
     solutions: list[dict] | None = None
-    pr_comments: list[dict] | None = None
-    user_comment: dict | None = None  # Dict with user, email, date, body
     merge_description: dict | None = None
     note_index: list[dict] | None = None
     # `ci fix` records one entry here per investigable attempt, whether it
@@ -914,8 +910,6 @@ class MergaiNote:
                 else None
             ),
             solutions=data.get("solutions"),
-            pr_comments=data.get("pr_comments"),
-            user_comment=data.get("user_comment"),
             merge_description=data.get("merge_description"),
             note_index=data.get("note_index"),
             ci_comments=data.get("ci_comments"),
@@ -956,8 +950,6 @@ class MergaiNote:
         - merge_context: taken from the first commit that has it
         - solutions: all solutions combined into a single array
         - merge_description: taken from the first commit that has it
-        - pr_comments: taken from the first commit that has it
-        - user_comment: taken from the first commit that has it
 
         Note: note_index is NOT set by this method. Use set_note_index_for_all_fields()
         after combining to assign all fields to a specific commit.
@@ -1002,14 +994,6 @@ class MergaiNote:
             if "merge_description" in git_note and "merge_description" not in combined:
                 combined["merge_description"] = git_note["merge_description"]
 
-            # pr_comments - take from first commit that has it
-            if "pr_comments" in git_note and "pr_comments" not in combined:
-                combined["pr_comments"] = git_note["pr_comments"]
-
-            # user_comment - take from first commit that has it
-            if "user_comment" in git_note and "user_comment" not in combined:
-                combined["user_comment"] = git_note["user_comment"]
-
         # Cast the result since from_dict returns MergaiNote, but cls is type[T]
         # where T is bound to MergaiNote
         note = cls.from_dict(combined, repo)
@@ -1043,16 +1027,6 @@ class MergaiNote:
         if not self.has_solutions or self.solutions is None:
             return False
         return any(s.get("response", {}).get("unresolved") for s in self.solutions)
-
-    @property
-    def has_pr_comments(self) -> bool:
-        """Check if pr_comments are present."""
-        return self.pr_comments is not None and len(self.pr_comments) > 0
-
-    @property
-    def has_user_comment(self) -> bool:
-        """Check if user_comment is present."""
-        return self.user_comment is not None
 
     @property
     def has_merge_description(self) -> bool:
@@ -1237,30 +1211,6 @@ class MergaiNote:
         self.solutions = None
         return self
 
-    def set_pr_comments(self, comments: list[dict]) -> "MergaiNote":
-        """Set pr_comments.
-
-        Args:
-            comments: List of PR comment dicts.
-
-        Returns:
-            Self for method chaining.
-        """
-        self.pr_comments = comments
-        return self
-
-    def set_user_comment(self, comment: dict) -> "MergaiNote":
-        """Set user_comment.
-
-        Args:
-            comment: User comment dict with user, email, date, body.
-
-        Returns:
-            Self for method chaining.
-        """
-        self.user_comment = comment
-        return self
-
     def set_merge_description(self, description: dict) -> "MergaiNote":
         """Set merge_description.
 
@@ -1327,12 +1277,6 @@ class MergaiNote:
         if self.has_merge_description:
             all_fields.append("merge_description")
 
-        if self.has_pr_comments:
-            all_fields.append("pr_comments")
-
-        if self.has_user_comment:
-            all_fields.append("user_comment")
-
         if self.has_squashed_commits:
             all_fields.append("squashed_commits")
 
@@ -1361,24 +1305,6 @@ class MergaiNote:
             Self for method chaining.
         """
         self.merge_context = None
-        return self
-
-    def drop_pr_comments(self) -> "MergaiNote":
-        """Remove pr_comments.
-
-        Returns:
-            Self for method chaining.
-        """
-        self.pr_comments = None
-        return self
-
-    def drop_user_comment(self) -> "MergaiNote":
-        """Remove user_comment.
-
-        Returns:
-            Self for method chaining.
-        """
-        self.user_comment = None
         return self
 
     def drop_merge_description(self) -> "MergaiNote":
@@ -1604,12 +1530,6 @@ class MergaiNote:
         if self.has_merge_description and "merge_description" not in committed_fields:
             uncommitted.append("merge_description")
 
-        if self.has_pr_comments and "pr_comments" not in committed_fields:
-            uncommitted.append("pr_comments")
-
-        if self.has_user_comment and "user_comment" not in committed_fields:
-            uncommitted.append("user_comment")
-
         return uncommitted
 
     def is_fully_committed(self) -> bool:
@@ -1638,10 +1558,6 @@ class MergaiNote:
             result["merge_context"] = self.merge_context.to_dict()
         if self.solutions:
             result["solutions"] = self.solutions
-        if self.pr_comments:
-            result["pr_comments"] = self.pr_comments
-        if self.user_comment:
-            result["user_comment"] = self.user_comment
         if self.merge_description:
             result["merge_description"] = self.merge_description
         if self.note_index:
