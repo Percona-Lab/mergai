@@ -22,6 +22,10 @@ def register_commands(cli):
 
     cli.add_command(resolve)
 
+    from .commands.review import review
+
+    cli.add_command(review)
+
     from .commands.describe import describe
 
     cli.add_command(describe)

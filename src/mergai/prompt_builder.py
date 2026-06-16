@@ -390,3 +390,51 @@ def build_ci_fix_prompt(
     return build_ci_fix_preamble(
         note=note, prompt_config=prompt_config, project_config=project_config
     ) + build_ci_fix_run_section(context, heading="")
+
+
+def build_review_prompt(
+    context,
+    note: MergaiNote | None = None,
+    prompt_config: PromptConfig | None = None,
+    project_config: ProjectConfig | None = None,
+) -> str:
+    """Build the full prompt for ``mergai review fix``.
+
+    Mirrors :func:`build_ci_fix_prompt`: review system prompt + project
+    invariants + (optional) merge context + the ``Review Context`` JSON
+    describing the unresolved review threads to address.
+
+    ``context`` is a ``ReviewContext`` (from :mod:`mergai.review.context`)
+    exposing a ``threads`` mapping (``{thread_id: {...}}``) that is embedded
+    verbatim as the agent's per-thread input. When ``note`` and
+    ``prompt_config`` are both supplied, the merge note is embedded so the
+    agent can relate a comment to what was merged / resolved.
+
+    Free function (not a ``PromptBuilder`` method) so ``mergai prompt`` and
+    tests can render it without a note.
+    """
+    project_context = _project_prompt_context(project_config)
+    system_prompt = prompts.load_system_prompt_review(project_context)
+    project_invariants = util.load_if_exists(".mergai/invariants.md")
+
+    parts: list[str] = [system_prompt, "\n\n"]
+    if project_invariants:
+        parts.extend([project_invariants, "\n\n"])
+
+    if note is not None and prompt_config is not None:
+        merge_data = serialize_note_for_prompt(
+            note, prompt_config, include_solutions=True
+        )
+        if merge_data:
+            parts.extend(
+                [prompts.load_merge_context_for_review_prompt(project_context), "\n\n"]
+            )
+            parts.append("```json\n")
+            parts.append(json.dumps(merge_data, indent=2))
+            parts.append("\n```\n\n")
+
+    parts.extend([prompts.load_review_context_prompt(), "\n\n"])
+    parts.append("```json\n")
+    parts.append(json.dumps(context.threads, indent=2))
+    parts.append("\n```\n")
+    return "".join(parts)
