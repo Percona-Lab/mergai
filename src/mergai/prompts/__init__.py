@@ -49,6 +49,10 @@ def load_system_prompt_ci_fix(context: dict | None = None) -> str:
     return _render_prompt("system_prompt_ci_fix.md", context)
 
 
+def load_system_prompt_review(context: dict | None = None) -> str:
+    return _render_prompt("system_prompt_review.md", context)
+
+
 def load_conflict_context_prompt() -> str:
     return load_prompt("conflict_context.md")
 
@@ -57,5 +61,13 @@ def load_ci_fix_context_prompt() -> str:
     return load_prompt("ci_fix_context.md")
 
 
+def load_review_context_prompt() -> str:
+    return load_prompt("review_context.md")
+
+
 def load_merge_context_for_ci_fix_prompt(context: dict | None = None) -> str:
     return _render_prompt("merge_context_for_ci_fix.md", context)
+
+
+def load_merge_context_for_review_prompt(context: dict | None = None) -> str:
+    return _render_prompt("merge_context_for_review.md", context)

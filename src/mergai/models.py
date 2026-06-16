@@ -32,7 +32,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Optional, TypeVar
 
-from .solution_types import CI_FIX
+from .solution_types import CI_FIX, REVIEW_FIX
 
 T = TypeVar("T", bound="MergaiNote")
 
@@ -866,6 +866,12 @@ class MergaiNote:
     # Lives only in the cache note (not git notes): `ci fix` and the post
     # step run in the same CI job, so the cache persists between them.
     ci_comments: list[dict] | None = None
+    # `review fix` records one entry here per processed review thread -
+    # `outcome="fixed"` (with the commit) or `outcome="unfixable"` (no change)
+    # - so `mergai review post` can publish the reply to each thread later.
+    # Like `ci_comments`, this lives only in the cache note (not git notes),
+    # which lets `review fix` and the (separate) post step share state.
+    review_comments: list[dict] | None = None
     # Accumulating record of the commits absorbed by a squash finalize. Each
     # entry is ``{"sha": <full sha>, "message": <first line>}``, oldest-first.
     # When a squash commit (which carries this field) is itself squashed again,
@@ -913,6 +919,7 @@ class MergaiNote:
             merge_description=data.get("merge_description"),
             note_index=data.get("note_index"),
             ci_comments=data.get("ci_comments"),
+            review_comments=data.get("review_comments"),
             squashed_commits=data.get("squashed_commits"),
             _repo=repo,
         )
@@ -1120,6 +1127,57 @@ class MergaiNote:
         comment["posted_at"] = posted_at
         comment["posted_comment_url"] = comment_url
         return True
+
+    @property
+    def has_review_comments(self) -> bool:
+        """Check if any review-reply records are present."""
+        return self.review_comments is not None and len(self.review_comments) > 0
+
+    def add_review_comment(self, comment: dict) -> int:
+        """Append a review-reply record and return its index."""
+        if self.review_comments is None:
+            self.review_comments = []
+        self.review_comments.append(comment)
+        return len(self.review_comments) - 1
+
+    def pending_review_comments(self) -> list[dict]:
+        """Return review-reply records not yet posted to their thread."""
+        if not self.review_comments:
+            return []
+        return [c for c in self.review_comments if not c.get("posted_at")]
+
+    def mark_review_comment_posted(
+        self, thread_id: str, *, posted_at: str, comment_url: str | None
+    ) -> bool:
+        """Record that a review reply has been posted to its thread.
+
+        Keyed by ``thread_id`` (the GraphQL thread node id, unique per
+        thread). Returns ``True`` if a matching record was found and updated.
+        """
+        for comment in self.review_comments or []:
+            if comment.get("thread_id") == thread_id:
+                comment["posted_at"] = posted_at
+                comment["posted_comment_url"] = comment_url
+                return True
+        return False
+
+    def addressed_review_thread_ids(self) -> set[str]:
+        """Review thread ids already fixed by a ``review_fix`` solution.
+
+        Collected from ``response.addressed`` across every ``review_fix``
+        solution on the note. Because solutions are stored in git notes (and
+        reloaded by ``mergai context init``), this is the durable, cross-run
+        record of which review threads mergai has already addressed - used to
+        skip them on a re-run. Unaddressed threads are intentionally *not*
+        included, so a later run retries the ones mergai couldn't fix.
+        """
+        ids: set[str] = set()
+        for solution in self.solutions or []:
+            if solution.get("type") != REVIEW_FIX:
+                continue
+            response = solution.get("response") or {}
+            ids.update((response.get("addressed") or {}).keys())
+        return ids
 
     # --- Repo Binding ---
 
@@ -1484,6 +1542,31 @@ class MergaiNote:
 
         return orphaned
 
+    def find_orphaned_review_comments(self, repo: "Repo") -> list[dict]:
+        """Return ``review_comments`` records tied to an unreachable commit.
+
+        A reply record is orphaned when its ``commit_sha`` is set but no
+        longer reachable from HEAD - the ``review_fix`` commit it belonged to
+        was reset / reverted / force-pushed away. Records with no
+        ``commit_sha`` (e.g. ``unfixable`` replies, which made no commit) are
+        never orphaned and are left untouched.
+        """
+        orphaned: list[dict] = []
+        for record in self.review_comments or []:
+            sha = record.get("commit_sha")
+            if sha and not _sha_reachable_from_head(repo, sha):
+                orphaned.append(record)
+        return orphaned
+
+    def drop_review_comments(self, records: list[dict]) -> "MergaiNote":
+        """Remove the given ``review_comments`` records (by identity)."""
+        if not self.review_comments or not records:
+            return self
+        drop_ids = {id(r) for r in records}
+        kept = [r for r in self.review_comments if id(r) not in drop_ids]
+        self.review_comments = kept or None
+        return self
+
     def get_uncommitted_solution(self) -> tuple[int, dict] | None:
         """Get the last uncommitted solution with its index.
 
@@ -1564,6 +1647,8 @@ class MergaiNote:
             result["note_index"] = self.note_index
         if self.ci_comments:
             result["ci_comments"] = self.ci_comments
+        if self.review_comments:
+            result["review_comments"] = self.review_comments
         if self.squashed_commits:
             result["squashed_commits"] = self.squashed_commits
         return result

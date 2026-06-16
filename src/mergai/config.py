@@ -119,6 +119,82 @@ class ResolveConfig:
 
 
 @dataclass
+class ReviewConfig:
+    """Configuration for the ``review`` command.
+
+    Controls how ``mergai review fix`` selects which PR review comments to
+    act on, which agent generates the fixes, and the wording of the replies
+    posted back to each comment. All settings are generic - nothing here is
+    specific to any particular downstream repository.
+
+    Attributes:
+        agent: Agent descriptor for review fixes (e.g. "gemini-cli",
+            "claude-cli:sonnet"). When empty, falls back to
+            ``resolve.agent``.
+        max_attempts: Per-invocation agent retry budget.
+        skip_token: A thread containing this token in any of its comments is
+            treated as opt-out and left untouched.
+        bot_logins: GitHub logins whose last comment marks a thread as
+            already-handled-by-automation. An explicit escape hatch for other
+            automation accounts; mergai's own work is tracked durably on the
+            note (the addressed review-thread ids from prior ``review_fix``
+            solutions), not by inspecting replies, so its own login needs no
+            entry here. Default: none.
+        process_external: When False (default), threads raised by an author who
+            is not trusted (per ``trusted_associations`` / ``trusted_logins``)
+            are skipped entirely, and untrusted replies on otherwise-trusted
+            threads are dropped from the agent context. Set True to act on every
+            author's comments regardless of association.
+        trusted_associations: GitHub ``authorAssociation`` values treated as
+            trusted to instruct the agent. Defaults to ``OWNER`` / ``MEMBER``
+            (repo/org owners and org members) - note this deliberately excludes
+            ``COLLABORATOR``, which is an *outside* collaborator. Add it, or use
+            ``trusted_logins``, to trust specific outside collaborators. Used
+            only when ``process_external`` is False.
+        trusted_logins: Explicit allowlist of trusted author logins, in addition
+            to ``trusted_associations``. Used only when ``process_external`` is
+            False.
+        reply_fixed_header: Optional first line of the reply posted to a
+            comment the agent addressed. Empty by default - the reply is just
+            the agent's note plus the commit reference.
+        reply_unfixable_header: Optional first line of the reply posted to a
+            comment the agent could not address.
+        reply_footer: Optional trailing line appended to every reply.
+    """
+
+    agent: str = ""
+    max_attempts: int = 3
+    skip_token: str = "/mergai skip"
+    bot_logins: list[str] = field(default_factory=list)
+    process_external: bool = False
+    trusted_associations: list[str] = field(default_factory=lambda: ["OWNER", "MEMBER"])
+    trusted_logins: list[str] = field(default_factory=list)
+    reply_fixed_header: str = ""
+    reply_unfixable_header: str = "mergai could not automatically address this comment:"
+    reply_footer: str = ""
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "ReviewConfig":
+        """Create a ReviewConfig from a dictionary."""
+        return cls(
+            agent=data.get("agent", cls.agent),
+            max_attempts=data.get("max_attempts", cls.max_attempts),
+            skip_token=data.get("skip_token", cls.skip_token),
+            bot_logins=list(data.get("bot_logins", [])),
+            process_external=data.get("process_external", cls.process_external),
+            trusted_associations=list(
+                data.get("trusted_associations", cls().trusted_associations)
+            ),
+            trusted_logins=list(data.get("trusted_logins", [])),
+            reply_fixed_header=data.get("reply_fixed_header", cls.reply_fixed_header),
+            reply_unfixable_header=data.get(
+                "reply_unfixable_header", cls.reply_unfixable_header
+            ),
+            reply_footer=data.get("reply_footer", cls.reply_footer),
+        )
+
+
+@dataclass
 class BranchConfig:
     """Configuration for branch naming.
 
@@ -163,6 +239,10 @@ class BranchConfig:
 DEFAULT_COMMIT_FOOTER = "Note: commit created by mergai"
 DEFAULT_CI_FIX_TITLE_FORMAT = (
     "Fix %(workflow) failure for merge commit "
+    "%(merge_commit_short_sha) into %(target_branch)"
+)
+DEFAULT_REVIEW_FIX_TITLE_FORMAT = (
+    "Address review comments on PR #%(pr_number) for merge commit "
     "%(merge_commit_short_sha) into %(target_branch)"
 )
 
@@ -301,6 +381,12 @@ class CommitConfig:
             - %(target_branch) - The target branch name
             - %(merge_commit_sha) - Full SHA of the merge commit (40 chars)
             - %(merge_commit_short_sha) - Short SHA of the merge commit
+        review_fix_title_format: Format string for the title of review-fix
+            commits. Uses %(token) syntax. Available tokens:
+            - %(pr_number) - The pull request number
+            - %(target_branch) - The target branch name
+            - %(merge_commit_sha) - Full SHA of the merge commit (40 chars)
+            - %(merge_commit_short_sha) - Short SHA of the merge commit
 
     Example YAML config:
         commit:
@@ -310,6 +396,7 @@ class CommitConfig:
 
     footer: str = DEFAULT_COMMIT_FOOTER
     ci_fix_title_format: str = DEFAULT_CI_FIX_TITLE_FORMAT
+    review_fix_title_format: str = DEFAULT_REVIEW_FIX_TITLE_FORMAT
 
     @classmethod
     def from_dict(cls, data: dict) -> "CommitConfig":
@@ -325,6 +412,9 @@ class CommitConfig:
             footer=data.get("footer", cls.footer),
             ci_fix_title_format=data.get(
                 "ci_fix_title_format", cls.ci_fix_title_format
+            ),
+            review_fix_title_format=data.get(
+                "review_fix_title_format", cls.review_fix_title_format
             ),
         )
 
@@ -1098,6 +1188,7 @@ class MergaiConfig:
         project: Project identity/wording substituted into AI prompts.
         fork: Configuration for the fork subcommand (includes merge_picks).
         resolve: Configuration for the resolve command.
+        review: Configuration for the review command.
         branch: Configuration for branch naming.
         prompt: Configuration for prompt generation.
         commit: Configuration for commit message generation.
@@ -1113,6 +1204,7 @@ class MergaiConfig:
     project: ProjectConfig = field(default_factory=ProjectConfig)
     fork: ForkConfig = field(default_factory=ForkConfig)
     resolve: ResolveConfig = field(default_factory=ResolveConfig)
+    review: ReviewConfig = field(default_factory=ReviewConfig)
     branch: BranchConfig = field(default_factory=BranchConfig)
     prompt: PromptConfig = field(default_factory=PromptConfig)
     commit: CommitConfig = field(default_factory=CommitConfig)
@@ -1177,6 +1269,12 @@ class MergaiConfig:
             ResolveConfig.from_dict(resolve_data) if resolve_data else ResolveConfig()
         )
 
+        # Parse review section if present
+        review_data = data.get("review", {})
+        review_config = (
+            ReviewConfig.from_dict(review_data) if review_data else ReviewConfig()
+        )
+
         # Parse branch section if present
         branch_data = data.get("branch", {})
         branch_config = (
@@ -1239,6 +1337,7 @@ class MergaiConfig:
             project=project_config,
             fork=fork_config,
             resolve=resolve_config,
+            review=review_config,
             branch=branch_config,
             prompt=prompt_config,
             commit=commit_config,
