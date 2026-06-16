@@ -122,6 +122,9 @@ SkipReason = Literal[
     "passed",
     "no_pr",
     "no_findings",
+    "cancelled",
+    "approval_rejected",
+    "no_failing_step",
     "unusual_conclusion",
 ]
 
@@ -179,6 +182,7 @@ def classify_run(
     pr_number: int | None,
     check_findings: bool = True,
     check_staleness: bool = True,
+    check_failure_kind: bool = True,
     force: bool = False,
 ) -> RunDispatchDecision:
     """Decide whether mergai would act on ``run``, and how.
@@ -197,6 +201,12 @@ def classify_run(
             reported actionable without running the findings lookup
             (``findings_queried=False``). ``ci list`` uses this to skip the
             network call.
+        check_failure_kind: When False, a ``failure`` run is reported
+            actionable without the side-calls that detect non-code failures
+            (rejected deployment approval / no failing step). ``ci list``
+            uses this so listing stays cheap and still shows the run as a
+            failure entry; the real dispatch paths keep it True so they skip
+            an approval-rejected / infra failure before invoking the agent.
         check_staleness: When False (``build_workflow_context_for_run``,
             whose callers vet staleness separately), ``superseded`` /
             ``obsolete`` runs are not skipped here.
@@ -241,9 +251,23 @@ def classify_run(
     if run.status != "completed":
         return skip("incomplete")
 
+    if run.conclusion == "cancelled":
+        return skip("cancelled")
+
     if run.conclusion == "failure":
         if pr_number is None:
             return skip("no_pr")
+        # A `failure` conclusion does not guarantee a code failure: a rejected
+        # deployment approval and other infra failures (runner death,
+        # startup_failure) also surface as `failure` with no fixable step.
+        # Acting on those spins the agent against an empty context. Skip only
+        # on positive evidence the failure is non-code; fail open otherwise so
+        # a real CI failure is never blocked by a side-call error.
+        if check_failure_kind:
+            if _approval_was_rejected(app, run):
+                return skip("approval_rejected")
+            if not _has_failing_step(app, run):
+                return skip("no_failing_step")
         return act("failure", findings_queried=False)
 
     if run.conclusion == "success":
@@ -331,6 +355,49 @@ def _run_head_status(
     return "obsolete"
 
 
+def _approval_was_rejected(
+    app: AppContext, run: "github.WorkflowRun.WorkflowRun"
+) -> bool:
+    """Whether ``run`` failed because a deployment approval was rejected.
+
+    A rejected environment approval produces a gate job with ``conclusion ==
+    "failure"`` but no steps and no log - indistinguishable from a code
+    failure by conclusion alone. The approvals endpoint
+    (``GET {run.url}/approvals``) is the precise signal; PyGithub does not
+    wrap it, so query it via the existing requester. Errors are swallowed
+    (return ``False``) so a flaky side-call never blocks a real fix.
+    """
+    try:
+        _, data = app.gh_repo._requester.requestJsonAndCheck(  # noqa: SLF001
+            "GET", f"{run.url}/approvals"
+        )
+    except Exception:  # noqa: BLE001 — best-effort detection; fail open
+        return False
+    if not isinstance(data, list):
+        return False
+    return any(
+        isinstance(record, dict) and record.get("state") == "rejected"
+        for record in data
+    )
+
+
+def _has_failing_step(app: AppContext, run: "github.WorkflowRun.WorkflowRun") -> bool:
+    """Whether any job in ``run`` has a step that reported a failure.
+
+    General safety net for non-code failures: a rejected approval, a
+    cancelled/timed-out run, runner death, or ``startup_failure`` all yield a
+    ``failure`` conclusion with no failing step, so there is nothing for the
+    agent to fix. Errors fail open (return ``True``) so a side-call failure
+    never blocks a genuine fix.
+    """
+    try:
+        return any(
+            s.conclusion == "failure" for j in run.jobs() for s in (j.steps or [])
+        )
+    except Exception:  # noqa: BLE001 — best-effort detection; fail open
+        return True
+
+
 def _skip_message(
     decision: RunDispatchDecision,
     run: "github.WorkflowRun.WorkflowRun",
@@ -359,6 +426,17 @@ def _skip_message(
         return (
             f"Workflow '{workflow_name}' passed and Code Scanning has "
             f"no findings for {run.head_sha[:7]}; nothing to do."
+        )
+    if reason == "approval_rejected":
+        return (
+            "Run failed because a deployment approval was rejected; " "nothing to fix."
+        )
+    if reason == "cancelled":
+        return "Run was cancelled; nothing to fix."
+    if reason == "no_failing_step":
+        return (
+            "Run failed but no step reported a failure (e.g. blocked "
+            "approval / infra); nothing to fix."
         )
     # passed / incomplete / unusual_conclusion
     return (
