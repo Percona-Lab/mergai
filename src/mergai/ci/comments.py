@@ -1,6 +1,7 @@
 """Recording and rendering of the PR comments ``mergai ci fix`` produces."""
 
 import logging
+from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any, Literal
 
@@ -92,13 +93,22 @@ def _post_max_attempts_comment(
         log.warning("Failed to post PR comment on #%s: %s", pr_number, e)
 
 
-def _create_pr_comment(app: AppContext, pr_number: int, body: str, run_id: str) -> Any:
-    """Create an issue comment on a PR, wrapping API errors."""
+def _create_pr_comment(
+    app: AppContext, pr_number: int, body: str, run_ids: Sequence[str]
+) -> Any:
+    """Create an issue comment on a PR, wrapping API errors.
+
+    ``run_ids`` are the run ids the comment covers (a summary comment can
+    aggregate several); they are named in the error message so a failure points
+    at every run in the batch, not just the first.
+    """
     try:
         return app.gh_repo.get_pull(int(pr_number)).create_issue_comment(body)
     except Exception as e:  # noqa: BLE001 — wrap external API errors
+        runs = ", ".join(run_ids)
+        plural = "run" if len(run_ids) == 1 else "runs"
         raise click.ClickException(
-            f"Failed to post PR comment for run {run_id} on #{pr_number}: {e}"
+            f"Failed to post PR comment for {plural} {runs} on #{pr_number}: {e}"
         ) from e
 
 
@@ -229,3 +239,15 @@ def _render_ci_notification(entry: dict) -> str:
     if review_notes:
         lines += ["", review_notes]
     return "\n".join(lines)
+
+
+def _render_ci_notification_summary(entries: list[dict]) -> str:
+    """Render one PR comment covering every CI-fix attempt in ``entries``.
+
+    A single notification for all checks: each check's status, rendered by
+    the existing per-check ``_render_ci_notification`` (reused verbatim so the
+    wording stays consistent), one after another. Replaces the old "one comment
+    per run", which on a multi-check ``ci fix all`` produced several separate
+    PR comments. A single entry renders as just that entry's status.
+    """
+    return "\n\n".join(_render_ci_notification(entry) for entry in entries) + "\n"

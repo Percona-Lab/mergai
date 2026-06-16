@@ -43,7 +43,7 @@ from ..ci.comments import (
     _post_max_attempts_comment,
     _record_ci_comment,
     _render_ci_comment,
-    _render_ci_notification,
+    _render_ci_notification_summary,
     _resolve_comments_for_post,
 )
 from ..ci.dispatch import (
@@ -56,6 +56,7 @@ from ..ci.gate import _aggregate_state, _list_run_status, _watched_runs_for_head
 from ..ci.handlers import get_handler
 from ..solution_types import CI_FIX
 from ..utils.formatters import format_ascii_table
+from .pr import get_prs_for_current_branch
 from .util import ensure_gh_repo
 
 
@@ -111,6 +112,18 @@ def ci(app: AppContext, repo: str | None):
         "skipped — those describe code that doesn't exist on this branch."
     ),
 )
+@click.option(
+    "--ack",
+    is_flag=True,
+    default=False,
+    help=(
+        "Post a short acknowledgement comment on the PR summarising the "
+        "outcome (how many failing checks were found / fixed), even when "
+        "there are none. Use from CI to give quick feedback on a "
+        "comment-triggered run. Distinct from the detailed per-check summary "
+        "produced by `mergai ci comment post`."
+    ),
+)
 def fix(
     app: AppContext,
     target: str,
@@ -118,6 +131,7 @@ def fix(
     pr: int | None,
     artifacts_dir: str | None,
     force: bool,
+    ack: bool,
 ) -> None:
     """Apply a fix for one or more workflow runs on the current branch.
 
@@ -146,16 +160,19 @@ def fix(
         check_staleness = not force
     else:
         run_ids = _resolve_target_runs(app, target, force=force)
-        if not run_ids:
-            click.echo(f"No unprocessed actionable runs found for target '{target}'.")
-            return
-        click.echo(
-            f"Found {len(run_ids)} unprocessed actionable run(s) for target '{target}'."
-        )
         check_staleness = False
 
+    # Always report the actionable count, including zero, so a
+    # comment-triggered run (`--ack`) gives feedback even when there is
+    # nothing to do.
+    click.echo(
+        f"{len(run_ids)} unprocessed actionable run(s) to address for "
+        f"target '{target}'."
+    )
+
+    fixed = 0
     for run_id in run_ids:
-        _fix_one_run(
+        outcome = _fix_one_run(
             app,
             run_id,
             workflow_override=workflow,
@@ -163,6 +180,47 @@ def fix(
             artifacts_dir_override=artifacts_dir,
             check_staleness=check_staleness,
         )
+        if outcome == "fixed":
+            fixed += 1
+
+    if ack:
+        _post_ci_ack(app, pr_override=pr, found=len(run_ids), fixed=fixed)
+
+
+def _post_ci_ack(
+    app: AppContext, *, pr_override: int | None, found: int, fixed: int
+) -> None:
+    """Post a one-line acknowledgement of a `ci fix` trigger (best-effort).
+
+    Distinct from `mergai ci comment post`: that posts the detailed per-check
+    summary; this is a terse acknowledgement of the trigger - how many failing
+    checks were found and fixed - so a comment-triggered run gives feedback
+    even when there was nothing to do. The PR is `--pr` when given, else the
+    single open PR for the current branch.
+    """
+    if found == 0:
+        message = "mergai ci fix: no failing checks to address."
+    else:
+        message = f"mergai ci fix: fixed {fixed} of {found} failing check(s)."
+
+    if pr_override is not None:
+        pr_number = pr_override
+    else:
+        prs = get_prs_for_current_branch(app)
+        if len(prs) != 1:
+            click.echo(
+                "Skipping --ack comment: could not resolve a single PR for the "
+                "current branch (pass --pr).",
+                err=True,
+            )
+            return
+        pr_number = prs[0].number
+
+    try:
+        app.gh_repo.get_pull(int(pr_number)).create_issue_comment(message)
+        click.echo(f"Posted acknowledgement on PR #{pr_number}.")
+    except Exception as e:  # noqa: BLE001 - acknowledgement is best-effort
+        click.echo(f"warning: could not post acknowledgement: {e}", err=True)
 
 
 def _fix_one_run(
@@ -173,12 +231,16 @@ def _fix_one_run(
     pr_override: int | None,
     artifacts_dir_override: str | None,
     check_staleness: bool = True,
-) -> None:
+) -> Literal["fixed", "already_resolved", "unfixable", "skip"]:
     """Apply a fix for a single workflow run.
 
     Body of the per-run flow, hoisted out so that the top-level ``fix``
     command can iterate over multiple runs for the ``all`` /
     workflow-name targets.
+
+    Returns the per-run outcome (``"fixed"`` only when a fix was committed)
+    so the caller can tally how many checks were fixed for the ``--ack``
+    summary.
 
     Args:
         check_staleness: If True (default; for explicit run-id targets),
@@ -206,7 +268,7 @@ def _fix_one_run(
                 f"Run {run_id} ({run.head_sha[:7]}) is {head_status}: {reason}; "
                 f"skipping."
             )
-            return
+            return "skip"
 
     with build_workflow_context_for_run(
         app,
@@ -216,7 +278,7 @@ def _fix_one_run(
         artifacts_dir_override=artifacts_dir_override,
     ) as built:
         if built is None:
-            return
+            return "skip"
         context, config = built
 
         existing = app.note.get_ci_solution_for_run(run_id)
@@ -227,7 +289,20 @@ def _fix_one_run(
                 f"{existing.get('request', {}).get('attempt_number', '?')}); "
                 f"nothing to do."
             )
-            return
+            return "skip"
+
+        # A run judged unfixable / already-resolved leaves a ci_comment but no
+        # solution. `_resolve_target_runs` filters those out for `fix all`, but
+        # an explicit run id (the GitHub Actions trigger) reaches here directly,
+        # so guard against re-invoking the agent for an already-decided run.
+        existing_comment = app.note.get_ci_comment_for_run(run_id)
+        if existing_comment is not None:
+            click.echo(
+                f"Run {run_id} was already processed "
+                f"(recorded as {existing_comment.get('outcome', '?')!r}); "
+                f"nothing to do."
+            )
+            return "skip"
 
         prior_solutions = app.note.get_ci_solutions(context.workflow_name)
         attempt_number = len(prior_solutions) + 1
@@ -239,7 +314,7 @@ def _fix_one_run(
             _post_max_attempts_comment(
                 app, context.pr_number, context.workflow_name, config
             )
-            return
+            return "skip"
 
         click.echo(
             f"Handling '{context.workflow_name}' run {run_id} "
@@ -255,7 +330,7 @@ def _fix_one_run(
                 f"Handler did not produce a solution for "
                 f"'{context.workflow_name}'. Will retry on the next workflow run."
             )
-            return
+            return "skip"
 
         # Agent investigated but produced no code change (empty resolved +
         # modified). The agent itself classifies why via response.status:
@@ -289,7 +364,7 @@ def _fix_one_run(
                 f"no commit, no attempt slot consumed. "
                 f"Run `mergai ci comment post {run_id}` to publish a PR comment."
             )
-            return
+            return outcome
 
         ci_solution = {
             "type": CI_FIX,
@@ -309,6 +384,11 @@ def _fix_one_run(
         try:
             app.commit_ci_fix_solution(solution_idx)
         except Exception as e:
+            # The commit failed, so the solution we just persisted is a phantom:
+            # get_ci_solution_for_run() would treat the run as processed and
+            # block a retry. Roll it back out of the cache note.
+            app.note.drop_solutions_at_indices({solution_idx})
+            app.save_note(app.note)
             raise click.ClickException(f"Failed to commit CI fix: {e}") from e
 
         # Record the fix as a postable ci_comment too, so every attempt —
@@ -329,6 +409,7 @@ def _fix_one_run(
             f"Recorded comment (ci_comments[{comment_idx}]); "
             f"run `mergai ci comment post {run_id}` to publish a PR comment."
         )
+        return "fixed"
 
 
 @ci.command(name="list")
@@ -609,8 +690,13 @@ def comment_post(
         raise click.ClickException("GitHub auth not available; cannot post PR comment.")
 
     now = datetime.now(timezone.utc).isoformat()
-    posted_any = False
 
+    # Aggregate into one comment per target PR rather than one per run. A
+    # single `ci fix all` over multiple checks used to post a separate PR
+    # comment for each; group the postable entries and post one summary per
+    # PR instead. Grouping by target PR keeps it correct even in the unusual
+    # case where entries resolve to different PRs (normally they share one).
+    groups: dict[int, list[dict]] = {}
     for c in comments:
         run_id = str(c.get("run_id"))
         if c.get("posted_at") is not None and not force:
@@ -626,19 +712,29 @@ def comment_post(
             click.echo(f"Run {run_id}: no PR number recorded; cannot post.")
             continue
 
-        body = _render_ci_notification(c)
+        groups.setdefault(int(target_pr), []).append(c)
+
+    posted_any = False
+    for target_pr, entries in groups.items():
+        run_ids = [str(e.get("run_id")) for e in entries]
+        body = _render_ci_notification_summary(entries)
         if dry_run:
-            click.echo(f"--- would post for run {run_id} on #{target_pr} ---")
+            click.echo(
+                f"--- would post summary for {len(entries)} check(s) "
+                f"(runs {', '.join(run_ids)}) on #{target_pr} ---"
+            )
             click.echo(body)
             click.echo("--- end ---")
             continue
 
-        posted = _create_pr_comment(app, int(target_pr), body, run_id)
-        app.note.mark_ci_comment_posted(
-            run_id, posted_at=now, comment_url=getattr(posted, "html_url", None)
-        )
+        posted = _create_pr_comment(app, target_pr, body, run_ids)
+        comment_url = getattr(posted, "html_url", None)
+        for run_id in run_ids:
+            app.note.mark_ci_comment_posted(
+                run_id, posted_at=now, comment_url=comment_url
+            )
         posted_any = True
-        click.echo(f"Posted CI notification for run {run_id} on #{target_pr}")
+        click.echo(f"Posted CI summary for {len(entries)} check(s) on #{target_pr}")
 
     if posted_any and not dry_run:
         app.save_note(app.note)

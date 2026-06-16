@@ -63,6 +63,10 @@ def _list_run_status(
         workflow_name=run.name,
         pr_number=_resolve_pr_number(run),
         check_findings=check_findings,
+        # Listing should stay cheap and still show a failed run as a failure
+        # entry; the non-code-failure side-calls (approvals / job steps) are
+        # only worth making on the real dispatch path.
+        check_failure_kind=False,
     )
 
     if decision.actionable:
@@ -99,7 +103,13 @@ def _list_run_status(
         return "skip", "passed; Code Scanning check enabled, but no associated PR"
     if reason == "no_findings":
         return "skip", "passed; Code Scanning check enabled, no findings"
-    # unusual_conclusion: completed with cancelled / timed_out / neutral / …
+    if reason == "cancelled":
+        return "skip", "cancelled; nothing to fix"
+    if reason == "approval_rejected":
+        return "skip", "failed: deployment approval rejected; nothing to fix"
+    if reason == "no_failing_step":
+        return "skip", "failed: no failing step (blocked approval / infra)"
+    # unusual_conclusion: completed with timed_out / neutral / …
     return "skip", f"conclusion '{run.conclusion}'"
 
 
