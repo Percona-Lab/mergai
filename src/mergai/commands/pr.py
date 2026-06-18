@@ -1,3 +1,4 @@
+import json
 from collections.abc import Callable
 from dataclasses import dataclass
 from urllib.parse import quote, urlencode
@@ -9,7 +10,12 @@ from github import PullRequest as GithubPullRequest
 from ..app import AppContext
 from ..models import MarkdownConfig
 from ..utils import formatters, git_utils, util
-from ..utils.branch_name_builder import BranchNameBuilder, BranchType
+from ..utils.branch_name_builder import (
+    BranchNameBuilder,
+    BranchType,
+    ParsedBranchName,
+)
+from ..utils.output import OutputFormat, format_option
 from .util import ensure_gh_repo
 
 
@@ -690,6 +696,186 @@ def comment(app: AppContext, pr_type: str | None, body: str, allow_missing: bool
         raise click.ClickException(msg)
     pr.create_issue_comment(body)
     click.echo(f"Commented on PR #{pr.number}: {pr.html_url}")
+
+
+def _sha_matches(parsed_sha: str, requested_sha: str) -> bool:
+    """Whether a parsed branch SHA matches a requested SHA by prefix.
+
+    The branch carries a short SHA (``merge_commit_short_sha``, 11 chars by
+    default) while ``--sha`` may be passed as a full or short SHA, so match if
+    either is a prefix of the other. SHAs are compared case-insensitively.
+    """
+    parsed_sha = parsed_sha.lower()
+    requested_sha = requested_sha.lower()
+    return parsed_sha.startswith(requested_sha) or requested_sha.startswith(parsed_sha)
+
+
+_STATE_TO_GH = {"open": "open", "closed": "closed", "merged": "closed", "all": "all"}
+
+
+def _branch_carries_full_sha(name_format: str) -> bool:
+    """Whether the branch name embeds the full merge SHA (not the short form).
+
+    ``%(merge_commit_sha)`` is not a substring of ``%(merge_commit_short_sha)``,
+    so this cleanly distinguishes the two configured formats.
+    """
+    return "%(merge_commit_sha)" in name_format
+
+
+def _resolve_full_merge_sha(
+    app: AppContext, pr: GithubPullRequest.PullRequest, parsed: ParsedBranchName
+) -> str | None:
+    """Best-effort full merge commit SHA for a PR.
+
+    Prefers the SHA recorded in the PR's mergai note (read from its head
+    commit); falls back to the branch-encoded SHA when the configured branch
+    format already embeds the full SHA. Returns ``None`` when neither yields a
+    full SHA (note not fetched and the branch only carries the short SHA).
+    """
+    note = app.try_get_note_from_commit(pr.head.sha)
+    if note is not None:
+        return note.merge_info.merge_commit_sha
+    if _branch_carries_full_sha(app.config.branch.name_format):
+        return parsed.merge_commit_sha
+    return None
+
+
+def _emit_missing_note_hint(enriched) -> None:
+    """Warn (to stderr) if any listed PR's full merge SHA couldn't be resolved.
+
+    The full merge SHA comes from the note, which lives in ``refs/notes/mergai``
+    and is not fetched by default - so suggest updating notes. PRs whose branch
+    format already embeds the full SHA never count here.
+    """
+    missing = sum(1 for _, _, full_sha in enriched if full_sha is None)
+    if missing == 0:
+        return
+    click.echo(
+        f"hint: {missing} PR(s) have no local mergai note; their full merge SHA is "
+        "unavailable. Update notes with: "
+        "git fetch origin 'refs/notes/mergai:refs/notes/mergai'",
+        err=True,
+    )
+
+
+@pr.command("list")
+@click.pass_obj
+@click.option(
+    "--sha",
+    "sha",
+    type=str,
+    default=None,
+    help="Only list PRs for this picked upstream SHA (matched by prefix).",
+)
+@click.option(
+    "--state",
+    "state",
+    type=click.Choice(list(_STATE_TO_GH), case_sensitive=False),
+    default="open",
+    show_default=True,
+    help="Which PR states to include.",
+)
+@click.option(
+    "--type",
+    "pr_type",
+    type=click.Choice(
+        ["main", "conflict", "solution", "semantic"], case_sensitive=False
+    ),
+    default=None,
+    help="Only list PRs whose head branch is of this type.",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    "quiet",
+    is_flag=True,
+    default=False,
+    help="Print only PR numbers, one per line; nothing when none match.",
+)
+@format_option(default=OutputFormat.TEXT)
+def list_prs(
+    app: AppContext,
+    sha: str | None,
+    state: str,
+    pr_type: str | None,
+    quiet: bool,
+    format: str,
+):
+    """List mergai-managed pull requests.
+
+    Only PRs whose head branch parses as a mergai branch name (per the
+    configured branch name_format) are listed; arbitrary repo PRs are never
+    shown. Lists open PRs by default. A run with no matches still exits 0
+    (printing nothing under --quiet), so callers can capture output in a shell
+    variable; GitHub API errors still surface as failures.
+
+    \b
+        # is any merge in progress?
+        mergai pr --repo owner/name list -q
+        # is this same pick in progress?
+        mergai pr --repo owner/name list --sha <SHA> -q
+    """
+    pulls = app.gh_repo.get_pulls(state=_STATE_TO_GH[state], sort="created")
+
+    matches = []
+    for pr in pulls:
+        parsed = BranchNameBuilder.parse_branch_name_with_config(
+            pr.head.ref, app.config.branch
+        )
+        if parsed is None:
+            continue
+        if state == "merged" and pr.merged_at is None:
+            continue
+        if sha is not None and not _sha_matches(parsed.merge_commit_sha, sha):
+            continue
+        if pr_type is not None and parsed.branch_type != pr_type.lower():
+            continue
+        matches.append((pr, parsed))
+
+    if quiet:
+        for pr, _ in matches:
+            click.echo(pr.number)
+        return
+
+    # Resolve the full merge commit SHA for the human/JSON output only - the
+    # quiet path above never needs it.
+    enriched = [
+        (pr, parsed, _resolve_full_merge_sha(app, pr, parsed)) for pr, parsed in matches
+    ]
+
+    if format == OutputFormat.JSON.value:
+        click.echo(
+            json.dumps(
+                [
+                    {
+                        "number": pr.number,
+                        "url": pr.html_url,
+                        "title": pr.title,
+                        "state": pr.state,
+                        "merged": pr.merged_at is not None,
+                        "head": pr.head.ref,
+                        "base": pr.base.ref,
+                        "target_branch": parsed.target_branch,
+                        "branch_merge_commit_sha": parsed.merge_commit_sha,
+                        "merge_commit_sha": full_sha,
+                        "type": parsed.branch_type,
+                    }
+                    for pr, parsed, full_sha in enriched
+                ],
+                indent=2,
+                default=str,
+            )
+        )
+        _emit_missing_note_hint(enriched)
+        return
+
+    if not enriched:
+        click.echo("No matching PRs.")
+        return
+    for pr, _, full_sha in enriched:
+        show_prs([pr])
+        click.echo(f"  Merge SHA  : {full_sha or '(note unavailable)'}")
+    _emit_missing_note_hint(enriched)
 
 
 def show_prs(prs):

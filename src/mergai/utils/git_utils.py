@@ -538,7 +538,15 @@ def commit_would_conflict(
 
 def get_note_from_commit(repo: Repo, ref: str, commit: str) -> str | None:
     try:
-        note: str = repo.git.notes("--ref", ref, "show", repo.commit(commit).hexsha)
+        # Resolve refs/short SHAs to a full SHA when the object is present
+        # locally. When it isn't (e.g. a PR head branch that wasn't fetched),
+        # fall back to the given value: `git notes show` derives the note path
+        # from the SHA hex and can find the note without the commit object.
+        try:
+            target = repo.commit(commit).hexsha
+        except Exception:
+            target = commit
+        note: str = repo.git.notes("--ref", ref, "show", target)
         return note
     except Exception:
         return None
