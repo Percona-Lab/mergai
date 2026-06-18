@@ -1367,9 +1367,11 @@ class AppContext:
 
         target_sha = None
 
-        # Collect commits and their notes
+        # Collect commits and their notes. Follow only the first-parent chain:
+        # the merge commit's second parent is the upstream history being merged
+        # in, and its notes belong to prior merge operations, not this branch.
         commits_with_notes = []
-        for commit in self.repo.iter_commits():
+        for commit in self.repo.iter_commits(first_parent=True):
             # Stop BEFORE processing the target commit - its note belongs to a
             # previous merge operation and should not be included
             if target_sha and commit.hexsha == target_sha:
@@ -1551,7 +1553,10 @@ class AppContext:
 
         commits_to_sync = []
 
-        for commit in self.repo.iter_commits():
+        # Follow only the first-parent chain. Solution commits live on top of the
+        # merge commit; the merge's second parent is the upstream history being
+        # merged in, whose commits must not be treated as solutions to sync.
+        for commit in self.repo.iter_commits(first_parent=True):
             if commit.hexsha == target_sha_full:
                 break
 
