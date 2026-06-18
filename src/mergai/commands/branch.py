@@ -8,11 +8,14 @@ branch names used in the merge conflict resolution workflow:
 - solution: Branch with solution attempts; PRs are created from solution to conflict
 """
 
+import json
+
 import click
 
 from ..app import AppContext
 from ..utils import git_utils
-from ..utils.branch_name_builder import BranchType
+from ..utils.branch_name_builder import BranchNameBuilder, BranchType
+from ..utils.output import OutputFormat, format_option
 
 BRANCH_ALL = "all"
 
@@ -342,3 +345,155 @@ def switch(app: AppContext, type: str):
         click.echo(f"Switched to branch: {branch_name}")
     except Exception as e:
         raise click.ClickException(f"Failed to switch to branch: {e}") from e
+
+
+def _sha_matches(parsed_sha: str, requested_sha: str) -> bool:
+    """Whether a parsed branch SHA matches a requested SHA by prefix.
+
+    The branch carries a short SHA while ``--sha`` may be a full or short SHA,
+    so match if either is a prefix of the other (case-insensitively).
+    """
+    parsed_sha = parsed_sha.lower()
+    requested_sha = requested_sha.lower()
+    return parsed_sha.startswith(requested_sha) or requested_sha.startswith(parsed_sha)
+
+
+def _remote_mergai_refs(app: AppContext, remote: str = "origin") -> list[str]:
+    """Branch names under the mergai namespace on ``remote`` (empty on error)."""
+    prefix = app.config.branch.working_prefix
+    try:
+        out = app.repo.git.ls_remote("--heads", remote, f"{prefix}*")
+    except Exception as e:
+        click.echo(f"warning: failed to list remote branches: {e}", err=True)
+        return []
+    names = []
+    for line in out.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        # Each line is "<sha>\trefs/heads/<name>".
+        ref = line.split("\t", 1)[-1]
+        names.append(ref.removeprefix("refs/heads/"))
+    return names
+
+
+def _local_mergai_refs(app: AppContext) -> list[str]:
+    """Local branch names under the mergai namespace."""
+    prefix = app.config.branch.working_prefix
+    return [h.name for h in app.repo.heads if h.name.startswith(prefix)]
+
+
+@branch.command("list")
+@click.pass_obj
+@click.option(
+    "--sha",
+    "sha",
+    type=str,
+    default=None,
+    help="Only list branches for this picked upstream SHA (matched by prefix).",
+)
+@click.option(
+    "--type",
+    "branch_type",
+    type=click.Choice(COMMON_BRANCH_TYPES, case_sensitive=False),
+    default=None,
+    help="Only list branches of this type.",
+)
+@click.option(
+    "--remote", "scope_remote", is_flag=True, help="List remote branches only."
+)
+@click.option("--local", "scope_local", is_flag=True, help="List local branches only.")
+@click.option(
+    "--all",
+    "scope_all",
+    is_flag=True,
+    help="List both local and remote branches (default).",
+)
+@click.option(
+    "--quiet",
+    "-q",
+    "quiet",
+    is_flag=True,
+    default=False,
+    help="Print only branch names, one per line; nothing when none match.",
+)
+@format_option(default=OutputFormat.TEXT)
+def list_branches(
+    app: AppContext,
+    sha: str | None,
+    branch_type: str | None,
+    scope_remote: bool,
+    scope_local: bool,
+    scope_all: bool,
+    quiet: bool,
+    format: str,
+):
+    """List mergai-managed branches.
+
+    Only branches whose name parses as a mergai branch name (per the configured
+    branch name_format) are listed; arbitrary refs are never shown. Lists both
+    local and remote branches by default. This is a pure-git query (no GitHub
+    auth needed). A run with no matches still exits 0 (printing nothing under
+    --quiet), so callers can capture output in a shell variable.
+
+    \b
+        # are mergai branches already underway for a pick?
+        mergai branch list --sha <SHA> -q
+    """
+    if sum([scope_remote, scope_local, scope_all]) > 1:
+        raise click.ClickException("Use only one of --remote, --local, --all.")
+    include_local = scope_local or scope_all or not scope_remote
+    include_remote = scope_remote or scope_all or not scope_local
+
+    # Collect names per scope, then merge (a branch can be both local and remote).
+    scopes: dict[str, set[str]] = {}
+    if include_local:
+        for name in _local_mergai_refs(app):
+            scopes.setdefault(name, set()).add("local")
+    if include_remote:
+        for name in _remote_mergai_refs(app):
+            scopes.setdefault(name, set()).add("remote")
+
+    matches = []
+    for name in sorted(scopes):
+        parsed = BranchNameBuilder.parse_branch_name_with_config(
+            name, app.config.branch
+        )
+        if parsed is None:
+            continue
+        if sha is not None and not _sha_matches(parsed.merge_commit_sha, sha):
+            continue
+        if branch_type is not None and parsed.branch_type != branch_type.lower():
+            continue
+        scope = "+".join(sorted(scopes[name]))  # local, remote, or local+remote
+        matches.append((name, parsed, scope))
+
+    if quiet:
+        for name, _, _ in matches:
+            click.echo(name)
+        return
+
+    if format == OutputFormat.JSON.value:
+        click.echo(
+            json.dumps(
+                [
+                    {
+                        "name": name,
+                        "scope": scope,
+                        "target_branch": parsed.target_branch,
+                        "merge_commit_sha": parsed.merge_commit_sha,
+                        "type": parsed.branch_type,
+                    }
+                    for name, parsed, scope in matches
+                ],
+                indent=2,
+                default=str,
+            )
+        )
+        return
+
+    if not matches:
+        click.echo("No matching branches.")
+        return
+    for name, parsed, scope in matches:
+        click.echo(f"{name} [{scope}] (type={parsed.branch_type})")
