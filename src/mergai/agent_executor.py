@@ -9,11 +9,11 @@ from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
-import click
 import git
 
 from .agents.base import Agent
 from .utils import git_utils
+from .utils.output import echo_err as _echo
 
 
 class AgentExecutionError(Exception):
@@ -162,9 +162,9 @@ class AgentExecutor:
             session_path = self._save_session_on_failure()
 
             # Log file locations (prompt is already in state_dir)
-            click.echo(f"Prompt file kept at: {prompt_path}")
+            _echo(f"Prompt file kept at: {prompt_path}")
             if session_path:
-                click.echo(f"Session file saved at: {session_path}")
+                _echo(f"Session file saved at: {session_path}")
 
             raise
         finally:
@@ -203,7 +203,7 @@ class AgentExecutor:
 
         try:
             for attempt in range(self.max_attempts):
-                click.echo(f"Attempt {attempt + 1} of {self.max_attempts}...")
+                _echo(f"Attempt {attempt + 1} of {self.max_attempts}...")
 
                 # Remove response file before each attempt to ensure fresh response
                 if response_path.exists():
@@ -216,7 +216,7 @@ class AgentExecutor:
                 )
                 if not agent_result.success():
                     error_msg = str(agent_result.error())
-                    click.echo(f"Agent execution failed: {error_msg}")
+                    _echo(f"Agent execution failed: {error_msg}")
                     # Preserve file instructions and append error context for retry
                     current_prompt = (
                         f"{base_prompt}\n\n"
@@ -225,7 +225,7 @@ class AgentExecutor:
                     )
                     continue
 
-                click.echo("Agent execution succeeded. Checking result...")
+                _echo("Agent execution succeeded. Checking result...")
                 result = agent_result.result()
 
                 # Clean up response file before validation to avoid false positives
@@ -237,11 +237,11 @@ class AgentExecutor:
                 if validator is not None and result is not None:
                     validation_error = validator(result)
                     if validation_error is not None:
-                        click.echo(f"Validation failed: {validation_error}")
+                        _echo(f"Validation failed: {validation_error}")
                         # Check if validation failed due to file modifications
                         # In this case, retrying won't help since the repo is now dirty
                         if "Files were modified" in validation_error:
-                            click.echo(
+                            _echo(
                                 "Error: Agent modified files when it should not have. "
                                 "Failing immediately as retries would continue to fail."
                             )
@@ -256,11 +256,11 @@ class AgentExecutor:
                         )
                         continue
 
-                click.echo("Result verified.")
+                _echo("Result verified.")
                 return result  # type: ignore[return-value]
 
             # All attempts exhausted
-            click.echo("Max attempts reached. Failed to obtain a valid result.")
+            _echo("Max attempts reached. Failed to obtain a valid result.")
             raise AgentExecutionError("Failed to obtain a valid result from the agent.")
         finally:
             # Clean up response file
@@ -292,7 +292,7 @@ class AgentExecutor:
 
         # Check resolved files
         for path in solution["response"]["resolved"]:
-            click.echo(
+            _echo(
                 f"Checking file '{path}': {'dirty' if path in dirty_files else 'not dirty'}"
             )
             if path not in dirty_files:
@@ -300,7 +300,7 @@ class AgentExecutor:
 
         # Also check modified files (non-conflict files that were changed)
         for path in solution["response"].get("modified", {}):
-            click.echo(
+            _echo(
                 f"Checking modified file '{path}': {'dirty' if path in dirty_files else 'not dirty'}"
             )
             if path not in dirty_files:
@@ -509,7 +509,7 @@ class AgentExecutor:
             return f"Files were modified during operation. No file modifications are allowed. Modified files: {files_list}"
         elif is_dirty_after and was_dirty_before:
             # Repo was already dirty - we can't verify if new modifications were made
-            click.echo(
+            _echo(
                 "Warning: Repository was already dirty before operation. "
                 "Cannot verify if new modifications were made."
             )

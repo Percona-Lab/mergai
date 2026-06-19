@@ -3,8 +3,7 @@ import os
 import subprocess
 from pathlib import Path
 
-import click
-
+from ..utils.output import echo_err as _echo
 from .base import CliAgent
 from .error import AgentError, AgentErrorType, AgentResult
 from .response_utils import parse_response_json
@@ -339,7 +338,7 @@ class ClaudeCLIAgent(CliAgent):
         """
         args = self.build_args(prompt, allowed_write_paths)
 
-        click.echo(f"Running command: '{' '.join(args)}'")
+        _echo(f"Running command: '{' '.join(args)}'")
         proc = subprocess.Popen(
             args,
             stdout=subprocess.PIPE,
@@ -355,7 +354,7 @@ class ClaudeCLIAgent(CliAgent):
             raise AgentError(AgentErrorType.AGENT_EXECUTION, "stdout is None")
 
         for line in proc.stdout:
-            click.echo(f"claude: {line}", nl=False)
+            _echo(f"claude: {line}", nl=False)
             try:
                 event = json.loads(line)
                 event_type = event.get("type", "")
@@ -364,7 +363,7 @@ class ClaudeCLIAgent(CliAgent):
                 if event_type == "system" and event.get("subtype") == "init":
                     if "session_id" in event and not self.session_id:
                         self.session_id = event["session_id"]
-                        click.echo(f"claude: received session_id: {self.session_id}")
+                        _echo(f"claude: received session_id: {self.session_id}")
 
                 elif event_type == "assistant":
                     # Assistant message with content
@@ -393,13 +392,13 @@ class ClaudeCLIAgent(CliAgent):
                     if "result" in event:
                         result["text_result"] = event["result"]
 
-                    click.echo(f"claude: received result: {result.get('status')}")
+                    _echo(f"claude: received result: {result.get('status')}")
 
                 elif event_type == "rate_limit_event":
                     # Log rate limit info
                     rate_info = event.get("rate_limit_info", {})
                     if rate_info.get("status") != "allowed":
-                        click.echo(f"claude: rate limit status: {rate_info}")
+                        _echo(f"claude: rate limit status: {rate_info}")
 
             except json.JSONDecodeError:
                 # Non-JSON line, might be status message
@@ -458,12 +457,12 @@ class ClaudeCLIAgent(CliAgent):
         if not prompt or prompt.strip() == "":
             raise ValueError("Prompt cannot be empty")
 
-        click.echo(f"Running Claude CLI agent with prompt:\n{prompt}")
+        _echo(f"Running Claude CLI agent with prompt:\n{prompt}")
 
         try:
             result = self.run_prompt(prompt, allowed_write_paths)
         except AgentError as e:
-            click.echo(f"Agent execution error: {e}")
+            _echo(f"Agent execution error: {e}")
             return AgentResult(error=e)
 
         # If response_file is provided, try reading from file first
@@ -483,32 +482,32 @@ class ClaudeCLIAgent(CliAgent):
                     )
             else:
                 # Fallback: parse JSON from stdout response
-                click.echo(
+                _echo(
                     "Warning: Response file not found, falling back to stdout parsing..."
                 )
                 try:
                     result = parse_response_json(result)
                 except AgentError as e:
-                    click.echo("Error parsing Claude CLI response")
-                    click.echo("--- Start of Claude CLI response ---")
-                    click.echo(f"{result.get('response', '')}")
-                    click.echo("--- End of Claude CLI response ---")
+                    _echo("Error parsing Claude CLI response")
+                    _echo("--- Start of Claude CLI response ---")
+                    _echo(f"{result.get('response', '')}")
+                    _echo("--- End of Claude CLI response ---")
                     return AgentResult(error=e)
         else:
             # No response file provided: parse JSON from stdout response
             try:
                 result = parse_response_json(result)
             except AgentError as e:
-                click.echo("Error parsing Claude CLI response")
-                click.echo("--- Start of Claude CLI response ---")
-                click.echo(f"{result.get('response', '')}")
-                click.echo("--- End of Claude CLI response ---")
+                _echo("Error parsing Claude CLI response")
+                _echo("--- Start of Claude CLI response ---")
+                _echo(f"{result.get('response', '')}")
+                _echo("--- End of Claude CLI response ---")
                 return AgentResult(error=e)
 
         try:
             version = self.get_version()
         except AgentError as e:
-            click.echo(f"Error getting version: {e}")
+            _echo(f"Error getting version: {e}")
             return AgentResult(error=e)
 
         result["agent_info"] = {
