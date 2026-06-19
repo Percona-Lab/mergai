@@ -9,6 +9,17 @@ from enum import Enum
 import click
 
 
+def echo_err(*args, **kwargs):
+    """Emit progress/diagnostics on stderr so stdout stays capture-safe.
+
+    Agent runs are invoked via ``$(...)`` capture (e.g.
+    ``fork merge-pick --ai --next``), where stdout must carry only the result.
+    Routing diagnostics through stderr keeps that capture clean.
+    """
+    kwargs.setdefault("err", True)
+    click.echo(*args, **kwargs)
+
+
 class OutputFormat(str, Enum):
     """Supported output formats for CLI commands."""
 
