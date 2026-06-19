@@ -642,20 +642,37 @@ class AppContext:
         if not self.repo.is_dirty():
             raise Exception("No changes to commit in the repository.")
 
-        # Track modified files (files changed but not in the solution's resolved list)
+        # Stage the solution's files. Conflict files are listed under
+        # `resolved`; non-conflict files the agent also had to touch (e.g. an
+        # auto-merged file it adjusted) are declared under `modified` and
+        # recorded in the commit body. Any other *tracked* file with unstaged
+        # changes is unexpected and aborts the commit. We inspect only tracked
+        # unstaged changes (`index.diff(None)`): a conflicted merge legitimately
+        # leaves its auto-merged files staged in the index and those must be
+        # committed, while untracked files are never added to the commit.
+        # is_dirty() was already asserted above, so iterate the diff directly.
+        resolved = solution["response"]["resolved"]
+        declared_modified = solution["response"].get("modified", {})
         modified_files = []
-        if self.repo.is_dirty():
-            for item in self.repo.index.diff(None):
-                if item.a_path not in solution["response"]["resolved"]:
-                    message = f"Unstaged changes found in file {item.a_path}, which is not in the solution."
-                    message += "\n\n"
-                    message += "This use case is not supported yet."
-                    message += (
-                        "Please stage only the files in the solution and try again."
-                    )
-                    raise Exception(message)
-
-                self.repo.index.add([item.a_path])
+        for item in self.repo.index.diff(None):
+            path = item.a_path
+            if path in resolved:
+                self.repo.index.add([path])
+            elif path in declared_modified:
+                modified_files.append(path)
+                self.repo.index.add([path])
+            else:
+                message = (
+                    f"Unstaged changes found in file {path}, which the "
+                    "solution declared in neither 'resolved' nor 'modified'."
+                )
+                message += "\n\n"
+                message += (
+                    "Declare the file under the solution's 'modified' "
+                    "section if the change is intended, or revert it, then "
+                    "try again."
+                )
+                raise Exception(message)
 
         # Build commit message following Git's merge commit style
         target_branch = self.branches.target_branch
