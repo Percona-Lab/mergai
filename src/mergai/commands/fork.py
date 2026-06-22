@@ -5,8 +5,9 @@ import click
 from git import Commit
 
 from ..app import AppContext
-from ..config import DEFAULT_CONFIG_PATH, MergePicksConfig
+from ..config import DEFAULT_CONFIG_PATH, MergeGateConfig, MergePicksConfig
 from ..merge_pick_strategies import MergePickCommit, MergePickStrategyContext
+from ..merge_pick_strategies.gate import GateDecision, evaluate_merge_gate
 from ..utils import git_utils
 from ..utils.output import OutputFormat, format_option
 from ..utils.util import (
@@ -183,6 +184,132 @@ def get_prioritized_commits(
     return prioritized
 
 
+def restrict_to_window(
+    unmerged_commit_shas: list[str], max_commits: int | None
+) -> tuple[list[str], int]:
+    """Restrict candidates to the oldest ``max_commits`` unmerged commits.
+
+    ``unmerged_commit_shas`` is newest-first, so the oldest ``max_commits``
+    commits are the *tail* of the list. The candidate window
+    (``base..base+max_commits``) bounds both the merge batch and the AI prompt
+    size; commits newer than the window are omitted here and drained by later
+    merges.
+
+    Args:
+        unmerged_commit_shas: All unmerged commit SHAs, newest first.
+        max_commits: Batch ceiling, or None/<=0 to disable capping.
+
+    Returns:
+        A tuple of ``(window_shas_newest_first, omitted_count)`` where
+        ``omitted_count`` is the number of newer commits dropped from the window.
+    """
+    if (
+        max_commits is None
+        or max_commits <= 0
+        or len(unmerged_commit_shas) <= max_commits
+    ):
+        return unmerged_commit_shas, 0
+    window = unmerged_commit_shas[-max_commits:]
+    omitted = len(unmerged_commit_shas) - max_commits
+    return window, omitted
+
+
+def resolve_deterministic_sha(
+    window_shas: list[str],
+    prioritized: list[MergePickCommit],
+    gate_cfg: MergeGateConfig,
+) -> str | None:
+    """Resolve the deterministic next-pick sha within the candidate window.
+
+    Walks the window oldest-first and cuts at:
+
+    * a ``force_strategies`` match *below* ``min_commits`` - a risky commit
+      (e.g. conflict / important_files) is merged in its own small batch
+      rather than deferred; otherwise
+    * the first prioritized strategy match once at least ``min_commits``
+      commits would be merged - the first boundary in the
+      ``[min_commits, max_commits]`` band, forced or not; otherwise
+    * the window tip - the ``max_commits`` boundary (the window never extends
+      past ``max_commits``).
+
+    A forced match at or after ``min_commits`` gets no special priority: it is
+    just one of the in-band boundaries, so the earliest in-band boundary wins.
+    A forced commit sitting past an earlier in-band boundary is excluded from
+    this batch and picked up by a later one (where it falls below
+    ``min_commits`` and triggers the early cut). Non-forced matches before
+    ``min_commits`` are skipped so batches are not nibbled one boundary at a
+    time.
+
+    Args:
+        window_shas: Candidate window SHAs, newest first.
+        prioritized: Prioritized commits within the window (oldest first).
+        gate_cfg: Merge-gate config (``min_commits``, ``force_strategies``).
+
+    Returns:
+        The chosen full SHA, or None when the window is empty.
+    """
+    if not window_shas:
+        return None
+
+    strategy_by_sha = {pc.commit.hexsha: pc.strategy_name for pc in prioritized}
+    force = set(gate_cfg.force_strategies or [])
+
+    # Oldest-first walk; `count` is how many commits a cut here would merge.
+    oldest_first = list(reversed(window_shas))
+    for count, sha in enumerate(oldest_first, start=1):
+        strategy = strategy_by_sha.get(sha)
+        if strategy is None:
+            continue
+        if strategy in force and count < gate_cfg.min_commits:
+            return sha  # forced match below min: cut early to isolate it
+        if count >= gate_cfg.min_commits:
+            return sha  # first in-band boundary (forced or not)
+
+    # No forced match below min and no in-band boundary: cut at the window tip
+    # (the max boundary; the window never extends past max_commits).
+    return oldest_first[-1]
+
+
+def compute_gate(
+    app: AppContext,
+    fork_status,
+    upstream_ref: str,
+    fork_ref: str,
+) -> tuple[GateDecision, list[str], int, list[MergePickCommit]]:
+    """Evaluate the merge gate over the candidate window.
+
+    Computes the candidate window from ``merge_gate.max_commits``, the
+    prioritized commits within it (used for force-strategy detection and the
+    deterministic pick), and the gate decision.
+
+    Returns:
+        A tuple of ``(decision, window_shas, omitted_count, prioritized)``.
+    """
+    merge_picks_config = app.config.fork.merge_picks or MergePicksConfig()
+    gate_cfg = app.config.fork.merge_gate
+
+    window_shas, omitted = restrict_to_window(
+        fork_status.unmerged_commit_shas, gate_cfg.max_commits
+    )
+
+    # Only walk the window when there are strategies to evaluate. With no
+    # strategies, get_prioritized_commits would load every commit object in the
+    # window for nothing - wasteful now that `fork status` calls this on every
+    # diverged status. An empty `prioritized` is correct here: the gate's
+    # force-strategy check has nothing to match, and the deterministic resolver
+    # falls back to the window tip regardless.
+    if merge_picks_config.strategies:
+        context = MergePickStrategyContext(upstream_ref=upstream_ref, fork_ref=fork_ref)
+        prioritized = get_prioritized_commits(
+            app.repo, window_shas, merge_picks_config, context
+        )
+    else:
+        prioritized = []
+
+    decision = evaluate_merge_gate(fork_status, prioritized, gate_cfg)
+    return decision, window_shas, omitted, prioritized
+
+
 def build_status_summary(
     app: AppContext,
     fork_status,
@@ -319,6 +446,7 @@ def build_status_json(
     upstream_ref: str,
     prioritized: list[MergePickCommit] | None = None,
     include_commits: bool = False,
+    gate: GateDecision | None = None,
 ) -> dict:
     """Build JSON representation of fork status.
 
@@ -328,6 +456,7 @@ def build_status_json(
         upstream_ref: Resolved upstream ref string.
         prioritized: Optional list of prioritized commits with strategy info.
         include_commits: Whether to include the full list of unmerged commits.
+        gate: Optional merge-gate decision to surface under a ``gate`` key.
 
     Returns:
         Dictionary suitable for JSON serialization.
@@ -341,6 +470,10 @@ def build_status_json(
 
     # Add fork status info (includes divergence, key commits, etc.)
     result.update(fork_status.to_dict())
+
+    # Surface the merge-gate decision for the Fork Status page / automation.
+    if gate is not None:
+        result["gate"] = {"open": gate.open, "reason": gate.reason}
 
     # Add unmerged commits list if requested (-l flag)
     if include_commits and not fork_status.is_up_to_date:
@@ -538,6 +671,35 @@ def status(
             context,
         )
 
+    # Evaluate the merge gate (go/no-go) when diverged so it can be surfaced
+    # alongside the divergence info. Guarded so a gate failure never breaks
+    # status output.
+    gate_decision: GateDecision | None = None
+    if not fork_status.is_up_to_date:
+        try:
+            if prioritized is not None:
+                # Reuse the prioritized list already computed for -p instead of
+                # recomputing it: the gate only needs the window subset for its
+                # force-strategy check, and filtering the full (oldest-first)
+                # list to the window is equivalent to evaluating over the window.
+                gate_cfg = app.config.fork.merge_gate
+                window_shas, _ = restrict_to_window(
+                    fork_status.unmerged_commit_shas, gate_cfg.max_commits
+                )
+                window_set = set(window_shas)
+                window_prioritized = [
+                    pc for pc in prioritized if pc.commit.hexsha in window_set
+                ]
+                gate_decision = evaluate_merge_gate(
+                    fork_status, window_prioritized, gate_cfg
+                )
+            else:
+                gate_decision, _, _, _ = compute_gate(
+                    app, fork_status, upstream_ref, fork_ref
+                )
+        except Exception as e:
+            log.warning("Failed to evaluate merge gate: %s", e, exc_info=True)
+
     # Handle JSON output format
     if format == OutputFormat.JSON.value:
         output_dict = build_status_json(
@@ -546,12 +708,21 @@ def status(
             upstream_ref,
             prioritized=prioritized if show_merge_picks else None,
             include_commits=list_commits,
+            gate=gate_decision,
         )
         print(json.dumps(output_dict, indent=2, default=str))
         return
 
     # Build status summary output (text format)
     output_lines = build_status_summary(app, fork_status, upstream_ref)
+    if gate_decision is not None:
+        # The closed-gate reason already begins with "wait (...)", so only the
+        # open case needs a state prefix - avoids "wait (wait (...))".
+        if gate_decision.open:
+            output_lines.append(f"Merge gate:       open ({gate_decision.reason})")
+        else:
+            output_lines.append(f"Merge gate:       {gate_decision.reason}")
+        output_lines.append("")
 
     # Commit listing based on options:
     # -p only: show only merge picks
@@ -616,12 +787,47 @@ def status(
     default=False,
     help="List all unmerged commits with picks marked (like fork status -lp)",
 )
+@click.option(
+    "--plan",
+    "plan",
+    is_flag=True,
+    default=False,
+    help=(
+        "Token-free phase-1 decision: evaluate the merge gate and print a JSON "
+        "decision (wait / merge). Deterministic mode resolves the sha; AI mode "
+        "leaves it null."
+    ),
+)
+@click.option(
+    "--gate",
+    "gate",
+    is_flag=True,
+    default=False,
+    help=(
+        "Token-free gate-respecting deterministic pick: re-checks the gate "
+        "(unless --force) and prints the gate-windowed deterministic pick as a "
+        "bare sha - a forced-strategy match below min_commits, else the first "
+        "prioritized match within the [min_commits, max_commits] band, else the "
+        "window tip. Prints nothing when up to date or the gate is closed. The "
+        "deterministic sibling of --ai, independent of fork.ai_pick.enabled."
+    ),
+)
+@click.option(
+    "--force",
+    "force",
+    is_flag=True,
+    default=False,
+    help="With --gate, skip the gate re-check and pick regardless.",
+)
 def merge_pick(
     app: AppContext,
     upstream_ref: str | None,
     fork_ref: str,
     next_only: bool,
     list_commits: bool,
+    plan: bool,
+    gate: bool,
+    force: bool,
 ):
     """Suggest commits to merge based on configured priority strategies.
 
@@ -638,14 +844,33 @@ def merge_pick(
 
     Use --next/-n to get just the hash of the recommended next commit.
     Use --list/-l to show all unmerged commits with picks marked.
+    Use --plan for the token-free gate decision (JSON), and --gate for the
+    gate-respecting deterministic pick.
 
     \b
     Examples:
         mergai fork merge-pick                    # List prioritized commits
         mergai fork merge-pick --list             # List all commits with picks marked
         mergai fork merge-pick --next             # Get next commit hash
+        mergai fork merge-pick --plan             # Phase-1 gate decision (JSON)
+        mergai fork merge-pick --gate             # Gate-respecting deterministic pick (sha only)
         mergai fork merge-pick mongodb/master     # Use specific upstream ref
     """
+    selected_modes = [
+        name for name, used in (("--plan", plan), ("--gate", gate)) if used
+    ]
+    if len(selected_modes) > 1:
+        click.echo(
+            f"Error: {', '.join(selected_modes)} are mutually exclusive.", err=True
+        )
+        raise SystemExit(1)
+
+    # --force applies to the gate-respecting pick (--gate). Fail fast rather than
+    # silently ignore so automation can't come to rely on a no-op flag.
+    if force and not gate:
+        click.echo("Error: --force requires --gate.", err=True)
+        raise SystemExit(1)
+
     upstream_ref = resolve_upstream_ref(app, upstream_ref)
 
     # Get fork status to obtain unmerged commits
@@ -654,6 +879,14 @@ def merge_pick(
     except Exception as e:
         click.echo(f"Error: Failed to get fork status: {e}", err=True)
         raise SystemExit(1) from e
+
+    if plan:
+        _merge_pick_plan(app, fork_status, upstream_ref, fork_ref)
+        return
+
+    if gate:
+        _merge_pick_gate(app, fork_status, upstream_ref, fork_ref, force)
+        return
 
     if fork_status.is_up_to_date:
         # No unmerged commits - nothing to do
@@ -717,3 +950,87 @@ def merge_pick(
                 output_lines.append("(no merge picks found)")
 
         print_or_page("\n".join(output_lines))
+
+
+def _merge_pick_plan(
+    app: AppContext,
+    fork_status,
+    upstream_ref: str,
+    fork_ref: str,
+) -> None:
+    """Phase-1 decision (token-free): print the gate's JSON decision.
+
+    Evaluates the merge gate and reads the mode from ``fork.ai_pick.enabled``.
+    In deterministic mode the sha is resolved here (capped to the
+    ``max_commits`` window); in AI mode the sha is left null (decided in
+    phase 2). When the fork is up to date, reports ``wait``.
+    """
+    if fork_status.is_up_to_date:
+        print(json.dumps({"action": "wait", "reason": "up to date (0 commits)"}))
+        return
+
+    decision, window_shas, _omitted, prioritized = compute_gate(
+        app, fork_status, upstream_ref, fork_ref
+    )
+
+    if not decision.open:
+        print(json.dumps({"action": "wait", "reason": decision.reason}))
+        return
+
+    if app.config.fork.ai_pick.enabled:
+        output = {
+            "action": "merge",
+            "mode": "ai",
+            "sha": None,
+            "reason": decision.reason,
+        }
+    else:
+        output = {
+            "action": "merge",
+            "mode": "deterministic",
+            "sha": resolve_deterministic_sha(
+                window_shas, prioritized, app.config.fork.merge_gate
+            ),
+            "reason": decision.reason,
+        }
+    print(json.dumps(output))
+
+
+def _merge_pick_gate(
+    app: AppContext,
+    fork_status,
+    upstream_ref: str,
+    fork_ref: str,
+    force: bool,
+) -> None:
+    """Gate-respecting deterministic pick (token-free), as a bare sha.
+
+    The deterministic sibling of ``_merge_pick_ai``: re-checks the merge gate
+    (unless ``force``) and, when it is open, prints the gate-windowed
+    deterministic pick (see ``resolve_deterministic_sha`` - a forced match
+    below ``min_commits``, else the first prioritized match in the
+    ``[min_commits, max_commits]`` band, else the window tip; the window never
+    advances past ``max_commits``). Prints nothing (exit 0) when the fork is up
+    to date or the gate is closed, so callers can capture stdout safely.
+    Independent of
+    ``fork.ai_pick.enabled`` (that flag only affects ``--plan``'s reported mode).
+    """
+    if fork_status.is_up_to_date:
+        return
+
+    decision, window_shas, _omitted, prioritized = compute_gate(
+        app, fork_status, upstream_ref, fork_ref
+    )
+
+    if not force and not decision.open:
+        click.echo(f"Merge gate closed: {decision.reason}", err=True)
+        return
+
+    sha = resolve_deterministic_sha(
+        window_shas, prioritized, app.config.fork.merge_gate
+    )
+    if sha is None:
+        click.echo("No candidate commits in the window.", err=True)
+        return
+
+    click.echo(sha)

@@ -72,6 +72,18 @@ fork:
       - important_files:
           - src/core/critical_module.cpp
           - src/api/public_api.h
+  merge_gate:
+    min_commits: 50          # merge once this many unmerged commits accumulate
+    max_age_days: 2          # ...or sooner if the oldest unmerged commit is older than this
+    max_commits: 150         # never advance more than this many commits in one merge
+    force_strategies:        # ...or as soon as one of these strategies matches
+      - conflict
+      - important_files
+  ai_pick:
+    enabled: false                             # false = deterministic pick (default)
+    agent: claude-cli:claude-opus-4-5          # same format as resolve.agent
+    rules_file: .mergai/merge_pick_rules.md    # project-specific rules (optional)
+    fallback: deterministic                    # on agent error / invalid sha: deterministic | error
 
 resolve:
   # Agent format: <agent-type>[:<model>]
@@ -129,6 +141,48 @@ The `fork.merge_picks.strategies` list defines how `mergai fork merge-pick` prio
 | `important_files: [...]` | Prioritizes commits that modify any of the listed file paths |
 
 Set `most_recent_fallback: true` to select the most recent unmerged commit when no strategy matches.
+
+### Merge Gate and AI Pick
+
+A deterministic **gate** decides *when* to merge; the **pick** (deterministic or AI) decides *which* upstream commit to merge to. The gate is a pure go/no-go decision over already-computed fork status, so it needs no AI tokens and is safe to run in an unprivileged/periodic phase.
+
+`fork.merge_gate` opens the gate when any of the following hold (in order):
+
+| Setting | Default | Opens the gate when... |
+|---------|---------|------------------------|
+| `force_strategies` | `[conflict, important_files]` | any prioritized commit matches one of these strategies (reason `force:<name>`) |
+| `min_commits` | `50` | at least this many unmerged commits have accumulated |
+| `max_age_days` | `2` | the oldest unmerged commit is at least this many days old |
+| `max_commits` | `150` | (not a trigger) batch ceiling: a single merge never advances more than this many commits |
+
+`max_commits` defines the **candidate window** - the oldest `max_commits` unmerged commits (`base..base+max_commits`). It bounds both the merge batch size and the AI prompt size; commits newer than the window are omitted (counted) and drained by later merges. Defaults are tied to the historical merge cadence (median ~47 commits/merge, p75 ~67).
+
+`fork.ai_pick` controls the pick made once the gate opens:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `enabled` | `false` | When `false`, the pick is deterministic. When `true`, an AI agent chooses the merge boundary within the window. |
+| `agent` | `""` | Agent descriptor (e.g. `claude-cli:claude-opus-4-5`), same format as `resolve.agent`. Empty falls back to `resolve.agent`. |
+| `rules_file` | `""` | Optional path to a project-specific merge-pick rules markdown file, appended to the built-in system prompt. |
+| `fallback` | `deterministic` | On agent error / invalid sha: `deterministic` (resilient) or `error`. |
+
+The two phases are exposed as:
+
+```bash
+mergai fork merge-pick --plan            # token-free gate decision (JSON): wait / merge (+ mode, sha)
+mergai fork merge-pick --ai --next       # privileged AI pick within the window; prints the chosen sha
+mergai fork merge-pick --ai --force      # skip the gate re-check and pick regardless
+```
+
+`--plan` emits a JSON decision the periodic workflow consumes, e.g.:
+
+```json
+{ "action": "wait", "reason": "wait (12 < 50 commits; oldest 0.3d < 2d)" }
+{ "action": "merge", "mode": "deterministic", "sha": "<sha>", "reason": "min_commits (63 >= 50)" }
+{ "action": "merge", "mode": "ai", "sha": null, "reason": "force:conflict" }
+```
+
+The gate decision is also surfaced in `mergai fork status` (text and `--json`).
 
 ### Branch Naming Format
 
@@ -196,6 +250,9 @@ Notes are automatically attached when using `mergai commit` subcommands. Use `me
 |---------|-------------|
 | `mergai config` | Configure git settings (conflictstyle, notes display) |
 | `mergai fork merge-pick` | Get prioritized commits from upstream based on configured strategies |
+| `mergai fork merge-pick --plan` | Token-free merge-gate decision (JSON): whether to merge and which sha (deterministic mode) |
+| `mergai fork merge-pick --gate` | Token-free gate-respecting deterministic pick within the candidate window (bare sha) |
+| `mergai fork merge-pick --ai` | AI-assisted pick of the merge boundary within the candidate window |
 | `mergai fork fetch` | Fetch upstream repository |
 | `mergai context init` | Initialize merge context with commit SHA and target branch |
 | `mergai notes update` | Fetch and merge notes from remote |

@@ -21,6 +21,132 @@ DEFAULT_COMMIT_FIELDS = ["hexsha"]
 
 
 @dataclass
+class MergeGateConfig:
+    """Deterministic gate controlling *when* a merge happens.
+
+    The gate is a pure go/no-go decision evaluated over already-computed fork
+    status + prioritized commits (no AI tokens), so it is safe to run in the
+    unprivileged periodic phase. It is mode-agnostic: it only decides whether to
+    merge now, not which commit to merge to.
+
+    Attributes:
+        min_commits: Merge once at least this many unmerged commits accumulate.
+        max_age_days: ...or sooner if the oldest unmerged commit is older than
+            this many days.
+        max_commits: Never advance more than this many upstream commits in a
+            single merge. Defines the candidate window (the oldest
+            ``max_commits`` unmerged commits); bounds both the merge batch size
+            and the AI prompt size. Commits newer than the window are omitted
+            and drained by later merges.
+        force_strategies: Merge-pick strategy names that, when any prioritized
+            commit matches one, open the gate immediately regardless of count or
+            age (e.g. ``conflict``, ``important_files``).
+    """
+
+    min_commits: int = 50
+    max_age_days: int = 2
+    max_commits: int = 150
+    force_strategies: list[str] = field(
+        default_factory=lambda: ["conflict", "important_files"]
+    )
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "MergeGateConfig":
+        """Create a MergeGateConfig from a dictionary.
+
+        Raises:
+            ValueError: If an integer field is non-integer, or
+                ``force_strategies`` is neither a string nor a list of strings.
+        """
+
+        def _int(name: str, default: int) -> int:
+            # `null` (key present, value None) falls back to the default; a
+            # non-integer fails fast here rather than later as a TypeError in
+            # gate evaluation (e.g. ``commits_behind >= None``). bool is a
+            # subclass of int but is almost certainly a YAML mistake here.
+            value = data.get(name)
+            if value is None:
+                return default
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(
+                    f"'merge_gate.{name}' must be an integer, "
+                    f"got {type(value).__name__}"
+                )
+            return value
+
+        # `null` (key present, value None) falls back to the defaults; an
+        # explicit empty list still intentionally disables force strategies. A
+        # bare string is accepted as a single strategy name so a stray
+        # ``force_strategies: conflict`` is not silently split into characters
+        # by ``list(...)``.
+        raw = data.get("force_strategies")
+        if raw is None:
+            force_strategies = list(cls().force_strategies)
+        elif isinstance(raw, str):
+            force_strategies = [raw]
+        elif isinstance(raw, list) and all(isinstance(s, str) for s in raw):
+            force_strategies = list(raw)
+        else:
+            raise ValueError(
+                "'merge_gate.force_strategies' must be a string or a list of "
+                f"strings, got {type(raw).__name__}"
+            )
+        return cls(
+            min_commits=_int("min_commits", cls.min_commits),
+            max_age_days=_int("max_age_days", cls.max_age_days),
+            max_commits=_int("max_commits", cls.max_commits),
+            force_strategies=force_strategies,
+        )
+
+
+@dataclass
+class AiPickConfig:
+    """Configuration for the AI-assisted merge pick.
+
+    When enabled, the privileged merge phase (``merge-pick --ai``) asks an AI
+    agent which upstream commit to merge to, within the gate's candidate
+    window. When disabled, the pick is made deterministically.
+
+    Attributes:
+        enabled: Whether the AI pick is used. When False, ``merge-pick --plan``
+            reports ``mode: deterministic`` and resolves the sha itself.
+        agent: Agent descriptor (e.g. ``claude-cli:claude-opus-4-5``), same
+            format as ``resolve.agent``. Empty falls back to ``resolve.agent``.
+        rules_file: Optional path to a project-specific merge-pick rules file
+            (markdown) appended to the built-in system prompt.
+        fallback: What to do on agent error / invalid sha: ``deterministic``
+            (resilient, the default) or ``error``.
+    """
+
+    enabled: bool = False
+    agent: str = ""
+    rules_file: str = ""
+    fallback: str = "deterministic"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "AiPickConfig":
+        """Create an AiPickConfig from a dictionary.
+
+        Raises:
+            ValueError: If ``fallback`` is not one of ``deterministic`` /
+                ``error`` (an unknown value would otherwise be silently treated
+                as ``deterministic``).
+        """
+        fallback = data.get("fallback", cls.fallback)
+        if fallback not in ("deterministic", "error"):
+            raise ValueError(
+                f"Invalid value for ai_pick.fallback: '{fallback}'. "
+                "Valid values are: deterministic, error"
+            )
+        return cls(
+            enabled=data.get("enabled", cls.enabled),
+            agent=data.get("agent", cls.agent),
+            rules_file=data.get("rules_file", cls.rules_file),
+            fallback=fallback,
+        )
+
+
+@dataclass
 class ForkConfig:
     """Configuration for the fork subcommand.
 
@@ -29,12 +155,16 @@ class ForkConfig:
         upstream_branch: Branch name to use when auto-detecting upstream ref.
         upstream_remote: Name of the git remote for upstream (if not set, derived from URL).
         merge_picks: Configuration for commit prioritization in fork merge-pick.
+        merge_gate: Deterministic gate controlling when to merge.
+        ai_pick: Configuration for the AI-assisted merge pick.
     """
 
     upstream_url: str | None = None
     upstream_branch: str = "master"
     upstream_remote: str | None = None
     merge_picks: Optional["MergePicksConfig"] = None
+    merge_gate: MergeGateConfig = field(default_factory=MergeGateConfig)
+    ai_pick: AiPickConfig = field(default_factory=AiPickConfig)
 
     @classmethod
     def from_dict(cls, data: dict) -> "ForkConfig":
@@ -51,11 +181,25 @@ class ForkConfig:
             MergePicksConfig.from_dict(merge_picks_data) if merge_picks_data else None
         )
 
+        merge_gate_data = data.get("merge_gate")
+        merge_gate = (
+            MergeGateConfig.from_dict(merge_gate_data)
+            if merge_gate_data
+            else MergeGateConfig()
+        )
+
+        ai_pick_data = data.get("ai_pick")
+        ai_pick = (
+            AiPickConfig.from_dict(ai_pick_data) if ai_pick_data else AiPickConfig()
+        )
+
         return cls(
             upstream_url=data.get("upstream_url"),
             upstream_branch=data.get("upstream_branch", cls.upstream_branch),
             upstream_remote=data.get("upstream_remote"),
             merge_picks=merge_picks,
+            merge_gate=merge_gate,
+            ai_pick=ai_pick,
         )
 
 
