@@ -845,6 +845,28 @@ class ForkStatus:
         return (now - last_merged_date).days
 
     @property
+    def unmerged_oldest_age_days(self) -> float | None:
+        """Days since the oldest unmerged commit was authored.
+
+        This is the age of the *front* of the unmerged backlog - the signal the
+        merge gate uses to decide whether the oldest pending change has waited
+        long enough to merge. It is distinct from :attr:`days_behind`, which
+        measures time since the last *merged* commit (the wrong signal for a
+        gate that asks "how stale is the oldest thing we still owe?").
+
+        Returns the fractional number of days, or None when the fork is up to
+        date (no unmerged commits).
+        """
+        if not self.first_unmerged_commit:
+            return None
+
+        authored_date = datetime.fromtimestamp(
+            self.first_unmerged_commit.authored_date, tz=timezone.utc
+        )
+        now = datetime.now(tz=timezone.utc)
+        return (now - authored_date).total_seconds() / 86400.0
+
+    @property
     def unmerged_date_range(self) -> tuple[datetime, datetime] | None:
         """Get the date range of unmerged commits (first, last)."""
         if not self.first_unmerged_commit or not self.last_unmerged_commit:
@@ -885,6 +907,7 @@ class ForkStatus:
             divergence: dict[str, Any] = {
                 "commits_behind": self.commits_behind,
                 "days_behind": self.days_behind,
+                "unmerged_oldest_age_days": self.unmerged_oldest_age_days,
                 "files_affected": self.files_affected,
                 "total_additions": self.total_additions,
                 "total_deletions": self.total_deletions,
