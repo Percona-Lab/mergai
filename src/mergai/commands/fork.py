@@ -1,5 +1,8 @@
+import contextlib
 import json
 import logging
+import sys
+from contextlib import nullcontext
 
 import click
 from git import Commit
@@ -308,6 +311,57 @@ def compute_gate(
 
     decision = evaluate_merge_gate(fork_status, prioritized, gate_cfg)
     return decision, window_shas, omitted, prioritized
+
+
+def build_merge_pick_input(
+    app: AppContext,
+    fork_status,
+    window_shas: list[str],
+    omitted: int,
+    prioritized: list[MergePickCommit],
+    decision: GateDecision,
+) -> dict:
+    """Build the AI merge-pick agent input for the candidate window.
+
+    Each candidate carries its sha, summary, author, date, size stats, and the
+    strategy (if any) that matched it. The payload also includes cumulative
+    divergence, the omitted-tail count, and the gate decision/reason.
+    """
+    picks_by_sha = {pc.commit.hexsha: pc for pc in prioritized}
+    stats = git_utils.get_batch_commit_stats(app.repo, window_shas)
+
+    candidates = []
+    # Present oldest-first so the window reads as a forward timeline.
+    for sha in reversed(window_shas):
+        commit = app.repo.commit(sha)
+        commit_stats = stats.get(sha)
+        pick = picks_by_sha.get(sha)
+        candidates.append(
+            {
+                "sha": sha,
+                "summary": commit.summary,
+                "author": commit.author.name,
+                "date": commit.authored_datetime.isoformat(),
+                "files": commit_stats.files_changed if commit_stats else None,
+                "lines_added": commit_stats.lines_added if commit_stats else None,
+                "lines_deleted": commit_stats.lines_deleted if commit_stats else None,
+                "dirs": commit_stats.num_of_dirs if commit_stats else None,
+                "strategy": pick.strategy_name if pick else None,
+            }
+        )
+
+    return {
+        "gate": {"open": decision.open, "reason": decision.reason},
+        "divergence": {
+            "commits_behind": fork_status.commits_behind,
+            "files_affected": fork_status.files_affected,
+            "total_additions": fork_status.total_additions,
+            "total_deletions": fork_status.total_deletions,
+            "unmerged_oldest_age_days": fork_status.unmerged_oldest_age_days,
+        },
+        "window": {"size": len(window_shas), "omitted_tail": omitted},
+        "candidates": candidates,
+    }
 
 
 def build_status_summary(
@@ -793,9 +847,19 @@ def status(
     is_flag=True,
     default=False,
     help=(
-        "Token-free phase-1 decision: evaluate the merge gate and print a JSON "
-        "decision (wait / merge). Deterministic mode resolves the sha; AI mode "
-        "leaves it null."
+        "Token-free gate decision: evaluate the merge gate and print a JSON "
+        'verdict, {"action": "merge"|"wait", "reason": ...}. The go/no-go only; '
+        "which commit to merge to is a separate pick (--gate/--ai/--next)."
+    ),
+)
+@click.option(
+    "--ai",
+    "ai",
+    is_flag=True,
+    default=False,
+    help=(
+        "AI pick: ask the configured agent which commit in the candidate window "
+        "to merge to. Re-checks the gate unless --force."
     ),
 )
 @click.option(
@@ -809,7 +873,7 @@ def status(
         "bare sha - a forced-strategy match below min_commits, else the first "
         "prioritized match within the [min_commits, max_commits] band, else the "
         "window tip. Prints nothing when up to date or the gate is closed. The "
-        "deterministic sibling of --ai, independent of fork.ai_pick.enabled."
+        "deterministic counterpart of --ai."
     ),
 )
 @click.option(
@@ -817,7 +881,17 @@ def status(
     "force",
     is_flag=True,
     default=False,
-    help="With --gate, skip the gate re-check and pick regardless.",
+    help="With --ai or --gate, skip the gate re-check and pick regardless.",
+)
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help=(
+        "With --ai, emit the pick as a one-line JSON object with keys "
+        "sha, short_sha, reasoning, source - for further processing."
+    ),
 )
 def merge_pick(
     app: AppContext,
@@ -826,8 +900,10 @@ def merge_pick(
     next_only: bool,
     list_commits: bool,
     plan: bool,
+    ai: bool,
     gate: bool,
     force: bool,
+    as_json: bool,
 ):
     """Suggest commits to merge based on configured priority strategies.
 
@@ -844,20 +920,25 @@ def merge_pick(
 
     Use --next/-n to get just the hash of the recommended next commit.
     Use --list/-l to show all unmerged commits with picks marked.
-    Use --plan for the token-free gate decision (JSON), and --gate for the
-    gate-respecting deterministic pick.
+    Use --plan for the token-free gate decision (JSON), and --ai for the
+    privileged AI pick.
 
     \b
     Examples:
         mergai fork merge-pick                    # List prioritized commits
         mergai fork merge-pick --list             # List all commits with picks marked
         mergai fork merge-pick --next             # Get next commit hash
-        mergai fork merge-pick --plan             # Phase-1 gate decision (JSON)
+        mergai fork merge-pick --plan             # Gate decision (JSON: action/reason)
+        mergai fork merge-pick --ai               # AI pick (sha + reasoning)
+        mergai fork merge-pick --ai --next        # AI pick (sha only, for capture)
+        mergai fork merge-pick --ai --json        # AI pick (JSON, for processing)
         mergai fork merge-pick --gate             # Gate-respecting deterministic pick (sha only)
         mergai fork merge-pick mongodb/master     # Use specific upstream ref
     """
     selected_modes = [
-        name for name, used in (("--plan", plan), ("--gate", gate)) if used
+        name
+        for name, used in (("--plan", plan), ("--ai", ai), ("--gate", gate))
+        if used
     ]
     if len(selected_modes) > 1:
         click.echo(
@@ -865,10 +946,14 @@ def merge_pick(
         )
         raise SystemExit(1)
 
-    # --force applies to the gate-respecting pick (--gate). Fail fast rather than
-    # silently ignore so automation can't come to rely on a no-op flag.
-    if force and not gate:
-        click.echo("Error: --force requires --gate.", err=True)
+    # --force applies to the gate-respecting picks (--ai / --gate); --json only to
+    # --ai. Fail fast rather than silently ignore so automation can't come to rely
+    # on a no-op flag.
+    if force and not (ai or gate):
+        click.echo("Error: --force requires --ai or --gate.", err=True)
+        raise SystemExit(1)
+    if as_json and not ai:
+        click.echo("Error: --json requires --ai.", err=True)
         raise SystemExit(1)
 
     upstream_ref = resolve_upstream_ref(app, upstream_ref)
@@ -882,6 +967,12 @@ def merge_pick(
 
     if plan:
         _merge_pick_plan(app, fork_status, upstream_ref, fork_ref)
+        return
+
+    if ai:
+        _merge_pick_ai(
+            app, fork_status, upstream_ref, fork_ref, next_only, force, as_json
+        )
         return
 
     if gate:
@@ -958,42 +1049,23 @@ def _merge_pick_plan(
     upstream_ref: str,
     fork_ref: str,
 ) -> None:
-    """Phase-1 decision (token-free): print the gate's JSON decision.
+    """Token-free gate decision: print the merge gate's JSON verdict.
 
-    Evaluates the merge gate and reads the mode from ``fork.ai_pick.enabled``.
-    In deterministic mode the sha is resolved here (capped to the
-    ``max_commits`` window); in AI mode the sha is left null (decided in
-    phase 2). When the fork is up to date, reports ``wait``.
+    Evaluates the merge gate over the candidate window and prints
+    ``{"action": "merge"|"wait", "reason": ...}``. This is the go/no-go
+    decision only; which commit to merge to is a separate, explicit step
+    (``merge-pick --gate`` / ``--ai`` / ``--next``).
     """
     if fork_status.is_up_to_date:
         print(json.dumps({"action": "wait", "reason": "up to date (0 commits)"}))
         return
 
-    decision, window_shas, _omitted, prioritized = compute_gate(
+    decision, _window_shas, _omitted, _prioritized = compute_gate(
         app, fork_status, upstream_ref, fork_ref
     )
 
-    if not decision.open:
-        print(json.dumps({"action": "wait", "reason": decision.reason}))
-        return
-
-    if app.config.fork.ai_pick.enabled:
-        output = {
-            "action": "merge",
-            "mode": "ai",
-            "sha": None,
-            "reason": decision.reason,
-        }
-    else:
-        output = {
-            "action": "merge",
-            "mode": "deterministic",
-            "sha": resolve_deterministic_sha(
-                window_shas, prioritized, app.config.fork.merge_gate
-            ),
-            "reason": decision.reason,
-        }
-    print(json.dumps(output))
+    action = "merge" if decision.open else "wait"
+    print(json.dumps({"action": action, "reason": decision.reason}))
 
 
 def _merge_pick_gate(
@@ -1012,8 +1084,6 @@ def _merge_pick_gate(
     ``[min_commits, max_commits]`` band, else the window tip; the window never
     advances past ``max_commits``). Prints nothing (exit 0) when the fork is up
     to date or the gate is closed, so callers can capture stdout safely.
-    Independent of
-    ``fork.ai_pick.enabled`` (that flag only affects ``--plan``'s reported mode).
     """
     if fork_status.is_up_to_date:
         return
@@ -1034,3 +1104,170 @@ def _merge_pick_gate(
         return
 
     click.echo(sha)
+
+
+def _resolve_window_sha(candidate: str, window_shas: list[str]) -> str | None:
+    """Map an agent-returned sha to a full window sha.
+
+    Accepts a full sha or an unambiguous prefix (agents often return short
+    shas). Returns the matching full sha, or None if it isn't in the window.
+    """
+    if candidate in window_shas:
+        return candidate
+    candidate = candidate.strip().lower()
+    matches = [sha for sha in window_shas if sha.lower().startswith(candidate)]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def _merge_pick_ai(
+    app: AppContext,
+    fork_status,
+    upstream_ref: str,
+    fork_ref: str,
+    next_only: bool,
+    force: bool,
+    as_json: bool,
+) -> None:
+    """AI pick: ask the agent which commit to merge to.
+
+    Re-checks the gate unless ``force`` (so the gate is always checked before
+    the agent runs), builds the candidate-window input, runs the configured
+    agent, and validates that the chosen sha is a candidate in the window. On
+    agent error / invalid sha, applies the configured ``fallback``
+    (deterministic by default).
+
+    Output modes (stdout carries only the pick, so it is safe to capture;
+    progress/diagnostics go to stderr):
+      - ``next_only``: the bare full sha (for ``$(...)`` capture);
+      - ``as_json``: a one-line JSON object ``{sha, short_sha, reasoning,
+        source}`` (for downstream processing, e.g. a PR comment);
+      - default: a styled, human-readable block with the sha highlighted.
+    """
+    from ..agent_executor import AgentExecutionError, AgentExecutor
+    from ..prompt_builder import build_merge_pick_prompt
+
+    if fork_status.is_up_to_date:
+        # Nothing to merge; --next prints nothing, otherwise a short note.
+        if not (next_only or as_json):
+            click.echo("Fork is up to date; nothing to pick.", err=True)
+        return
+
+    decision, window_shas, omitted, prioritized = compute_gate(
+        app, fork_status, upstream_ref, fork_ref
+    )
+
+    if not force and not decision.open:
+        click.echo(f"Merge gate closed: {decision.reason}", err=True)
+        return
+
+    if not window_shas:
+        click.echo("No candidate commits in the window.", err=True)
+        return
+
+    ai_cfg = app.config.fork.ai_pick
+
+    def emit(sha: str, reasoning: str | None, source: str) -> None:
+        """Render the chosen pick to stdout in the selected output mode.
+
+        ``source`` is ``"ai"`` for an agent pick or ``"deterministic"`` when
+        the deterministic fallback produced it.
+        """
+        if next_only:
+            click.echo(sha)
+            return
+        if as_json:
+            click.echo(
+                json.dumps(
+                    {
+                        "sha": sha,
+                        "short_sha": git_utils.short_sha(sha),
+                        "reasoning": reasoning,
+                        "source": source,
+                    }
+                )
+            )
+            return
+        # Human-readable: highlight the sha, set off the reasoning clearly.
+        label = (
+            "Merge pick" if source == "ai" else "Merge pick (deterministic fallback)"
+        )
+        click.echo(
+            click.style(f"{label}: ", bold=True)
+            + click.style(sha, fg="green", bold=True)
+            + click.style(f"  ({git_utils.short_sha(sha)})", fg="bright_black")
+        )
+        if reasoning:
+            click.echo()
+            click.echo(click.style("Reasoning:", bold=True))
+            for line in reasoning.splitlines() or [reasoning]:
+                click.echo(f"  {line}")
+
+    def fallback(message: str) -> None:
+        if ai_cfg.fallback == "error":
+            click.echo(f"Error: AI pick failed: {message}", err=True)
+            raise SystemExit(1)
+        # deterministic fallback
+        sha = resolve_deterministic_sha(
+            window_shas, prioritized, app.config.fork.merge_gate
+        )
+        if sha is None:
+            click.echo("Error: no deterministic fallback sha available.", err=True)
+            raise SystemExit(1)
+        click.echo(
+            f"AI pick failed ({message}); falling back to deterministic pick.",
+            err=True,
+        )
+        emit(sha, "deterministic fallback applied", source="deterministic")
+
+    candidates = build_merge_pick_input(
+        app, fork_status, window_shas, omitted, prioritized, decision
+    )
+    prompt = build_merge_pick_prompt(candidates, ai_cfg.rules_file or None)
+
+    agent = app.get_agent(agent_desc=ai_cfg.agent or None, yolo=False)
+    executor = AgentExecutor(
+        agent=agent,
+        state_dir=app.state.path,
+        max_attempts=app.config.resolve.max_attempts,
+        repo=app.repo,
+    )
+
+    window_set = set(window_shas)
+
+    def validator(result: dict) -> str | None:
+        response = result.get("response")
+        if not isinstance(response, dict):
+            return "Response must be a JSON object with 'sha' and 'reasoning'."
+        sha = response.get("sha")
+        if not isinstance(sha, str) or not sha.strip():
+            return "'sha' must be a non-empty string."
+        if _resolve_window_sha(sha, window_shas) is None:
+            return (
+                f"'{sha}' is not one of the candidate commits in the window. "
+                "Pick a sha from the provided candidates."
+            )
+        reasoning = response.get("reasoning")
+        if not isinstance(reasoning, str) or not reasoning.strip():
+            return "'reasoning' must be a non-empty string explaining the pick."
+        return None
+
+    # In capture modes stdout must carry only the sha / JSON, but the executor
+    # (and agent) echo progress to stdout. Redirect that to stderr so the
+    # captured stream stays clean; emit() below writes the result to real stdout.
+    capture = next_only or as_json
+    try:
+        with contextlib.redirect_stdout(sys.stderr) if capture else nullcontext():
+            result = executor.run_with_retry(prompt=prompt, validator=validator)
+    except AgentExecutionError as e:
+        fallback(str(e))
+        return
+
+    response = result.get("response", {})
+    chosen = _resolve_window_sha(response.get("sha", ""), window_shas)
+    if chosen is None or chosen not in window_set:
+        fallback("agent returned an invalid sha")
+        return
+
+    emit(chosen, response.get("reasoning"), source="ai")

@@ -53,6 +53,10 @@ def load_system_prompt_review(context: dict | None = None) -> str:
     return _render_prompt("system_prompt_review.md", context)
 
 
+def load_system_prompt_merge_pick() -> str:
+    return load_prompt("system_prompt_merge_pick.md")
+
+
 def load_conflict_context_prompt() -> str:
     return load_prompt("conflict_context.md")
 

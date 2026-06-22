@@ -101,15 +101,13 @@ class MergeGateConfig:
 
 @dataclass
 class AiPickConfig:
-    """Configuration for the AI-assisted merge pick.
+    """Configuration for the AI-assisted merge pick (``merge-pick --ai``).
 
-    When enabled, the privileged merge phase (``merge-pick --ai``) asks an AI
-    agent which upstream commit to merge to, within the gate's candidate
-    window. When disabled, the pick is made deterministically.
+    The AI pick asks an agent which upstream commit to merge to, within the
+    gate's candidate window. It is always selected explicitly via
+    ``merge-pick --ai``; these settings only tune how it behaves.
 
     Attributes:
-        enabled: Whether the AI pick is used. When False, ``merge-pick --plan``
-            reports ``mode: deterministic`` and resolves the sha itself.
         agent: Agent descriptor (e.g. ``claude-cli:claude-opus-4-5``), same
             format as ``resolve.agent``. Empty falls back to ``resolve.agent``.
         rules_file: Optional path to a project-specific merge-pick rules file
@@ -118,7 +116,6 @@ class AiPickConfig:
             (resilient, the default) or ``error``.
     """
 
-    enabled: bool = False
     agent: str = ""
     rules_file: str = ""
     fallback: str = "deterministic"
@@ -139,7 +136,6 @@ class AiPickConfig:
                 "Valid values are: deterministic, error"
             )
         return cls(
-            enabled=data.get("enabled", cls.enabled),
             agent=data.get("agent", cls.agent),
             rules_file=data.get("rules_file", cls.rules_file),
             fallback=fallback,

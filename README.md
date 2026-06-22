@@ -144,7 +144,7 @@ Set `most_recent_fallback: true` to select the most recent unmerged commit when 
 
 ### Merge Gate and AI Pick
 
-A deterministic **gate** decides *when* to merge; the **pick** (deterministic or AI) decides *which* upstream commit to merge to. The gate is a pure go/no-go decision over already-computed fork status, so it needs no AI tokens and is safe to run in an unprivileged/periodic phase.
+A deterministic **gate** decides *when* to merge; the **pick** decides *which* upstream commit to merge to. The gate is a pure go/no-go decision over already-computed fork status, so it needs no AI tokens.
 
 `fork.merge_gate` opens the gate when any of the following hold (in order):
 
@@ -157,32 +157,31 @@ A deterministic **gate** decides *when* to merge; the **pick** (deterministic or
 
 `max_commits` defines the **candidate window** - the oldest `max_commits` unmerged commits (`base..base+max_commits`). It bounds both the merge batch size and the AI prompt size; commits newer than the window are omitted (counted) and drained by later merges. Defaults are tied to the historical merge cadence (median ~47 commits/merge, p75 ~67).
 
-`fork.ai_pick` controls the pick made once the gate opens:
+`fork.ai_pick` configures the AI pick (`mergai fork merge-pick --ai`):
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `enabled` | `false` | When `false`, the pick is deterministic. When `true`, an AI agent chooses the merge boundary within the window. |
 | `agent` | `""` | Agent descriptor (e.g. `claude-cli:claude-opus-4-5`), same format as `resolve.agent`. Empty falls back to `resolve.agent`. |
 | `rules_file` | `""` | Optional path to a project-specific merge-pick rules markdown file, appended to the built-in system prompt. |
 | `fallback` | `deterministic` | On agent error / invalid sha: `deterministic` (resilient) or `error`. |
 
-The two phases are exposed as:
+The gate decision and the picks are separate, explicit commands:
 
 ```bash
-mergai fork merge-pick --plan            # token-free gate decision (JSON): wait / merge (+ mode, sha)
-mergai fork merge-pick --ai --next       # privileged AI pick within the window; prints the chosen sha
+mergai fork merge-pick --plan            # token-free gate decision (JSON): action + reason
+mergai fork merge-pick --gate            # gate-respecting deterministic pick; prints the chosen sha
+mergai fork merge-pick --ai --next       # AI pick within the window; prints the chosen sha
 mergai fork merge-pick --ai --force      # skip the gate re-check and pick regardless
 ```
 
-`--plan` emits a JSON decision the periodic workflow consumes, e.g.:
+`--plan` emits the gate's go/no-go decision the periodic workflow consumes, e.g.:
 
 ```json
 { "action": "wait", "reason": "wait (12 < 50 commits; oldest 0.3d < 2d)" }
-{ "action": "merge", "mode": "deterministic", "sha": "<sha>", "reason": "min_commits (63 >= 50)" }
-{ "action": "merge", "mode": "ai", "sha": null, "reason": "force:conflict" }
+{ "action": "merge", "reason": "min_commits (63 >= 50)" }
 ```
 
-The gate decision is also surfaced in `mergai fork status` (text and `--json`).
+Which commit to merge to is then chosen explicitly with `--gate` (deterministic) or `--ai`. The gate decision is also surfaced in `mergai fork status` (text and `--json`).
 
 ### Branch Naming Format
 

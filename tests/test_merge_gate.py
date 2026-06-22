@@ -9,6 +9,7 @@ for ``merge_gate`` / ``ai_pick``. All hand-built stubs - no git repo.
 from types import SimpleNamespace
 
 from mergai.commands.fork import (
+    _resolve_window_sha,
     resolve_deterministic_sha,
     restrict_to_window,
 )
@@ -168,6 +169,30 @@ def test_deterministic_empty_window():
     assert resolve_deterministic_sha([], [], MergeGateConfig()) is None
 
 
+# --- _resolve_window_sha --------------------------------------------------
+
+FULL = "abc123" + "0" * 34  # 40 chars
+OTHER = "def456" + "0" * 34
+
+
+def test_resolve_window_sha_full_match():
+    assert _resolve_window_sha(FULL, [FULL, OTHER]) == FULL
+
+
+def test_resolve_window_sha_prefix_match():
+    assert _resolve_window_sha("abc123", [FULL, OTHER]) == FULL
+
+
+def test_resolve_window_sha_absent():
+    assert _resolve_window_sha("999999", [FULL, OTHER]) is None
+
+
+def test_resolve_window_sha_ambiguous_prefix_rejected():
+    a = "aaa111" + "0" * 34
+    b = "aaa222" + "0" * 34
+    assert _resolve_window_sha("aaa", [a, b]) is None
+
+
 # --- config parsing -------------------------------------------------------
 
 
@@ -189,7 +214,6 @@ def test_fork_config_parses_gate_and_ai_pick():
                 "force_strategies": ["conflict"],
             },
             "ai_pick": {
-                "enabled": True,
                 "agent": "claude-cli:claude-opus-4-5",
                 "rules_file": ".mergai/merge_pick_rules.md",
                 "fallback": "error",
@@ -204,7 +228,6 @@ def test_fork_config_parses_gate_and_ai_pick():
         force_strategies=["conflict"],
     )
     assert cfg.fork.ai_pick == AiPickConfig(
-        enabled=True,
         agent="claude-cli:claude-opus-4-5",
         rules_file=".mergai/merge_pick_rules.md",
         fallback="error",
