@@ -405,6 +405,41 @@ def build_ci_fix_prompt(
     ) + build_ci_fix_run_section(context, heading="")
 
 
+def build_merge_pick_prompt(candidates: dict, rules_file: str | None = None) -> str:
+    """Build the prompt for the AI-assisted merge pick.
+
+    Layout mirrors the other free-function prompts (CI fix / review):
+      1. The built-in merge-pick system prompt (general boundary-picking rules).
+      2. Optional project-specific rules loaded from ``rules_file`` if present
+         (the ``.mergai/invariants.md`` precedent - loaded via
+         :func:`util.load_if_exists`, so a missing file is simply skipped).
+      3. The candidate window as JSON (the agent's input).
+
+    Free function (not a ``PromptBuilder`` method) because the merge pick runs
+    on a fork ref without a merge note.
+
+    Args:
+        candidates: The candidate-window input dict (gate decision, divergence,
+            window info, and per-commit candidates).
+        rules_file: Optional path to a project-specific merge-pick rules file.
+
+    Returns:
+        The complete prompt string for the AI agent.
+    """
+    parts: list[str] = [prompts.load_system_prompt_merge_pick(), "\n\n"]
+
+    if rules_file:
+        project_rules = util.load_if_exists(rules_file)
+        if project_rules:
+            parts.extend(["## Project rules\n\n", project_rules, "\n\n"])
+
+    parts.append("## Candidates\n\n")
+    parts.append("```json\n")
+    parts.append(json.dumps(candidates, indent=2, default=str))
+    parts.append("\n```\n")
+    return "".join(parts)
+
+
 def build_review_prompt(
     context,
     note: MergaiNote | None = None,
