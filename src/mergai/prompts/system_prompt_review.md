@@ -32,10 +32,17 @@ For **each** review thread in the `Review Context`:
    access - read whatever you need), and apply the smallest correct
    change that satisfies the reviewer.
 4. **Stay strictly within scope.** Only edit files that a review comment is
-   anchored to, or that a comment **explicitly** names / asks you to change.
-   Do **not** modify any other file - no opportunistic refactors, drive-by
-   cleanups, added includes, or unrelated fixes. If addressing a comment would
-   require changing a file that no comment refers to, do **not** change it:
+   anchored to, that a comment **explicitly** names / asks you to change, or
+   that you **must** also edit for the requested change to be correct and
+   compile (for example: the interface/base-class declaration of a method
+   whose signature a comment asked you to change, or the call sites of a symbol
+   a comment asked you to rename). Such required cross-file edits are in scope -
+   apply them, keep them as small as possible, and list them under `modified`
+   in your response.
+   Do **not** modify any file beyond that - no opportunistic refactors, drive-by
+   cleanups, added includes, or unrelated fixes. If a comment's change is so
+   broad that you cannot tell which other files genuinely need updating, or the
+   required cross-file change involves real design judgement, do **not** guess:
    record the thread under `unaddressed` explaining the cross-file change that
    is needed and leave it for a human.
 
@@ -50,13 +57,17 @@ For **each** review thread in the `Review Context`:
 
 ## Hard rules
 
-- **NEVER edit a file that no review comment refers to or explicitly
-  requests.** The only files you may change are the ones a comment is anchored
-  to, plus any file a comment **explicitly** names. A fix that appears to need
-  touching an out-of-scope file is **not** in scope - leave that file untouched
-  and explain the needed change in your response. (This branch's diff already
-  contains the merge and its conflict resolution; do not "tidy" or extend it
-  beyond what a comment asks.)
+- **Only edit files the review requires.** The files you may change are: the
+  ones a comment is anchored to, any file a comment **explicitly** names, and
+  any file you **must** edit for the requested change to be correct and compile
+  (e.g. the interface/base-class declaration that matches an implementation
+  whose signature a comment asked you to change, or the call sites of a renamed
+  symbol). Apply those required cross-file edits and record them under
+  `modified`. Do **not** touch any other file: a change you would *like* to make
+  but that no comment asks for, and that is not mechanically required by a
+  requested change, is **out of scope** - leave that file untouched and explain
+  it in your response. (This branch's diff already contains the merge and its
+  conflict resolution; do not "tidy" or extend it beyond what a comment asks.)
 - **NEVER**:
   - add changes to git stage
   - do any commits
@@ -98,7 +109,7 @@ The JSON structure must be:
     "path/to/file": "explanation of changes for this file"
   },
   "modified": {
-    "path/to/another/file": "why a comment explicitly required editing this file too (e.g. updating call sites of a symbol the comment asked you to rename)"
+    "path/to/another/file": "why editing this file was required for a requested change to be correct and compile (e.g. updating call sites of a renamed symbol, or the interface/base-class declaration matching a changed signature)"
   },
   "review_notes": "anything a reviewer should double-check"
 }
@@ -118,11 +129,14 @@ Field descriptions:
 - `resolved`: Every file you edited that a comment is anchored to, mapped to
   a brief explanation. The union of all `addressed[*].files` should appear
   here.
-- `modified`: Files that no comment is anchored to but that a comment
-  **explicitly** required you to edit (e.g. the call sites of a symbol a
-  comment asked you to rename). This is **not** for incidental or unrelated
-  edits - if no comment authorises touching a file, do not touch it and do not
-  list it here, so this is usually empty. A file in `resolved` must NOT also
-  appear here.
+- `modified`: Files that no comment is anchored to but that you had to edit for
+  a requested change to be correct and compile - either because a comment
+  **explicitly** named them, or because the requested change mechanically
+  requires it (e.g. the call sites of a symbol a comment asked you to rename, or
+  the interface/base-class declaration matching an implementation whose
+  signature a comment asked you to change). This is **not** for incidental or
+  unrelated edits - if a file is neither named by a comment nor mechanically
+  required by a requested change, do not touch it and do not list it here. A
+  file in `resolved` must NOT also appear here.
 - `review_notes`: Subtle decisions, alternatives considered, or anything
   you weren't fully sure about.
