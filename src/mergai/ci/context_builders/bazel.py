@@ -88,15 +88,24 @@ class BazelContextBuilder(WorkflowContextBuilder):
         )
 
         failures: list[dict[str, Any]] = []
-        bep_path: Path | None = None
+        bep_paths: list[Path] = []
         if artifact_dir is not None:
-            candidate = artifact_dir / "bazel-bep.json"
-            if candidate.is_file():
-                bep_path = candidate
-                failures = self._parse_bep(candidate)
+            # Discover every BEP stream in the artifact. The build/unittests
+            # jobs upload a single `bazel-bep.json`, but the jstests job runs
+            # resmoke in several invocations and uploads one BEP per invocation
+            # (`bazel-bep.json` for the reliable batch plus
+            # `bazel-bep-<suite>.json` per load-sensitive suite). Parsing only
+            # the fixed name would miss failures isolated to a load-sensitive
+            # suite, so glob and concatenate all of them.
+            bep_paths = sorted(
+                p for p in artifact_dir.glob("bazel-bep*.json") if p.is_file()
+            )
+            if bep_paths:
+                for p in bep_paths:
+                    failures.extend(self._parse_bep(p))
             else:
                 log.info(
-                    "Artifact %s has no bazel-bep.json; BEP summary unavailable",
+                    "Artifact %s has no bazel-bep*.json; BEP summary unavailable",
                     artifact_dir.name,
                 )
         else:
@@ -136,7 +145,7 @@ class BazelContextBuilder(WorkflowContextBuilder):
         details = self._render_details(
             artifacts_dir=artifacts_dir,
             artifact_dir=artifact_dir,
-            bep_path=bep_path,
+            bep_paths=bep_paths,
             failures=failures,
             job_logs=job_logs,
         )
@@ -205,7 +214,7 @@ class BazelContextBuilder(WorkflowContextBuilder):
         *,
         artifacts_dir: str,
         artifact_dir: Path | None,
-        bep_path: Path | None,
+        bep_paths: list[Path],
         failures: list[dict[str, Any]],
         job_logs: list[tuple[str, Path]],
     ) -> str:
@@ -231,15 +240,16 @@ class BazelContextBuilder(WorkflowContextBuilder):
 
         if failures:
             lines = ["## Failing bazel targets"]
-            if bep_path is not None:
-                lines.append(f"_Source: `{bep_path}`_")
+            if bep_paths:
+                src = ", ".join(f"`{p}`" for p in bep_paths)
+                lines.append(f"_Source: {src}_")
             lines.append("")
             for entry in failures[:_MAX_FAILURE_LINES]:
                 lines.append(f"- `{entry['label']}` ({entry['kind']})")
             if len(failures) > _MAX_FAILURE_LINES:
                 lines.append(
                     f"- ...{len(failures) - _MAX_FAILURE_LINES} more "
-                    f"(read `{bep_path}` for the full list)"
+                    f"(read the Build Event Protocol stream(s) for the full list)"
                 )
             sections.append("\n".join(lines))
 
@@ -247,8 +257,8 @@ class BazelContextBuilder(WorkflowContextBuilder):
         nav_lines.append(f"- Artifacts directory: `{artifacts_dir}`")
         if artifact_dir is not None:
             nav_lines.append(f"- Bazel artifact directory: `{artifact_dir}`")
-        if bep_path is not None:
-            nav_lines.append(f"- Build Event Protocol stream: `{bep_path}`")
+        for p in bep_paths:
+            nav_lines.append(f"- Build Event Protocol stream: `{p}`")
         nav_lines.append("")
         nav_lines.append(
             "Use your filesystem tools (Read, Bash, Glob, Grep) to "
