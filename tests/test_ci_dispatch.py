@@ -8,7 +8,13 @@ deployment approval).
 
 from types import SimpleNamespace
 
-from mergai.ci.dispatch import RunDispatchDecision, _skip_message, classify_run
+from mergai.ci.dispatch import (
+    RunDispatchDecision,
+    _has_failing_step,
+    _run_jobs,
+    _skip_message,
+    classify_run,
+)
 
 HEAD_SHA = "a" * 40
 
@@ -101,10 +107,67 @@ def test_failure_with_no_failing_step_is_skipped():
     assert decision.skip_reason == "no_failing_step"
 
 
-def test_cancelled_run_is_skipped():
+def test_cancelled_run_with_no_failing_step_is_skipped():
+    # A plain cancellation (user/timeout/superseded) has nothing to fix.
     app = _app(approvals=[])
-    decision = _classify(app, _Run(conclusion="cancelled"))
+    decision = _classify(
+        app, _Run(conclusion="cancelled", steps_conclusions=("success",))
+    )
     assert decision.skip_reason == "cancelled"
+
+
+def test_cancelled_run_masking_failure_is_actionable():
+    # Fail-fast matrix: one job fails, siblings are cancelled, and the run
+    # conclusion rolls up to `cancelled`. The masked failing step makes it a
+    # real failure that `ci fix` should handle.
+    app = _app(approvals=[])
+    decision = _classify(
+        app, _Run(conclusion="cancelled", steps_conclusions=("success", "failure"))
+    )
+    assert decision.actionable
+    assert decision.kind == "failure"
+
+
+def test_cancelled_run_masking_failure_detected_on_list_path():
+    # The promotion holds even when `ci list` passes check_failure_kind=False:
+    # a cancelled run's cheap default is "skip", so the per-job look is the
+    # only way to surface the masked failure and keep list/fix consistent.
+    app = _app(approvals=[])
+    decision = _classify(
+        app,
+        _Run(conclusion="cancelled", steps_conclusions=("failure",)),
+        check_failure_kind=False,
+    )
+    assert decision.actionable
+    assert decision.kind == "failure"
+
+
+def test_cancelled_run_jobs_side_call_failure_fails_closed():
+    # Unlike a `failure` run, a cancelled run promotes only on positive
+    # evidence: a flaky jobs() call must keep it skipped, not spin the agent.
+    app = _app(approvals=[])
+    decision = _classify(app, _Run(conclusion="cancelled", jobs_raise=True))
+    assert decision.skip_reason == "cancelled"
+
+
+def test_cancelled_run_masking_failure_without_pr_is_skipped():
+    # No PR ⇒ nothing to fix against; skip without the jobs() call.
+    app = _app(approvals=[])
+    run = _Run(conclusion="cancelled", steps_conclusions=("failure",))
+    decision = classify_run(app, run, workflow_name="format", pr_number=None)
+    assert decision.skip_reason == "cancelled"
+    assert run.jobs_calls == 0
+
+
+def test_run_jobs_is_memoized_per_run():
+    # `ci list` consults a cancelled run's jobs during classification and again
+    # for the conclusion/--jobs rows; the per-run cache keeps that to one
+    # jobs() request rather than two.
+    run = _Run(conclusion="cancelled", steps_conclusions=("failure",))
+    _run_jobs(run)
+    _run_jobs(run)
+    _has_failing_step(_app(approvals=[]), run, fail_open=False)
+    assert run.jobs_calls == 1
 
 
 def test_approval_checked_before_failing_step():
