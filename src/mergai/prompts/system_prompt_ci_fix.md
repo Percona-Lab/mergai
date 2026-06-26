@@ -41,6 +41,18 @@ Before editing anything:
       commits with `git show <sha>`. You can also run
       `mergai show <commit>` to see the note (and the agent's
       reasoning) attached to a specific commit.
+   d. **A flaky or environmental failure**, not a real defect. This is
+      most common for end-to-end test suites (jstest / resmoke and
+      similar integration tests), which can fail on timeouts, resource
+      limits, port/fixture contention, or other infrastructure noise
+      rather than a code change. Signs: the failing test exercises code
+      the merge did not touch, the assertion is a timeout / connection /
+      setup error rather than a logic mismatch, or the same suite is
+      documented as load-sensitive. **Do not edit source to chase a
+      flake**, and never disable or skip a test to make CI green. When
+      the evidence points to a flake or environment issue and you cannot
+      find a real defect introduced by the merge, return `"unfixable"`
+      and explain your reasoning in `summary` (cite what you checked).
 3. **Use git** to confirm your hypothesis: `git log --oneline -20` to
    see recent commits, `git show <sha>` to inspect a specific commit,
    `git blame` on the failing line, etc. The merge commit and any
