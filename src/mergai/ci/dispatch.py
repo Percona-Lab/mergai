@@ -207,6 +207,11 @@ def classify_run(
             uses this so listing stays cheap and still shows the run as a
             failure entry; the real dispatch paths keep it True so they skip
             an approval-rejected / infra failure before invoking the agent.
+            This flag does NOT gate the ``cancelled`` path: a ``cancelled``
+            run always inspects its jobs (one ``run.jobs()`` call) to detect a
+            fail-fast-masked failure, since its cheap default is to skip rather
+            than act. The call is bounded to head-current cancelled runs, but
+            ``ci list`` does pay it even with ``check_failure_kind=False``.
         check_staleness: When False (``build_workflow_context_for_run``,
             whose callers vet staleness separately), ``superseded`` /
             ``obsolete`` runs are not skipped here.
@@ -252,6 +257,23 @@ def classify_run(
         return skip("incomplete")
 
     if run.conclusion == "cancelled":
+        # A cancelled run is usually nothing to fix: a user/timeout
+        # cancellation, or a run superseded by a newer push. But under the
+        # default fail-fast matrix policy GitHub cancels the sibling jobs the
+        # moment one matrix job fails, and the run conclusion rolls up to
+        # `cancelled` even though that one job has a genuine failing step.
+        # Detect that and route it through the failure path so `ci fix`
+        # handles it instead of skipping. Unlike a `failure` run (whose cheap
+        # default is "actionable", with side-calls only downgrading it), a
+        # cancelled run's cheap default is "skip", so the per-job look is the
+        # only way to surface the masked failure, and it fails *closed*
+        # (`fail_open=False`): without positive evidence of a failing step a
+        # plain cancellation stays skipped rather than spinning the agent
+        # against an empty context. Only head-current cancelled runs reach
+        # here (superseded/obsolete short-circuit above), so the one extra
+        # call is bounded even on the `ci list` path.
+        if pr_number is not None and _has_failing_step(app, run, fail_open=False):
+            return act("failure", findings_queried=False)
         return skip("cancelled")
 
     if run.conclusion == "failure":
@@ -381,21 +403,51 @@ def _approval_was_rejected(
     )
 
 
-def _has_failing_step(app: AppContext, run: "github.WorkflowRun.WorkflowRun") -> bool:
+def _run_jobs(run: "github.WorkflowRun.WorkflowRun") -> list:
+    """``run.jobs()`` materialized once and cached on the run instance.
+
+    A single ``ci list`` row may consult a run's jobs twice - here during
+    classification (``_has_failing_step`` for a ``cancelled`` run) and again
+    when the command renders the conclusion / ``--jobs`` sub-rows - and
+    PyGithub re-fetches on every ``.jobs()`` call. Cache the list on the run
+    object so a cancelled run pays a single ``jobs()`` request per listing
+    instead of two. The cache is keyed to the run instance, so each fresh run
+    object (one per API fetch) recomputes.
+    """
+    cached: list | None = getattr(run, "_mergai_jobs", None)
+    if cached is None:
+        cached = list(run.jobs())
+        run._mergai_jobs = cached  # type: ignore[attr-defined]  # memo on instance
+    return cached
+
+
+def _has_failing_step(
+    app: AppContext,
+    run: "github.WorkflowRun.WorkflowRun",
+    *,
+    fail_open: bool = True,
+) -> bool:
     """Whether any job in ``run`` has a step that reported a failure.
 
     General safety net for non-code failures: a rejected approval, a
     cancelled/timed-out run, runner death, or ``startup_failure`` all yield a
     ``failure`` conclusion with no failing step, so there is nothing for the
-    agent to fix. Errors fail open (return ``True``) so a side-call failure
-    never blocks a genuine fix.
+    agent to fix. It also distinguishes a fail-fast-cancelled run (one matrix
+    job failed, siblings cancelled) from a plain cancellation.
+
+    ``fail_open`` sets the side-call error default. For a ``failure``
+    conclusion (``fail_open=True``) errors return ``True`` so a flaky call
+    never blocks a genuine fix; the run already looks broken. For a
+    ``cancelled`` conclusion (``fail_open=False``) promotion to a fix relies
+    on positive evidence, so errors return ``False`` and the run keeps its
+    plain-cancellation skip.
     """
     try:
         return any(
-            s.conclusion == "failure" for j in run.jobs() for s in (j.steps or [])
+            s.conclusion == "failure" for j in _run_jobs(run) for s in (j.steps or [])
         )
-    except Exception:  # noqa: BLE001 — best-effort detection; fail open
-        return True
+    except Exception:  # noqa: BLE001 - best-effort detection
+        return fail_open
 
 
 def _skip_message(
