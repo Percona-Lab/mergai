@@ -65,7 +65,9 @@ def _list_run_status(
         check_findings=check_findings,
         # Listing should stay cheap and still show a failed run as a failure
         # entry; the non-code-failure side-calls (approvals / job steps) are
-        # only worth making on the real dispatch path.
+        # only worth making on the real dispatch path. A ``cancelled`` run is
+        # the exception: classify_run always inspects its jobs to surface a
+        # fail-fast-masked failure, regardless of this flag (see classify_run).
         check_failure_kind=False,
     )
 
@@ -73,7 +75,14 @@ def _list_run_status(
         config = app.config.workflows.get(run.name)
         assert config is not None  # actionable ⇒ configured + enabled
         if decision.kind == "failure":
-            return "pending", _failure_note(config)
+            note = _failure_note(config)
+            if run.conclusion == "cancelled":
+                # The run rolled up to `cancelled` (fail-fast cancelled the
+                # sibling matrix jobs) but one job has a real failing step.
+                # Spell that out so the `cancelled` conclusion and the
+                # `pending`/failure note don't read as a contradiction.
+                note = f"fail-fast cancel masks a job failure; {note}"
+            return "pending", note
         # code_scanning: findings confirmed, or deferred when not queried.
         if not decision.findings_queried:
             return (
