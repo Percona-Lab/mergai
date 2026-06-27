@@ -53,6 +53,28 @@ Before editing anything:
    the correct fix and not a band-aid for an underlying code issue.
    When in doubt, leave the file under `unresolved` with a short
    explanation rather than guessing.
+5. **For bucket (a) — an {{ upstream_term }} rename/removal that
+   {{ fork_term }} code still references — the default correct fix is to
+   adapt the {{ fork_term }} call sites to {{ upstream_term }}'s new API,
+   NOT to re-introduce the removed or renamed {{ upstream_term }} symbol.**
+   Re-adding something {{ upstream_term }} deliberately deleted (a
+   transitional alias, shim, typedef, compatibility helper, or old
+   function signature) resurrects a symbol upstream no longer recognizes,
+   creating a permanent fork-local divergence that re-conflicts on every
+   future merge. Before you preserve or restore any code as
+   "{{ fork_term }}-specific", CONFIRM {{ fork_term }} actually authored it —
+   use `git log -S '<snippet>' -- <file>` or `git blame`. A symbol that
+   {{ upstream_term }} added and later removed is NOT a {{ fork_term }}
+   feature, even if {{ fork_term }} code currently depends on it; that
+   dependency just means {{ fork_term }} inherited the symbol from an
+   earlier merge and now must follow upstream's migration.
+   **Exception:** if a human reviewer or maintainer has explicitly
+   decided otherwise — e.g. a review thread, PR comment, prior solution
+   note, or a `Project Invariants` rule says to keep/restore the symbol
+   (as a deliberate stopgap for this release, etc.) — respect that
+   decision and do NOT re-migrate against it. An explicit human
+   instruction always outranks this default; when such an instruction
+   exists, follow it and note in `review_notes` that you did so.
 
 ## Fix the whole class of failure, not just the reported lines
 
