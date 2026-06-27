@@ -31,6 +31,7 @@ you can also pass ``"all"`` or a workflow name to process every
 unprocessed actionable run on the current branch.
 """
 
+from collections.abc import Iterable, Iterator
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -49,7 +50,7 @@ from ..ci.comments import (
 from ..ci.dispatch import (
     _resolve_target_runs,
     _run_head_status,
-    _take_workflow_runs,
+    _run_jobs,
     build_workflow_context_for_run,
 )
 from ..ci.gate import _aggregate_state, _list_run_status, _watched_runs_for_head
@@ -412,6 +413,133 @@ def _fix_one_run(
         return "fixed"
 
 
+def _relative_age(when: datetime | None) -> str:
+    """Human relative age like ``15 minutes ago`` for a run's start time.
+
+    Naive datetimes from the API are treated as UTC. Anything older than a
+    few weeks falls back to an absolute date so the column stays meaningful.
+    """
+    if when is None:
+        return "-"
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    secs = max(0, int((datetime.now(timezone.utc) - when).total_seconds()))
+    if secs < 60:
+        return "just now"
+
+    def ago(value: int, unit: str) -> str:
+        return f"{value} {unit}{'s' if value != 1 else ''} ago"
+
+    mins = secs // 60
+    if mins < 60:
+        return ago(mins, "minute")
+    hours = mins // 60
+    if hours < 24:
+        return ago(hours, "hour")
+    days = hours // 24
+    if days < 7:
+        return ago(days, "day")
+    weeks = days // 7
+    if weeks < 5:
+        return ago(weeks, "week")
+    return when.strftime("%Y-%m-%d")
+
+
+def _fetch_jobs(run: "github.WorkflowRun.WorkflowRun") -> list | None:
+    """The run's jobs, or ``None`` if the ``jobs()`` call fails.
+
+    Goes through ``_run_jobs`` so the result is cached on the run instance and
+    shared with the classification path (``classify_run`` already inspects a
+    cancelled run's jobs); a cancelled run therefore pays one ``jobs()`` call
+    per listing, not two. A ``jobs()`` hiccup must not abort the whole
+    listing, so callers treat ``None`` as "couldn't tell" rather than crashing.
+    """
+    try:
+        return _run_jobs(run)
+    except Exception:  # noqa: BLE001 - listing must survive a jobs() hiccup
+        return None
+
+
+def _display_conclusion(
+    run: "github.WorkflowRun.WorkflowRun", jobs: list | None
+) -> str:
+    """Run conclusion for display, de-confusing a fail-fast ``cancelled``.
+
+    GitHub rolls a fail-fast matrix run up to ``cancelled`` when one job
+    fails and the siblings are cancelled in response, so the run-level
+    ``cancelled`` hides the real outcome. When the jobs show a genuine
+    failing step, surface it as ``failure (cancelled)`` instead. The
+    failing-step signal matches the one ``classify_run`` uses to promote
+    such runs to a fix, so the conclusion stays consistent with the Status /
+    Notes columns and with the per-job rows shown under ``--jobs``.
+    """
+    raw = run.conclusion or run.status or "-"
+    if run.conclusion != "cancelled" or not jobs:
+        return raw
+    failed = any(
+        s.conclusion == "failure"
+        for job in jobs
+        for s in (getattr(job, "steps", None) or [])
+    )
+    return "failure (cancelled)" if failed else raw
+
+
+def _job_rows(run_name: str, jobs: list | None) -> list[tuple[str, ...]]:
+    """Per-job sub-rows for a run, mirroring GitHub's PR "checks" section.
+
+    Only used in ``--jobs`` mode, so the rows carry the 8-column shape that
+    includes the Job ID. Each job becomes a child row under its run header:
+    its own ID in the Job ID column, its ``workflow / job`` name in the
+    Workflow column (matching how GitHub's checks section names a job), and
+    its conclusion in the Conclusion column; the run-level columns (Run ID,
+    head SHA, age, mergai status/notes) are blank because they belong to the
+    run, not the job. This surfaces individual matrix jobs directly - e.g. the
+    one failing job that a fail-fast run rolled up as ``cancelled``.
+
+    ``jobs`` is pre-fetched by the caller (shared with the conclusion logic);
+    ``None`` means the ``jobs()`` call failed, rendered as a single
+    placeholder sub-row so the run header is still shown.
+    """
+    if jobs is None:
+        return [("", "", "", "(jobs unavailable)", "", "", "", "")]
+    return [
+        (
+            "",
+            "",
+            str(job.id),
+            f"{run_name} / {job.name}",
+            job.conclusion or job.status or "-",
+            "",
+            "",
+            "",
+        )
+        for job in jobs
+    ]
+
+
+def _iter_workflow_runs(
+    runs: Iterable["github.WorkflowRun.WorkflowRun"], cap: int
+) -> Iterator["github.WorkflowRun.WorkflowRun"]:
+    """Lazily yield up to ``cap`` workflow runs, tolerating pagination races.
+
+    The generator form of ``_take_workflow_runs``: because it yields rather
+    than materializing a list, a caller that stops early (``break`` once
+    ``--limit`` rows are shown) does not pull further pages from the GitHub
+    API, so ``--limit`` actually bounds the fetch. The ``IndexError`` swallow
+    mirrors ``_take_workflow_runs`` - GitHub can promise more runs in the
+    pagination ``Link`` header than a page actually returns.
+    """
+    count = 0
+    try:
+        for run in runs:
+            if count >= cap:
+                return
+            count += 1
+            yield run
+    except IndexError:
+        return
+
+
 @ci.command(name="list")
 @click.pass_obj
 @click.option(
@@ -427,7 +555,23 @@ def _fix_one_run(
     default=20,
     type=int,
     show_default=True,
-    help="Maximum number of recent runs to show.",
+    help="Maximum number of runs to show.",
+)
+@click.option(
+    "--all",
+    "-a",
+    "show_all",
+    is_flag=True,
+    default=False,
+    help="Show every run, not just the latest run per workflow.",
+)
+@click.option(
+    "--jobs",
+    "-j",
+    "show_jobs",
+    is_flag=True,
+    default=False,
+    help="Expand each run into an indented sub-row per job (GitHub checks view).",
 )
 @click.option(
     "--check-findings/--no-check-findings",
@@ -443,13 +587,25 @@ def list_runs(
     app: AppContext,
     branch_override: str | None,
     limit: int,
+    show_all: bool,
+    show_jobs: bool,
     check_findings: bool,
 ) -> None:
-    """List recent workflow runs and their mergai status.
+    """List workflow runs on the branch and their mergai status.
 
-    For each configured workflow run on the branch, shows whether
-    mergai has already applied a fix (matching ``ci_fix`` solution) or,
-    if not, what action mergai would take if the run was handled now.
+    By default shows one row per configured workflow - its latest run -
+    with the run's age and mergai status (whether a fix is already applied,
+    or what action mergai would take if handled now). Use ``--all`` to list
+    every run instead of just the latest per workflow, and ``--jobs`` to
+    expand each run into an indented sub-row per job, laid out like GitHub's
+    PR "checks" section so individual matrix jobs are visible directly -
+    including a failing job that the run rolled up as ``cancelled``.
+
+    Note: fetching a run's jobs costs one extra API call. ``--jobs`` does it
+    for every shown run; even without ``--jobs`` a non-skipped ``cancelled``
+    run is fetched to tell a fail-fast-masked failure from a plain
+    cancellation. The result is cached per run, so this lookup is shared with
+    the status classification rather than repeated. Use ``--limit`` to bound it.
     """
     repo = app.gh_repo
 
@@ -466,9 +622,18 @@ def list_runs(
     # accepts a branch name string. Pass the string directly.
     runs = repo.get_workflow_runs(branch=branch)  # type: ignore[arg-type]
 
+    # When collapsing to the latest run per workflow, scan a wider window so
+    # each configured workflow's newest run is seen even if older runs of a
+    # busier workflow fill the first page; `limit` then caps the rows shown.
+    # Iterate lazily so an early `break` (once `limit` rows are shown) stops
+    # pulling further API pages rather than always fetching the whole window.
+    scan = limit if show_all else max(limit, 50)
+
     rows: list[tuple[str, ...]] = []
-    runs_list = _take_workflow_runs(runs, limit)
-    for run in runs_list:
+    seen_workflows: set[str] = set()
+    shown = 0
+    prev_sha: str | None = None
+    for run in _iter_workflow_runs(runs, scan):
         if run.name not in app.config.workflows.workflows:
             continue
         # Drop runs whose head commit isn't reachable from HEAD — they
@@ -477,26 +642,83 @@ def list_runs(
         # but they're noise here.
         if _run_head_status(app, run) == "obsolete":
             continue
+        if not show_all:
+            # Latest run per workflow only: skip older runs of one already shown.
+            if run.name in seen_workflows:
+                continue
+            seen_workflows.add(run.name)
+        if shown >= limit:
+            break
+        shown += 1
         status, notes = _list_run_status(app, run, check_findings=check_findings)
-        rows.append(
-            (
-                str(run.id),
-                run.name,
-                run.conclusion or run.status or "-",
-                (run.head_sha or "")[:8],
-                status,
-                notes,
-            )
+        started = getattr(run, "run_started_at", None) or run.created_at
+        # Fetch jobs once and share them (via the per-run cache `_run_jobs`
+        # keeps, so `_list_run_status`'s own lookup is reused): `--jobs` needs
+        # them for sub-rows, and a `cancelled` run mergai might act on needs
+        # them to tell a fail-fast-masked failure from a plain cancellation.
+        # `--jobs` still renders sub-rows for skipped runs (so their jobs are
+        # fetched then); what a `skip` status suppresses is only the run-level
+        # Conclusion *relabelling* below - relabelling off a second jobs lookup
+        # could contradict the classifier's skip decision (whose Status already
+        # explains why), so a skipped run keeps its raw conclusion.
+        relabel_cancelled = run.conclusion == "cancelled" and status != "skip"
+        jobs = _fetch_jobs(run) if (show_jobs or relabel_cancelled) else None
+        conclusion = (
+            _display_conclusion(run, jobs)
+            if status != "skip"
+            else (run.conclusion or run.status or "-")
         )
+        # The listed workflows usually share one HEAD, so show the SHA only
+        # when it changes from the row above instead of repeating it on every
+        # workflow - the column then reads as a per-commit group header. Group
+        # on the full SHA (two commits can share an 8-char prefix) but display
+        # the short form.
+        full_sha = run.head_sha or ""
+        sha_cell = "" if full_sha == prev_sha else full_sha[:8]
+        prev_sha = full_sha
+        run_cols = [
+            sha_cell,
+            str(run.id),
+            run.name,
+            conclusion,
+            _relative_age(started),
+            status,
+            notes,
+        ]
+        if show_jobs:
+            # Job ID column sits after Run ID; it's blank on the run header.
+            run_cols.insert(2, "")
+        rows.append(tuple(run_cols))
+        if show_jobs:
+            rows.extend(_job_rows(run.name, jobs))
 
     if not rows:
-        click.echo(
-            f"No configured workflow runs found for branch '{branch}' "
-            f"(showing first {limit})."
-        )
+        click.echo(f"No configured workflow runs found for branch '{branch}'.")
         return
 
-    headers = ("Run ID", "Workflow", "Conclusion", "Head SHA", "Status", "Notes")
+    if show_jobs:
+        # Job ID after Run ID; the name column carries `workflow / job` values,
+        # so label it accordingly (mirrors the run-row insert above).
+        headers: tuple[str, ...] = (
+            "Head SHA",
+            "Run ID",
+            "Job ID",
+            "Workflow / Job",
+            "Conclusion",
+            "Age",
+            "Status",
+            "Notes",
+        )
+    else:
+        headers = (
+            "Head SHA",
+            "Run ID",
+            "Workflow",
+            "Conclusion",
+            "Age",
+            "Status",
+            "Notes",
+        )
     click.echo(format_ascii_table(headers, rows))
 
 
