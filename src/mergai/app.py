@@ -177,12 +177,13 @@ class AppContext:
         """Get a PromptBuilder instance for the current note.
 
         Returns:
-            PromptBuilder configured with current note and prompt config.
+            PromptBuilder configured with the current note, prompt config,
+            and project config (project terminology for prompt rendering).
 
         Raises:
             click.ClickException: If no note found.
         """
-        return PromptBuilder(self.note, self.config.prompt)
+        return PromptBuilder(self.note, self.config.prompt, self.config.project)
 
     @property
     def context_builder(self) -> ContextBuilder:

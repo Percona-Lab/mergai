@@ -57,29 +57,41 @@ def serialize_note_for_prompt(
 class PromptBuilder:
     """Builds prompts for AI agents from MergaiNote data.
 
-    This class encapsulates all prompt-building logic, taking a MergaiNote
-    and PromptConfig as dependencies. It handles loading system prompts,
-    project invariants, and serializing note data for AI consumption.
+    This class encapsulates all prompt-building logic, taking a MergaiNote,
+    a PromptConfig, and an optional ProjectConfig as dependencies. It handles
+    loading system prompts, project invariants, and serializing note data for
+    AI consumption.
 
     Attributes:
         note: The MergaiNote containing merge/conflict data.
         prompt_config: Configuration for prompt serialization.
+        project_config: Project identity/wording substituted into the resolve
+            system prompt; ``None`` falls back to neutral defaults.
 
     Example usage:
-        builder = PromptBuilder(note, config.prompt)
+        builder = PromptBuilder(note, config.prompt, config.project)
         resolve_prompt = builder.build_resolve_prompt()
         describe_prompt = builder.build_describe_prompt(merge_base_sha)
     """
 
-    def __init__(self, note: MergaiNote, prompt_config: PromptConfig):
+    def __init__(
+        self,
+        note: MergaiNote,
+        prompt_config: PromptConfig,
+        project_config: ProjectConfig | None = None,
+    ):
         """Initialize PromptBuilder.
 
         Args:
             note: MergaiNote instance with merge data.
             prompt_config: PromptConfig for serialization settings.
+            project_config: Project identity/wording substituted into the
+                resolve system prompt. Falls back to neutral defaults when
+                omitted (see :func:`_project_prompt_context`).
         """
         self.note = note
         self.prompt_config = prompt_config
+        self.project_config = project_config
 
     def build_resolve_prompt(self) -> str:
         """Build the prompt for conflict resolution.
@@ -94,7 +106,8 @@ class PromptBuilder:
             The complete prompt string for the AI agent.
         """
 
-        system_prompt_resolve = prompts.load_system_prompt_resolve()
+        project_context = _project_prompt_context(self.project_config)
+        system_prompt_resolve = prompts.load_system_prompt_resolve(project_context)
         project_invariants = util.load_if_exists(".mergai/invariants.md")
 
         prompt = system_prompt_resolve + "\n\n"

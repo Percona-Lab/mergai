@@ -33,8 +33,8 @@ def _render_prompt(prompt_name: str, context: dict | None) -> str:
     return _PROMPT_ENV.from_string(text).render(**context)
 
 
-def load_system_prompt_resolve() -> str:
-    return load_prompt("system_prompt_resolve.md")
+def load_system_prompt_resolve(context: dict | None = None) -> str:
+    return _render_prompt("system_prompt_resolve.md", context)
 
 
 def load_system_prompt_describe() -> str:
