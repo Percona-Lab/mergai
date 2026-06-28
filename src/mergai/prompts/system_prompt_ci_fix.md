@@ -74,12 +74,20 @@ Before editing anything:
    function signature) resurrects a symbol upstream no longer recognizes,
    creating a permanent fork-local divergence that re-conflicts on every
    future merge. Before you preserve or restore any code as
-   "{{ fork_term }}-specific", CONFIRM {{ fork_term }} actually authored it —
-   use `git log -S '<snippet>' -- <file>` or `git blame`. A symbol that
-   {{ upstream_term }} added and later removed is NOT a {{ fork_term }}
-   feature, even if {{ fork_term }} code currently depends on it; that
-   dependency just means {{ fork_term }} inherited the symbol from an
-   earlier merge and now must follow upstream's migration.
+   "{{ fork_term }}-specific", CONFIRM {{ fork_term }} actually authored it.
+   Search by the symbol's name across all of history, not by a verbatim
+   code snippet (which may differ by formatting) and not just the current
+   file: `git log -S '<symbol_name>' --all` finds every commit that added
+   or removed it. Because in this bucket the symbol is typically already
+   deleted, `git blame` on the current file and `git log -S ... -- <file>`
+   will often find nothing — that absence is itself a signal. Instead,
+   find the commit that *removed* it (`git log -S '<symbol_name>' --all`,
+   then `git show <sha>`) and check whether that removal came from an
+   {{ upstream_term }} merge or was authored on the {{ fork_term }} side. A
+   symbol that {{ upstream_term }} added and later removed is NOT a
+   {{ fork_term }} feature, even if {{ fork_term }} code currently depends on
+   it; that dependency just means {{ fork_term }} inherited the symbol from
+   an earlier merge and now must follow {{ upstream_term }}'s migration.
    **Exception:** if a human reviewer or maintainer has explicitly
    decided otherwise — e.g. a review thread, PR comment, prior solution
    note, or a `Project Invariants` rule says to keep/restore the symbol
