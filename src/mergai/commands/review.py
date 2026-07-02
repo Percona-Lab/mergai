@@ -121,20 +121,48 @@ def _ignored_summary(skipped: list[tuple[ReviewThread, str]]) -> str:
     return ", ".join(parts)
 
 
-def _post_ack(app: AppContext, pr_number: int, message: str, dry_run: bool) -> None:
+def _post_ack(
+    app: AppContext, pr_number: int, message: str, dry_run: bool
+) -> str | None:
     """Post a short acknowledgement comment on the PR (best-effort).
 
     Gives quick feedback on the trigger that mergai ran and what it did. Under
     ``--dry-run`` the message is printed instead of posted.
+
+    Returns:
+        The created comment's URL on success, or ``None`` on failure / dry-run.
+        Callers use this to mark the ack posted only when it actually posted, so
+        a transient failure is retried on the next run.
     """
     if dry_run:
         click.echo(f"[dry-run] would comment on PR #{pr_number}: {message}")
-        return
+        return None
     try:
-        app.gh_repo.get_pull(pr_number).create_issue_comment(message)
+        comment = app.gh_repo.get_pull(pr_number).create_issue_comment(message)
         click.echo(f"Posted acknowledgement on PR #{pr_number}.")
+        return getattr(comment, "html_url", None) or ""
     except Exception as e:  # noqa: BLE001 - acknowledgement is best-effort
         click.echo(f"warning: could not post acknowledgement: {e}", err=True)
+        return None
+
+
+def _record_ack(app: AppContext, pr_number: int, message: str, dry_run: bool) -> None:
+    """Record an acknowledgement on the note for ``review post`` to publish.
+
+    ``review fix`` runs the AI agent and must stay read-only w.r.t. GitHub, so
+    it records the ack here instead of posting it. The (write-token) ``review
+    post`` step publishes it. Best-effort: if there is no note to record on, the
+    ack is skipped.
+    """
+    if dry_run:
+        click.echo(f"[dry-run] would record ack for PR #{pr_number}: {message}")
+        return
+    if not app.has_note:
+        click.echo("warning: no note to record acknowledgement on; skipping.", err=True)
+        return
+    app.note.set_review_ack(message, pr_number)
+    app.save_note(app.note)
+    click.echo(f"Recorded acknowledgement for PR #{pr_number} (posted by review post).")
 
 
 @review.command()
@@ -157,9 +185,11 @@ def _post_ack(app: AppContext, pr_number: int, message: str, dry_run: bool) -> N
     is_flag=True,
     default=False,
     help=(
-        "Post a short acknowledgement comment on the PR summarising the outcome "
-        "(how many comments were found / addressed), even when there are none. "
-        "Use from CI to give quick feedback on the trigger."
+        "Record a short acknowledgement summarising the outcome (how many "
+        "comments were found / addressed), even when there are none, for "
+        "`mergai review post` to publish on the PR. Recording is local (no "
+        "GitHub write), so `review fix` can run with a read-only token. Use "
+        "from CI to give quick feedback on the trigger."
     ),
 )
 @click.option(
@@ -239,7 +269,7 @@ def fix(
                 if ignored
                 else "mergai review fix: no review comments to address."
             )
-            _post_ack(app, number, msg, dry_run)
+            _record_ack(app, number, msg, dry_run)
         return
 
     context = build_review_context(
@@ -343,7 +373,7 @@ def fix(
                 f"mergai review fix: addressed {len(addressed)} of {total} "
                 f"review comment(s); ignored {ignored} (not processed)."
             )
-        _post_ack(app, number, msg, dry_run)
+        _record_ack(app, number, msg, dry_run)
 
 
 def _annotate_threads(entries: dict, threads_by_id: dict) -> None:
@@ -535,7 +565,8 @@ def post(app: AppContext, dry_run: bool, force: bool) -> None:
     For each recorded reply intent, posts a reply on the thread's root comment:
     a "fixed" note (with the commit) on threads the agent addressed, an
     "unfixable" note (with the reason) on the rest. Threads are never
-    auto-resolved. No-op when nothing is pending, so it is safe to run
+    auto-resolved. Also publishes the acknowledgement recorded by ``review fix
+    --ack``, if any. No-op when nothing is pending, so it is safe to run
     unconditionally. Records persist in the cache note, so the usual flow is:
     ``review fix`` → review / push → ``review post``.
     """
@@ -547,8 +578,11 @@ def post(app: AppContext, dry_run: bool, force: bool) -> None:
             if force
             else app.note.pending_review_comments()
         )
+    # The acknowledgement recorded by `review fix` (read-only) is published here,
+    # in the write-token step, alongside the replies.
+    pending_ack = app.note.pending_review_ack() if app.has_note else None
 
-    if not records:
+    if not records and not pending_ack:
         click.echo("No pending review replies to post.")
         return
 
@@ -593,6 +627,23 @@ def post(app: AppContext, dry_run: bool, force: bool) -> None:
             posted += 1
             posted_any = True
             click.echo(f"  [{tid}] {loc}: posted ({rec.get('outcome')}).")
+
+    # Publish the acknowledgement recorded by `review fix`, if any. Best-effort,
+    # like the reply posting. Only mark it posted when the post actually
+    # succeeded, so a transient failure is retried on the next run (and capture
+    # the comment URL when available).
+    if pending_ack:
+        ack_pr = pending_ack.get("pr_number")
+        ack_msg = pending_ack.get("message", "")
+        if dry_run:
+            click.echo(f"[dry-run] would comment on PR #{ack_pr}: {ack_msg}")
+        elif ack_pr is not None:
+            ack_url = _post_ack(app, int(ack_pr), ack_msg, dry_run=False)
+            if ack_url is not None:
+                app.note.mark_review_ack_posted(
+                    posted_at=now, comment_url=ack_url or None
+                )
+                posted_any = True
 
     if posted_any and not dry_run:
         app.save_note(app.note)
