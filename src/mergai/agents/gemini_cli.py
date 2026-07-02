@@ -67,10 +67,15 @@ class GeminiCLIAgent(CliAgent):
         return {"models": models}
 
     def build_args(self, prompt: str) -> list:
+        # Always use auto_edit: auto-approve file edits in the working repo, but
+        # NOT other tools. yolo deliberately does NOT map to Gemini's "yolo"
+        # approval mode (which auto-approves every tool, incl. shell commands
+        # that could push or reach the remote). This mirrors the Claude adapter,
+        # where yolo maps to acceptEdits rather than --dangerously-skip-permissions.
         args = [
             "gemini",
             "--approval-mode",
-            "yolo" if self.yolo else "auto_edit",
+            "auto_edit",
             "-o",
             "stream-json",
         ]
