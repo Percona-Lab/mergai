@@ -5,6 +5,7 @@ from pathlib import Path
 
 from ..utils.output import echo_err as _echo
 from .base import CliAgent
+from .env import agent_subprocess_env
 from .error import AgentError, AgentErrorType, AgentResult
 from .response_utils import parse_response_json
 
@@ -344,7 +345,9 @@ class ClaudeCLIAgent(CliAgent):
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,  # Combine stderr with stdout to avoid deadlock
             text=True,
-            env=os.environ.copy(),
+            # Strip GitHub write credentials so the agent cannot push or issue
+            # GitHub write APIs; local file/git operations are unaffected.
+            env=agent_subprocess_env(),
         )
 
         result: dict = {}
