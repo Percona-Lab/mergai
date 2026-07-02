@@ -9,6 +9,66 @@ from .env import agent_subprocess_env
 from .error import AgentError, AgentErrorType, AgentResult
 from .response_utils import parse_response_json
 
+# Tools the agent is allowed to use, auto-approved without a prompt. `Bash` is
+# allowed broadly (the agent needs arbitrary *read* shell -- `git diff`,
+# `git ls-tree`, `git show | grep`, `for` loops -- to inspect the merge), plus
+# the file tools for editing. The dangerous subset is carved out by the
+# deny-list below, which takes precedence over this allow.
+#
+# This broad allow is load-bearing, NOT decorative: in `--print` mode the CLI
+# does not auto-approve un-allowed Bash (it returns "requires approval", a
+# denial when non-interactive), so without an explicit Bash allow the agent
+# cannot run any read command. (Verified in CI: on claude 2.1.198, a deny-list-
+# only config denied git ls-tree / git diff / for-loops.)
+GUARDRAIL_ALLOWED_TOOLS = ["Bash", "Read", "Edit", "Write", "Grep", "Glob"]
+
+# Tools/commands the agent must never use: anything that could modify the remote
+# or be used to bypass the no-remote-write guarantee. Passed via --disallowedTools
+# on *every* invocation. Deny takes precedence over the broad Bash allow above,
+# so these stay blocked while all other Bash is permitted.
+#
+# NOTE: Bash deny rules are prefix-matched and best-effort (e.g. an obfuscated
+# `git -c ... push` can evade them); the credential boundary is what actually
+# guarantees no remote writes (see env.py and the workflow's
+# persist-credentials: false).
+GUARDRAIL_DISALLOWED_TOOLS = [
+    # Remote-mutating git / the GitHub CLI (which the agent has no reason to use
+    # and no credential for).
+    "Bash(git push)",
+    "Bash(git push:*)",
+    "Bash(gh:*)",
+    # Network egress: exfiltration, or fetching code/instructions to run.
+    "WebFetch",
+    "WebSearch",
+    # Spawning unconstrained work / running arbitrary skills or workflows, which
+    # could sidestep these restrictions.
+    "Task",
+    "Agent",
+    "Skill",
+    "Workflow",
+    # Harness/orchestration tools not needed for conflict resolution.
+    "CronCreate",
+    "CronDelete",
+    "CronList",
+    "ScheduleWakeup",
+    "Monitor",
+    "PushNotification",
+    "SendMessage",
+    "RemoteTrigger",
+    "DesignSync",
+    "EnterWorktree",
+    "ExitWorktree",
+    "ToolSearch",
+    "TaskCreate",
+    "TaskGet",
+    "TaskList",
+    "TaskOutput",
+    "TaskStop",
+    "TaskUpdate",
+    "ReportFindings",
+    "NotebookEdit",
+]
+
 
 class ClaudeCLIAgent(CliAgent):
     """Claude CLI Agent for running prompts via Claude Code CLI.
@@ -23,7 +83,10 @@ class ClaudeCLIAgent(CliAgent):
 
         Args:
             model: The model to use (e.g., "claude-sonnet-4-20250514" or "sonnet").
-            yolo: Enable bypass of all permission checks (--dangerously-skip-permissions).
+            yolo: Auto-approve file edits (acceptEdits). Despite the name, this
+                does NOT enable --dangerously-skip-permissions. Remote-write /
+                network / work-spawning tools are denied on every invocation
+                regardless of this flag (see GUARDRAIL_DISALLOWED_TOOLS).
             debug: Enable debug logging.
         """
         super().__init__(model)
@@ -297,15 +360,21 @@ class ClaudeCLIAgent(CliAgent):
             "--verbose",  # Required for stream-json
         ]
 
-        if self.yolo:
-            args.append("--dangerously-skip-permissions")
-        elif allowed_write_paths:
-            # Use acceptEdits mode to auto-approve write operations.
-            # NOTE: Claude CLI's acceptEdits mode does not restrict edits to specific paths;
-            # it broadly auto-approves all file edits. The allowed_write_paths parameter is
-            # accepted for interface compatibility but cannot enforce path-level restrictions
-            # in print mode. For strict path isolation, consider running the agent in a
-            # sandboxed working directory.
+        # Allow Bash + file tools broadly (the agent needs arbitrary read shell
+        # to inspect the merge), then deny the remote-mutating / bypass subset.
+        # Both are passed on *every* invocation. The broad allow is required: in
+        # --print mode the CLI denies un-allowed Bash ("requires approval"), so
+        # without it the agent cannot run any read command. Deny wins over allow,
+        # so the denied commands stay blocked.
+        args.extend(["--allowedTools", ",".join(GUARDRAIL_ALLOWED_TOOLS)])
+        args.extend(["--disallowedTools", ",".join(GUARDRAIL_DISALLOWED_TOOLS)])
+
+        if self.yolo or allowed_write_paths:
+            # Auto-approve file edits in the working directory. "yolo"
+            # deliberately does NOT map to --dangerously-skip-permissions (which
+            # would also bypass the deny-list above). acceptEdits does not
+            # restrict edits to specific paths, so allowed_write_paths cannot be
+            # enforced here; the post-run validator checks for stray writes.
             args.extend(["--permission-mode", "acceptEdits"])
 
         if self.debug:
