@@ -637,6 +637,30 @@ def test_note_review_comment_record_lifecycle():
     )
 
 
+def test_note_review_ack_lifecycle():
+    n = _note()
+    assert n.pending_review_ack() is None
+
+    n.set_review_ack("addressed 2 of 3", pr_number=42)
+    ack = n.pending_review_ack()
+    assert ack is not None
+    assert ack["message"] == "addressed 2 of 3"
+    assert ack["pr_number"] == 42
+
+    # to_dict/from_dict round-trips the ack (cache-note persistence)
+    from mergai.models import MergaiNote
+
+    restored = MergaiNote.from_dict(n.to_dict())
+    assert restored.pending_review_ack()["message"] == "addressed 2 of 3"
+
+    # once posted, it is no longer pending (idempotent re-runs)
+    n.mark_review_ack_posted(posted_at="now", comment_url=None)
+    assert n.pending_review_ack() is None
+    # a fresh ack replaces a posted one
+    n.set_review_ack("new run", pr_number=42)
+    assert n.pending_review_ack()["message"] == "new run"
+
+
 def test_find_and_drop_orphaned_review_comments(monkeypatch):
     from mergai import models
 
@@ -688,3 +712,26 @@ def test_addressed_review_thread_ids_from_solutions():
         {"type": CONFLICT_RESOLUTION, "response": {"addressed": {"PRRT_z": {}}}}
     )
     assert n.addressed_review_thread_ids() == {"PRRT_a", "PRRT_b", "PRRT_d"}
+
+
+def test_post_ack_returns_url_on_success_and_none_on_failure():
+    # _post_ack must report success (URL) vs failure (None) so `review post`
+    # only marks the ack posted when it actually posted (allowing retries).
+    from types import SimpleNamespace
+
+    from mergai.commands import review as review_cmd
+
+    class _PullOK:
+        def create_issue_comment(self, body):
+            return SimpleNamespace(html_url="https://gh/c/1")
+
+    class _PullFail:
+        def create_issue_comment(self, body):
+            raise RuntimeError("boom")
+
+    app_ok = SimpleNamespace(gh_repo=SimpleNamespace(get_pull=lambda n: _PullOK()))
+    app_fail = SimpleNamespace(gh_repo=SimpleNamespace(get_pull=lambda n: _PullFail()))
+
+    assert review_cmd._post_ack(app_ok, 1, "m", dry_run=False) == "https://gh/c/1"
+    assert review_cmd._post_ack(app_fail, 1, "m", dry_run=False) is None
+    assert review_cmd._post_ack(app_ok, 1, "m", dry_run=True) is None

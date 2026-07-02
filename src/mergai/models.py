@@ -872,6 +872,14 @@ class MergaiNote:
     # Like `ci_comments`, this lives only in the cache note (not git notes),
     # which lets `review fix` and the (separate) post step share state.
     review_comments: list[dict] | None = None
+    # `review fix` records the acknowledgement summary here (read-only) instead
+    # of posting it, so the GitHub write happens only in the (write-token)
+    # `mergai review post` step. A single record following the same
+    # pending/posted convention as ``review_comments``:
+    # ``{"message": str, "pr_number": int, "posted_at": str | None,
+    #    "posted_comment_url": str | None}`` (the last two are set by
+    # ``mark_review_ack_posted`` once published).
+    review_ack: dict | None = None
     # Accumulating record of the commits absorbed by a squash finalize. Each
     # entry is ``{"sha": <full sha>, "message": <first line>}``, oldest-first.
     # When a squash commit (which carries this field) is itself squashed again,
@@ -920,6 +928,7 @@ class MergaiNote:
             note_index=data.get("note_index"),
             ci_comments=data.get("ci_comments"),
             review_comments=data.get("review_comments"),
+            review_ack=data.get("review_ack"),
             squashed_commits=data.get("squashed_commits"),
             _repo=repo,
         )
@@ -1160,6 +1169,34 @@ class MergaiNote:
                 comment["posted_comment_url"] = comment_url
                 return True
         return False
+
+    def set_review_ack(self, message: str, pr_number: int) -> "MergaiNote":
+        """Record a review acknowledgement for ``mergai review post`` to publish.
+
+        ``review fix`` records the ack here (read-only) instead of posting it,
+        so the GitHub write happens only in the write-token post step. Replaces
+        any existing ack (posted or not) from an earlier run in the same job.
+        """
+        self.review_ack = {
+            "message": message,
+            "pr_number": pr_number,
+            "posted_at": None,
+        }
+        return self
+
+    def pending_review_ack(self) -> dict | None:
+        """Return the recorded ack if it has not been posted yet, else None."""
+        if self.review_ack and not self.review_ack.get("posted_at"):
+            return self.review_ack
+        return None
+
+    def mark_review_ack_posted(
+        self, *, posted_at: str, comment_url: str | None
+    ) -> None:
+        """Mark the recorded ack as posted (idempotent across re-runs)."""
+        if self.review_ack is not None:
+            self.review_ack["posted_at"] = posted_at
+            self.review_ack["posted_comment_url"] = comment_url
 
     def addressed_review_thread_ids(self) -> set[str]:
         """Review thread ids already fixed by a ``review_fix`` solution.
@@ -1649,6 +1686,8 @@ class MergaiNote:
             result["ci_comments"] = self.ci_comments
         if self.review_comments:
             result["review_comments"] = self.review_comments
+        if self.review_ack:
+            result["review_ack"] = self.review_ack
         if self.squashed_commits:
             result["squashed_commits"] = self.squashed_commits
         return result
