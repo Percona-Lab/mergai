@@ -53,7 +53,7 @@ from ..ci.dispatch import (
     _run_jobs,
     build_workflow_context_for_run,
 )
-from ..ci.gate import _aggregate_state, _list_run_status, _watched_runs_for_head
+from ..ci.gate import _actionable_state, _list_run_status, _watched_runs_for_head
 from ..ci.handlers import get_handler
 from ..solution_types import CI_FIX
 from ..utils.formatters import format_ascii_table
@@ -744,15 +744,25 @@ def status(app: AppContext, state_only: bool) -> None:
 
     \b
     * in-progress — at least one watched run for HEAD hasn't completed.
-    * success     — every watched run for HEAD completed successfully.
-    * failure     — all completed, but at least one didn't succeed.
+    * failure     — all completed and at least one run is *actionable*: mergai
+                    would run the fixer on it.
+    * success     — all completed and nothing is actionable (passed, skipped,
+                    or already handled by mergai).
     * none        — no watched runs for HEAD (e.g. all skipped).
+
+    ``failure`` means actionable work exists, not merely "a run didn't return
+    success": a plain cancellation, a rejected deployment approval, an infra
+    failure with no failing step, and a run mergai already fixed all reduce to
+    ``success`` so the CI-fix handler is only spun up when there is really
+    something for it to do. A *passing* run with Code Scanning findings does
+    count as ``failure`` (needs a token with ``security-events: read`` to
+    detect; without it that run degrades to non-actionable).
 
     Exits 0 in every case; the state is communicated on stdout. With
     ``--state`` only the bare token is printed (for shell capture).
     """
     runs_by_workflow = _watched_runs_for_head(app)
-    state = _aggregate_state(runs_by_workflow)
+    state = _actionable_state(app, runs_by_workflow)
 
     if state_only:
         click.echo(state)
