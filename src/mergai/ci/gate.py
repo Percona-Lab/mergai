@@ -23,6 +23,7 @@ def _list_run_status(
     run: "github.WorkflowRun.WorkflowRun",
     *,
     check_findings: bool,
+    check_failure_kind: bool = False,
 ) -> tuple[str, str]:
     """Return ``(status, notes)`` describing what mergai sees for this run.
 
@@ -63,12 +64,15 @@ def _list_run_status(
         workflow_name=run.name,
         pr_number=_resolve_pr_number(run),
         check_findings=check_findings,
-        # Listing should stay cheap and still show a failed run as a failure
-        # entry; the non-code-failure side-calls (approvals / job steps) are
-        # only worth making on the real dispatch path. A ``cancelled`` run is
-        # the exception: classify_run always inspects its jobs to surface a
-        # fail-fast-masked failure, regardless of this flag (see classify_run).
-        check_failure_kind=False,
+        # ``ci list`` leaves this False: listing should stay cheap and still
+        # show a failed run as a failure entry; the non-code-failure side-calls
+        # (approvals / job steps) are only worth making on the real dispatch
+        # path. The gate (``_actionable_state``) passes True so an
+        # approval-rejected / infra ``failure`` is classified ``skip`` and does
+        # not spin up the privileged handler. A ``cancelled`` run is inspected
+        # regardless of this flag: classify_run always looks at its jobs to
+        # surface a fail-fast-masked failure (see classify_run).
+        check_failure_kind=check_failure_kind,
     )
 
     if decision.actionable:
@@ -153,22 +157,73 @@ def _watched_runs_for_head(
     return latest
 
 
-def _aggregate_state(
+def _actionable_state(
+    app: AppContext,
     runs_by_workflow: dict[str, "github.WorkflowRun.WorkflowRun"],
+    *,
+    check_findings: bool = True,
+    check_failure_kind: bool = True,
 ) -> Literal["in-progress", "success", "failure", "none"]:
     """Reduce the per-workflow latest runs to a single gate token.
 
+    Unlike a raw conclusion rollup, ``failure`` here means *mergai has
+    actionable work* — not merely "something didn't return success". The per-run
+    verdict comes from :func:`_list_run_status` (the same classification
+    ``ci list`` / ``ci fix all`` use), so the gate agrees with what the fixer
+    would actually do:
+
+    * a plain ``cancelled`` run (user/timeout cancel, superseded) → ``skip``;
+    * a ``failure`` from a rejected deployment approval or an infra failure with
+      no failing step → ``skip`` (``check_failure_kind``);
+    * a run mergai already handled (a ``ci_fix`` solution or a posted comment
+      exists for it) → ``applied`` / ``commented`` — not re-triggered;
+    * a *passing* run with Code Scanning findings → ``pending`` (actionable).
+
+    The tokens:
+
     * ``none``        — no watched runs for HEAD (e.g. all skipped).
-    * ``in-progress`` — at least one watched run hasn't completed.
-    * ``success``     — every watched run completed with ``success``.
-    * ``failure``     — all completed, but at least one did not succeed
-                        (``failure`` / ``cancelled`` / ``timed_out`` / …).
+    * ``in-progress`` — at least one watched run hasn't completed. This wins over
+                        ``failure`` so the handler fires only once the whole
+                        watched set for HEAD is done and a later completion
+                        finalizes it (keeps the CI-fix loop converging).
+    * ``failure``     — all completed and at least one run is actionable
+                        (``pending``).
+    * ``success``     — all completed and nothing is actionable (passed,
+                        skipped, or already handled).
+
+    Per-run classification is best-effort: a Code Scanning findings lookup needs
+    a token with ``security-events: read``, so when the gate runs without it (or
+    any read side-call errors) the run degrades to non-actionable rather than
+    crashing the gate or spinning the handler up on an unverifiable signal.
     """
     if not runs_by_workflow:
         return "none"
-    runs = list(runs_by_workflow.values())
-    if any(run.status != "completed" for run in runs):
+
+    statuses: list[str] = []
+    for run in runs_by_workflow.values():
+        try:
+            status, _ = _list_run_status(
+                app,
+                run,
+                check_findings=check_findings,
+                check_failure_kind=check_failure_kind,
+            )
+        except Exception as exc:  # noqa: BLE001 — best-effort; the gate must not crash
+            # A read side-call failed: a code-scanning lookup the gate token
+            # can't make (no security-events read → GithubException), or any
+            # transient requester/network error underneath it. Treat the run as
+            # non-actionable so the gate stays read-only, always emits a token,
+            # and never fires the handler on a signal it couldn't confirm.
+            click.echo(
+                f"warning: could not classify run {run.id} ({run.name}): {exc}; "
+                "treating as non-actionable",
+                err=True,
+            )
+            status = "skip"
+        statuses.append(status)
+
+    if "wait" in statuses:
         return "in-progress"
-    if all(run.conclusion == "success" for run in runs):
-        return "success"
-    return "failure"
+    if "pending" in statuses:
+        return "failure"
+    return "success"
