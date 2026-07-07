@@ -6,6 +6,7 @@ logic lives next to the rest of the ``mergai.ci`` package; ``AppContext``
 keeps a thin delegator.
 """
 
+import os
 from typing import Any
 
 from ..solution_types import CI_FIX
@@ -67,10 +68,23 @@ def commit_ci_fix_solution(app: Any, solution_idx: int) -> None:
     # Stage every file the agent touched (resolved + modified).
     # Untracked files won't show up in index.diff(None), so add them
     # explicitly via git index.add — same approach commit_solution uses.
+    # A file the agent deleted to resolve a conflict no longer exists on
+    # disk, so it must be staged via index.remove instead — index.add
+    # would try to read it and raise FileNotFoundError.
     files_to_stage = list(response.get("resolved", {}).keys())
     files_to_stage += list(response.get("modified", {}).keys())
-    if files_to_stage:
-        app.repo.index.add(files_to_stage)
+    working_dir = app.repo.working_tree_dir or ""
+    files_to_add = []
+    files_to_remove = []
+    for f in files_to_stage:
+        if os.path.exists(os.path.join(working_dir, f)):
+            files_to_add.append(f)
+        else:
+            files_to_remove.append(f)
+    if files_to_add:
+        app.repo.index.add(files_to_add)
+    if files_to_remove:
+        app.repo.index.remove(files_to_remove)
 
     # Build commit message matching mergai's voice. The title is
     # configurable (commit.ci_fix_title_format) so it can mirror the PR

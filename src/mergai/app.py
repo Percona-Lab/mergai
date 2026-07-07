@@ -658,10 +658,16 @@ class AppContext:
         for item in self.repo.index.diff(None):
             path = item.a_path
             if path in resolved:
-                self.repo.index.add([path])
+                if item.deleted_file:
+                    self.repo.index.remove([path])
+                else:
+                    self.repo.index.add([path])
             elif path in declared_modified:
                 modified_files.append(path)
-                self.repo.index.add([path])
+                if item.deleted_file:
+                    self.repo.index.remove([path])
+                else:
+                    self.repo.index.add([path])
             else:
                 message = (
                     f"Unstaged changes found in file {path}, which the "
