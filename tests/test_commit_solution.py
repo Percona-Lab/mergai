@@ -68,6 +68,26 @@ def test_commit_solution_accepts_declared_modified_files(tmp_path, monkeypatch):
     assert (tmp_path / "version.h").read_text() == "adjusted v\n"
 
 
+def test_commit_solution_stages_deleted_resolved_file(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    # Conflict resolved by deleting the file (e.g. a "deleted by us" conflict
+    # where the deletion side wins) — commit_solution must stage the removal
+    # via index.remove instead of trying to index.add a path that no longer
+    # exists on disk.
+    (tmp_path / "a.txt").unlink()
+
+    app = AppContext()
+    app._note = _note(repo, resolved={"a.txt": {}}, modified={})
+
+    app.commit_solution()
+
+    assert not repo.is_dirty()
+    assert "a.txt" not in [item[0] for item in repo.index.entries]
+    assert not (tmp_path / "a.txt").exists()
+
+
 def test_commit_solution_rejects_undeclared_dirty_file(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(tmp_path)
