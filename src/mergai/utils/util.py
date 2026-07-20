@@ -121,7 +121,7 @@ def render_from_template(template_str: str, **kwargs) -> str:
     which loads templates from files.
     """
     template = Template(template_str)
-    return template.render(**kwargs)
+    return str(template.render(**kwargs))
 
 
 def load_if_exists(filename: str) -> str:
