@@ -1477,6 +1477,11 @@ class AppContext:
                 note_dict["merge_description"] = git_note["merge_description"]
                 fields_for_this_commit.append("merge_description")
 
+            # Handle merge_pick (at most one - take from first commit that has it)
+            if "merge_pick" in git_note and "merge_pick" not in note_dict:
+                note_dict["merge_pick"] = git_note["merge_pick"]
+                fields_for_this_commit.append("merge_pick")
+
             # Add to note_index if we collected any fields
             if fields_for_this_commit:
                 note_dict["note_index"].append(
