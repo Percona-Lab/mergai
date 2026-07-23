@@ -487,6 +487,16 @@ def merge_description_to_markdown(merge_description: dict) -> str:
     )
 
 
+def merge_pick_to_text(merge_pick: dict) -> str:
+    """Convert merge-pick metadata to text format."""
+    return render_template("text", "merge_pick", merge_pick=merge_pick)
+
+
+def merge_pick_to_markdown(merge_pick: dict) -> str:
+    """Convert merge-pick metadata to markdown format."""
+    return render_template("markdown", "merge_pick", merge_pick=merge_pick)
+
+
 def merge_description_to_str(
     merge_description: dict, format: str, pretty: bool = False
 ) -> str:

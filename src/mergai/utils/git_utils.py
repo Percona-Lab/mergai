@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from os import PathLike
 from pathlib import Path
-from typing import cast
+from typing import Any
 
 import git
 from git import Blob, Commit, Repo
@@ -175,6 +175,23 @@ def get_current_branch(repo: Repo) -> str:
         return short_sha(repo.head.commit.hexsha)
 
 
+def git_output_to_text(out: Any) -> str:
+    """Normalize a GitPython command result to text.
+
+    ``Git`` command methods return ``str`` by default, but their type hints also
+    permit ``bytes`` (``stdout_as_string=False``) and a
+    ``(status, stdout, stderr)`` tuple (``with_extended_output=True``).
+    Normalize any of these to ``str`` -- decoding bytes and extracting stdout
+    from a tuple -- rather than using a lossy ``str(bytes)`` repr (which would
+    turn ``b""`` into the non-empty ``"b''"``).
+    """
+    if isinstance(out, tuple):
+        out = out[1]  # (status, stdout, stderr)
+    if isinstance(out, bytes):
+        return out.decode("utf-8", "replace")
+    return out if isinstance(out, str) else ""
+
+
 def branch_exists_on_remote(
     repo: Repo, branch_name: str, remote: str = "origin"
 ) -> bool:
@@ -189,7 +206,7 @@ def branch_exists_on_remote(
         True if the branch exists on the remote, False otherwise.
     """
     try:
-        refs = cast(str, repo.git.ls_remote("--heads", remote, branch_name))
+        refs = git_output_to_text(repo.git.ls_remote("--heads", remote, branch_name))
         return bool(refs.strip())
     except Exception:
         return False
@@ -895,8 +912,6 @@ class ForkStatus:
         Returns:
             A dictionary with fork status details suitable for JSON output.
         """
-        from typing import Any
-
         result: dict[str, Any] = {
             "fork_ref": self.fork_ref,
             "upstream_ref": self.upstream_ref,
