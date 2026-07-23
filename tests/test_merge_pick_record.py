@@ -90,6 +90,45 @@ def test_manual_records_pick_with_actor(tmp_path):
     assert "gate bypassed" in pick["summary"]
 
 
+def _set_actions_env(monkeypatch):
+    monkeypatch.setenv("GITHUB_SERVER_URL", "https://github.com")
+    monkeypatch.setenv("GITHUB_REPOSITORY", "percona/percona-server-mongodb")
+    monkeypatch.setenv("GITHUB_RUN_ID", "999")
+    monkeypatch.delenv("GITHUB_RUN_ATTEMPT", raising=False)
+
+
+def test_record_captures_workflow_run_url_when_enabled(tmp_path, monkeypatch):
+    # With run_link enabled in CI, the recorded pick captures the run that made
+    # it so the PR description can link back to the trigger-merge run.
+    _set_actions_env(monkeypatch)
+    app = _app(tmp_path)
+    app.config.run_link.enabled = True
+    res = _run(app, ["--manual", FULL, "--record"])
+    assert res.exit_code == 0, res.output
+    assert app.state.load_pick()["run_url"] == (
+        "https://github.com/percona/percona-server-mongodb/actions/runs/999"
+    )
+
+
+def test_record_omits_run_url_when_disabled(tmp_path, monkeypatch):
+    # Off by default: even in Actions, no run_url is recorded unless opted in.
+    _set_actions_env(monkeypatch)
+    app = _app(tmp_path)
+    res = _run(app, ["--manual", FULL, "--record"])
+    assert res.exit_code == 0, res.output
+    assert "run_url" not in app.state.load_pick()
+
+
+def test_record_omits_run_url_outside_actions(tmp_path, monkeypatch):
+    for key in ("GITHUB_SERVER_URL", "GITHUB_REPOSITORY", "GITHUB_RUN_ID"):
+        monkeypatch.delenv(key, raising=False)
+    app = _app(tmp_path)
+    app.config.run_link.enabled = True
+    res = _run(app, ["--manual", FULL, "--record"])
+    assert res.exit_code == 0, res.output
+    assert "run_url" not in app.state.load_pick()
+
+
 def test_manual_without_record_writes_no_file(tmp_path):
     app = _app(tmp_path)
     res = _run(app, ["--manual", FULL])

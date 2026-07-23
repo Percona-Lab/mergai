@@ -860,10 +860,12 @@ class MergaiNote:
     merge_description: dict | None = None
     # Records how the merged commit was chosen (by `mergai fork merge-pick`).
     # A dict ``{"type": "ai|gate|next|manual", "sha": str, "short_sha": str,
-    # "strategy": str | None, "summary": str}`` where ``type`` is the pick
-    # mechanism, ``strategy`` the matched merge-pick strategy (deterministic
-    # picks only), and ``summary`` a human-readable explanation rendered into
-    # the PR description. Attached to the merge commit's git note.
+    # "strategy": str | None, "summary": str, "run_url": str | None}`` where
+    # ``type`` is the pick mechanism, ``strategy`` the matched merge-pick
+    # strategy (deterministic picks only), ``summary`` a human-readable
+    # explanation rendered into the PR description, and ``run_url`` the
+    # triggering workflow run (recorded only when run-link is enabled). Attached
+    # to the merge commit's git note.
     merge_pick: dict | None = None
     note_index: list[dict] | None = None
     # `ci fix` records one entry here per investigable attempt, whether it

@@ -11,7 +11,7 @@ from ..app import AppContext
 from ..config import DEFAULT_CONFIG_PATH, MergeGateConfig, MergePicksConfig
 from ..merge_pick_strategies import MergePickCommit, MergePickStrategyContext
 from ..merge_pick_strategies.gate import GateDecision, evaluate_merge_gate
-from ..utils import git_utils
+from ..utils import git_utils, run_link
 from ..utils.output import OutputFormat, format_option
 from ..utils.util import (
     format_commit_info,
@@ -1202,16 +1202,25 @@ def _record_pick(
     Read back by ``mergai context init`` and attached to the note as
     ``merge_pick``. Keeping the sha/summary inside mergai avoids round-tripping
     them through the shell between the pick and the init CLI calls.
+
+    When ``run_link.enabled`` is set and recording in CI, the workflow run that
+    made the pick is captured from the GitHub Actions environment
+    (``run_link.run_url``) and stored as ``run_url``, so the PR description can
+    link back to the trigger-merge run that chose this commit. Disabled by
+    default, and always ``None`` (omitted) outside Actions.
     """
-    app.state.save_pick(
-        {
-            "type": pick_type,
-            "sha": sha,
-            "short_sha": git_utils.short_sha(sha),
-            "strategy": strategy,
-            "summary": summary,
-        }
-    )
+    pick: dict = {
+        "type": pick_type,
+        "sha": sha,
+        "short_sha": git_utils.short_sha(sha),
+        "strategy": strategy,
+        "summary": summary,
+    }
+    if app.config.run_link.enabled:
+        url = run_link.run_url()
+        if url:
+            pick["run_url"] = url
+    app.state.save_pick(pick)
 
 
 def _strategy_for_sha(sha: str, prioritized: list[MergePickCommit]) -> str | None:
