@@ -8,6 +8,7 @@ comment-triggered run always gives feedback.
 from types import SimpleNamespace
 
 import mergai.commands.ci as ci
+from mergai.config import MergaiConfig
 
 
 class _FakePull:
@@ -32,6 +33,7 @@ class _FakeRepo:
 class _FakeApp:
     def __init__(self):
         self.gh_repo = _FakeRepo()
+        self.config = MergaiConfig()
 
 
 # --- _post_ci_ack ---------------------------------------------------------

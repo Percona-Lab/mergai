@@ -7,6 +7,7 @@ attempts collapse to a single PR comment per target PR.
 
 import mergai.commands.ci as ci
 from mergai.ci.comments import _render_ci_notification_summary
+from mergai.config import MergaiConfig
 
 
 def _entry(workflow, outcome, *, run_id, pr_number=10, commit_sha=None, summary=""):
@@ -105,6 +106,7 @@ class _FakeApp:
         self.gh = object()
         self.has_note = True
         self.saved = 0
+        self.config = MergaiConfig()
 
     def save_note(self, note):
         self.saved += 1

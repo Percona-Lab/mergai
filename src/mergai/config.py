@@ -1319,6 +1319,38 @@ class WorkflowsConfig:
 
 
 @dataclass
+class RunLinkConfig:
+    """Configuration for linking bot output back to its workflow run.
+
+    When enabled and running under GitHub Actions, mergai appends a footer
+    linking each PR comment it posts to the workflow run that authored it, and
+    records that run's URL in the merge-pick metadata (rendered in the PR
+    description). The link is built from the standard Actions environment
+    (GITHUB_SERVER_URL / GITHUB_REPOSITORY / GITHUB_RUN_ID); outside Actions
+    there is nothing to link and it is a no-op regardless of this flag.
+
+    Disabled by default: forks opt in via `.mergai/config.yml`.
+
+    Attributes:
+        enabled: Surface the workflow-run link on comments and merge-pick
+            metadata. Off by default.
+    """
+
+    enabled: bool = False
+
+    @classmethod
+    def from_dict(cls, data: dict) -> "RunLinkConfig":
+        """Create a RunLinkConfig from a dictionary."""
+        # Only an explicit boolean toggles the feature. A missing/null value -
+        # or a mistyped one (e.g. the string "false", which is truthy) - falls
+        # back to the default rather than being coerced on.
+        enabled = data.get("enabled")
+        if not isinstance(enabled, bool):
+            enabled = cls.enabled
+        return cls(enabled=enabled)
+
+
+@dataclass
 class MergaiConfig:
     """Configuration settings for MergAI.
 
@@ -1354,6 +1386,7 @@ class MergaiConfig:
     context: ContextConfig = field(default_factory=ContextConfig)
     config: InitConfig = field(default_factory=InitConfig)
     workflows: WorkflowsConfig = field(default_factory=WorkflowsConfig)
+    run_link: RunLinkConfig = field(default_factory=RunLinkConfig)
     _raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -1473,6 +1506,12 @@ class MergaiConfig:
             else WorkflowsConfig()
         )
 
+        # Parse run_link section if present
+        run_link_data = data.get("run_link", {})
+        run_link_config = (
+            RunLinkConfig.from_dict(run_link_data) if run_link_data else RunLinkConfig()
+        )
+
         return cls(
             project=project_config,
             fork=fork_config,
@@ -1487,6 +1526,7 @@ class MergaiConfig:
             context=context_config,
             config=config_config,
             workflows=workflows_config,
+            run_link=run_link_config,
             _raw=data,
         )
 

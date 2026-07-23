@@ -17,6 +17,7 @@ import logging
 from typing import Any
 
 from ..config import ReviewConfig
+from ..utils.run_link import append_run_footer
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +56,9 @@ def render_reply_from_record(config: ReviewConfig, record: dict) -> str:
     return render_unfixable_reply(config, record.get("reason", ""))
 
 
-def post_reply(pr: Any, comment_id: int | None, body: str) -> tuple[bool, str | None]:
+def post_reply(
+    pr: Any, comment_id: int | None, body: str, run_link_enabled: bool = False
+) -> tuple[bool, str | None]:
     """Post ``body`` as a reply to the review comment ``comment_id``.
 
     ``comment_id`` is the REST database id of the thread's root comment.
@@ -67,5 +70,7 @@ def post_reply(pr: Any, comment_id: int | None, body: str) -> tuple[bool, str | 
     if comment_id is None:
         log.warning("Cannot post reply: no root comment id; skipping.")
         return False, None
-    reply = pr.create_review_comment_reply(comment_id, body)
+    reply = pr.create_review_comment_reply(
+        comment_id, append_run_footer(body, run_link_enabled)
+    )
     return True, getattr(reply, "html_url", None)

@@ -57,6 +57,7 @@ from ..ci.gate import _actionable_state, _list_run_status, _watched_runs_for_hea
 from ..ci.handlers import get_handler
 from ..solution_types import CI_FIX
 from ..utils.formatters import format_ascii_table
+from ..utils.run_link import append_run_footer
 from .pr import get_prs_for_current_branch
 from .util import ensure_gh_repo
 
@@ -218,7 +219,9 @@ def _post_ci_ack(
         pr_number = prs[0].number
 
     try:
-        app.gh_repo.get_pull(int(pr_number)).create_issue_comment(message)
+        app.gh_repo.get_pull(int(pr_number)).create_issue_comment(
+            append_run_footer(message, app.config.run_link.enabled)
+        )
         click.echo(f"Posted acknowledgement on PR #{pr_number}.")
     except Exception as e:  # noqa: BLE001 - acknowledgement is best-effort
         click.echo(f"warning: could not post acknowledgement: {e}", err=True)
