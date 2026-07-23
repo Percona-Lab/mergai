@@ -16,6 +16,7 @@ from ..utils.branch_name_builder import (
     ParsedBranchName,
 )
 from ..utils.output import OutputFormat, format_option
+from ..utils.run_link import append_run_footer
 from .util import ensure_gh_repo
 
 
@@ -700,7 +701,7 @@ def comment(app: AppContext, pr_type: str | None, body: str, allow_missing: bool
             click.echo(f"warning: {msg} Skipping comment.", err=True)
             return
         raise click.ClickException(msg)
-    pr.create_issue_comment(body)
+    pr.create_issue_comment(append_run_footer(body, app.config.run_link.enabled))
     click.echo(f"Commented on PR #{pr.number}: {pr.html_url}")
 
 

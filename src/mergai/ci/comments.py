@@ -9,6 +9,7 @@ import click
 
 from ..app import AppContext
 from ..config import WorkflowConfig
+from ..utils.run_link import append_run_footer
 from .context_builders import WorkflowContext
 
 log = logging.getLogger(__name__)
@@ -88,7 +89,9 @@ def _post_max_attempts_comment(
         f"{config.max_attempts} attempts. Manual intervention required."
     )
     try:
-        app.gh_repo.get_pull(pr_number).create_issue_comment(body)
+        app.gh_repo.get_pull(pr_number).create_issue_comment(
+            append_run_footer(body, app.config.run_link.enabled)
+        )
     except Exception as e:  # noqa: BLE001 — best-effort notification
         log.warning("Failed to post PR comment on #%s: %s", pr_number, e)
 
@@ -103,7 +106,9 @@ def _create_pr_comment(
     at every run in the batch, not just the first.
     """
     try:
-        return app.gh_repo.get_pull(int(pr_number)).create_issue_comment(body)
+        return app.gh_repo.get_pull(int(pr_number)).create_issue_comment(
+            append_run_footer(body, app.config.run_link.enabled)
+        )
     except Exception as e:  # noqa: BLE001 — wrap external API errors
         runs = ", ".join(run_ids)
         plural = "run" if len(run_ids) == 1 else "runs"

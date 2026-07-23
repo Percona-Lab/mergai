@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from mergai.config import ReviewConfig
+from mergai.config import MergaiConfig, ReviewConfig
 from mergai.review import replies
 from mergai.review.context import build_review_context
 from mergai.review.handler import make_review_validator
@@ -729,8 +729,13 @@ def test_post_ack_returns_url_on_success_and_none_on_failure():
         def create_issue_comment(self, body):
             raise RuntimeError("boom")
 
-    app_ok = SimpleNamespace(gh_repo=SimpleNamespace(get_pull=lambda n: _PullOK()))
-    app_fail = SimpleNamespace(gh_repo=SimpleNamespace(get_pull=lambda n: _PullFail()))
+    cfg = MergaiConfig()
+    app_ok = SimpleNamespace(
+        gh_repo=SimpleNamespace(get_pull=lambda n: _PullOK()), config=cfg
+    )
+    app_fail = SimpleNamespace(
+        gh_repo=SimpleNamespace(get_pull=lambda n: _PullFail()), config=cfg
+    )
 
     assert review_cmd._post_ack(app_ok, 1, "m", dry_run=False) == "https://gh/c/1"
     assert review_cmd._post_ack(app_fail, 1, "m", dry_run=False) is None

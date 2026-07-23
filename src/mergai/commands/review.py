@@ -32,6 +32,7 @@ from ..review.threads import (
     thread_skip_reason,
 )
 from ..solution_types import REVIEW_FIX
+from ..utils.run_link import append_run_footer
 from .pr import get_prs_for_current_branch
 from .util import ensure_gh_repo
 
@@ -138,7 +139,9 @@ def _post_ack(
         click.echo(f"[dry-run] would comment on PR #{pr_number}: {message}")
         return None
     try:
-        comment = app.gh_repo.get_pull(pr_number).create_issue_comment(message)
+        comment = app.gh_repo.get_pull(pr_number).create_issue_comment(
+            append_run_footer(message, app.config.run_link.enabled)
+        )
         click.echo(f"Posted acknowledgement on PR #{pr_number}.")
         return getattr(comment, "html_url", None) or ""
     except Exception as e:  # noqa: BLE001 - acknowledgement is best-effort
@@ -618,7 +621,10 @@ def post(app: AppContext, dry_run: bool, force: bool) -> None:
         if pr_number not in pr_cache:
             pr_cache[pr_number] = app.gh_repo.get_pull(int(pr_number))
         posted_ok, comment_url = post_reply(
-            pr_cache[pr_number], rec.get("comment_id"), body
+            pr_cache[pr_number],
+            rec.get("comment_id"),
+            body,
+            app.config.run_link.enabled,
         )
         if posted_ok:
             app.note.mark_review_comment_posted(
