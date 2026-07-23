@@ -198,6 +198,45 @@ def context():
     pass
 
 
+def _attach_recorded_pick(
+    app: AppContext, note: MergaiNote, merge_commit_sha: str
+) -> None:
+    """Attach merge-pick metadata recorded by `merge-pick --record`, if present.
+
+    Reads the pick file from the state store and sets ``note.merge_pick``. A
+    stale file (its sha does not match the commit being initialized) is ignored
+    with a warning rather than attached, so a leftover pick can never be
+    mis-attributed to a different merge.
+    """
+    if not app.state.pick_exists():
+        return
+
+    pick = app.state.load_pick()
+    pick_sha = pick.get("sha", "")
+    # A pick with no sha is corrupt/partial: we cannot verify it belongs to this
+    # merge, so ignore it rather than attach it blindly.
+    if not pick_sha:
+        click.echo(
+            "Warning: ignoring recorded merge-pick with no sha.",
+            err=True,
+        )
+        return
+
+    # Compare on the shorter of the two lengths so a short/full sha mismatch in
+    # either direction (recorded short, init full, or vice-versa) still matches.
+    if merge_commit_sha:
+        n = min(len(pick_sha), len(merge_commit_sha))
+        if pick_sha[:n].lower() != merge_commit_sha[:n].lower():
+            click.echo(
+                f"Warning: ignoring recorded merge-pick for {pick_sha} "
+                f"(does not match merge commit {merge_commit_sha}).",
+                err=True,
+            )
+            return
+
+    note.set_merge_pick(pick)
+
+
 @context.command()
 @click.pass_obj
 @click.argument("commit", type=str, required=False, default=None)
@@ -297,6 +336,13 @@ def init(
     merge_info.bind_repo(app.repo)
 
     note = MergaiNote.create(merge_info, app.repo)
+
+    # Attach the merge-pick metadata recorded by `mergai fork merge-pick
+    # --record` (if any). The pick file is the handoff between the pick and
+    # init CLI calls. Guard against a stale file from an unrelated pick by
+    # matching its sha to the commit we are initializing.
+    _attach_recorded_pick(app, note, merge_commit_sha)
+
     app.save_note(note)
 
     _display_merge_info_summary(

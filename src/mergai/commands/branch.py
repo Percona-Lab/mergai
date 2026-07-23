@@ -9,7 +9,6 @@ branch names used in the merge conflict resolution workflow:
 """
 
 import json
-from typing import cast
 
 import click
 
@@ -363,7 +362,9 @@ def _remote_mergai_refs(app: AppContext, remote: str = "origin") -> list[str]:
     """Branch names under the mergai namespace on ``remote`` (empty on error)."""
     prefix = app.config.branch.working_prefix
     try:
-        out = cast(str, app.repo.git.ls_remote("--heads", remote, f"{prefix}*"))
+        out = git_utils.git_output_to_text(
+            app.repo.git.ls_remote("--heads", remote, f"{prefix}*")
+        )
     except Exception as e:
         click.echo(f"warning: failed to list remote branches: {e}", err=True)
         return []

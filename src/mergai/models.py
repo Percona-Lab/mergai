@@ -858,6 +858,13 @@ class MergaiNote:
     merge_context: MergeContext | None = None
     solutions: list[dict] | None = None
     merge_description: dict | None = None
+    # Records how the merged commit was chosen (by `mergai fork merge-pick`).
+    # A dict ``{"type": "ai|gate|next|manual", "sha": str, "short_sha": str,
+    # "strategy": str | None, "summary": str}`` where ``type`` is the pick
+    # mechanism, ``strategy`` the matched merge-pick strategy (deterministic
+    # picks only), and ``summary`` a human-readable explanation rendered into
+    # the PR description. Attached to the merge commit's git note.
+    merge_pick: dict | None = None
     note_index: list[dict] | None = None
     # `ci fix` records one entry here per investigable attempt, whether it
     # fixed the failure (`outcome="fixed"`, with a `commit_sha`) or could
@@ -925,6 +932,7 @@ class MergaiNote:
             ),
             solutions=data.get("solutions"),
             merge_description=data.get("merge_description"),
+            merge_pick=data.get("merge_pick"),
             note_index=data.get("note_index"),
             ci_comments=data.get("ci_comments"),
             review_comments=data.get("review_comments"),
@@ -1010,6 +1018,10 @@ class MergaiNote:
             if "merge_description" in git_note and "merge_description" not in combined:
                 combined["merge_description"] = git_note["merge_description"]
 
+            # merge_pick - take from first commit that has it
+            if "merge_pick" in git_note and "merge_pick" not in combined:
+                combined["merge_pick"] = git_note["merge_pick"]
+
         # Cast the result since from_dict returns MergaiNote, but cls is type[T]
         # where T is bound to MergaiNote
         note = cls.from_dict(combined, repo)
@@ -1048,6 +1060,11 @@ class MergaiNote:
     def has_merge_description(self) -> bool:
         """Check if merge_description is present."""
         return self.merge_description is not None
+
+    @property
+    def has_merge_pick(self) -> bool:
+        """Check if merge_pick is present."""
+        return self.merge_pick is not None
 
     @property
     def has_note_index(self) -> bool:
@@ -1318,6 +1335,19 @@ class MergaiNote:
         self.merge_description = description
         return self
 
+    def set_merge_pick(self, merge_pick: dict) -> "MergaiNote":
+        """Set merge_pick.
+
+        Args:
+            merge_pick: Merge-pick metadata dict (type, sha, short_sha,
+                strategy, summary).
+
+        Returns:
+            Self for method chaining.
+        """
+        self.merge_pick = merge_pick
+        return self
+
     def add_note_index_entry(self, sha: str, fields: list[str]) -> "MergaiNote":
         """Add an entry to note_index.
 
@@ -1372,6 +1402,9 @@ class MergaiNote:
         if self.has_merge_description:
             all_fields.append("merge_description")
 
+        if self.has_merge_pick:
+            all_fields.append("merge_pick")
+
         if self.has_squashed_commits:
             all_fields.append("squashed_commits")
 
@@ -1409,6 +1442,15 @@ class MergaiNote:
             Self for method chaining.
         """
         self.merge_description = None
+        return self
+
+    def drop_merge_pick(self) -> "MergaiNote":
+        """Remove merge_pick.
+
+        Returns:
+            Self for method chaining.
+        """
+        self.merge_pick = None
         return self
 
     def drop_solution(self, all: bool = False) -> "MergaiNote":
@@ -1650,6 +1692,9 @@ class MergaiNote:
         if self.has_merge_description and "merge_description" not in committed_fields:
             uncommitted.append("merge_description")
 
+        if self.has_merge_pick and "merge_pick" not in committed_fields:
+            uncommitted.append("merge_pick")
+
         return uncommitted
 
     def is_fully_committed(self) -> bool:
@@ -1680,6 +1725,8 @@ class MergaiNote:
             result["solutions"] = self.solutions
         if self.merge_description:
             result["merge_description"] = self.merge_description
+        if self.merge_pick:
+            result["merge_pick"] = self.merge_pick
         if self.note_index:
             result["note_index"] = self.note_index
         if self.ci_comments:

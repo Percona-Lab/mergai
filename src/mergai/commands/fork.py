@@ -893,6 +893,36 @@ def status(
         "sha, short_sha, reasoning, source - for further processing."
     ),
 )
+@click.option(
+    "--manual",
+    "manual",
+    type=str,
+    default=None,
+    metavar="SHA",
+    help=(
+        "Record SHA as an externally-chosen (manual) pick without evaluating "
+        "the gate or any strategy. Use with --record so `mergai context init` "
+        "picks it up. Mutually exclusive with --ai/--gate/--next/--plan/--list."
+    ),
+)
+@click.option(
+    "--actor",
+    "actor",
+    type=str,
+    default=None,
+    help="With --manual, the actor who chose the pick (recorded in the summary).",
+)
+@click.option(
+    "--record",
+    "record",
+    is_flag=True,
+    default=False,
+    help=(
+        "Persist the chosen pick's metadata (type, sha, strategy, summary) to "
+        "the state store so `mergai context init` attaches it to the note as "
+        "merge_pick. Applies to --ai/--gate/--next/--manual picks."
+    ),
+)
 def merge_pick(
     app: AppContext,
     upstream_ref: str | None,
@@ -904,6 +934,9 @@ def merge_pick(
     gate: bool,
     force: bool,
     as_json: bool,
+    manual: str | None,
+    actor: str | None,
+    record: bool,
 ):
     """Suggest commits to merge based on configured priority strategies.
 
@@ -937,12 +970,26 @@ def merge_pick(
     """
     selected_modes = [
         name
-        for name, used in (("--plan", plan), ("--ai", ai), ("--gate", gate))
+        for name, used in (
+            ("--plan", plan),
+            ("--ai", ai),
+            ("--gate", gate),
+            ("--manual", manual is not None),
+        )
         if used
     ]
     if len(selected_modes) > 1:
         click.echo(
             f"Error: {', '.join(selected_modes)} are mutually exclusive.", err=True
+        )
+        raise SystemExit(1)
+
+    # --manual records an externally-chosen sha and returns before the
+    # listing/next paths, so combining it with --next/--list would silently
+    # ignore them. Reject rather than ignore (keeps the help text honest).
+    if manual is not None and (next_only or list_commits):
+        click.echo(
+            "Error: --manual is mutually exclusive with --next/--list.", err=True
         )
         raise SystemExit(1)
 
@@ -955,6 +1002,36 @@ def merge_pick(
     if as_json and not ai:
         click.echo("Error: --json requires --ai.", err=True)
         raise SystemExit(1)
+    if actor is not None and manual is None:
+        click.echo("Error: --actor requires --manual.", err=True)
+        raise SystemExit(1)
+    # --record only makes sense for an actual pick. Reject it for the read-only
+    # paths (--plan/--list/default listing) so it can never clear the recorded
+    # pick file without writing a replacement (a destructive no-op).
+    if record and not (ai or gate or next_only or manual is not None):
+        click.echo(
+            "Error: --record requires --ai, --gate, --next, or --manual.", err=True
+        )
+        raise SystemExit(1)
+
+    # A fresh --record run must not leave a stale pick file behind if no pick is
+    # made (gate closed / nothing to merge): clear it up front so only a real
+    # pick below writes the file.
+    if record:
+        app.state.remove_pick()
+
+    # Manual pick: the sha is chosen externally (e.g. a dispatched workflow
+    # input), so there is no gate to evaluate and no strategy to compute. Record
+    # it (when asked) and echo it back for capture, then return.
+    if manual is not None:
+        who = f"@{actor}" if actor else "a maintainer"
+        summary = f"Manually specified by {who} via workflow_dispatch; gate bypassed."
+        if record:
+            _record_pick(
+                app, sha=manual, pick_type="manual", strategy=None, summary=summary
+            )
+        click.echo(manual)
+        return
 
     upstream_ref = resolve_upstream_ref(app, upstream_ref)
 
@@ -971,12 +1048,12 @@ def merge_pick(
 
     if ai:
         _merge_pick_ai(
-            app, fork_status, upstream_ref, fork_ref, next_only, force, as_json
+            app, fork_status, upstream_ref, fork_ref, next_only, force, as_json, record
         )
         return
 
     if gate:
-        _merge_pick_gate(app, fork_status, upstream_ref, fork_ref, force)
+        _merge_pick_gate(app, fork_status, upstream_ref, fork_ref, force, record)
         return
 
     if fork_status.is_up_to_date:
@@ -1010,7 +1087,20 @@ def merge_pick(
     if next_only:
         # Output only the hash of the first prioritized commit
         if prioritized:
-            click.echo(prioritized[0].commit.hexsha)
+            pick = prioritized[0]
+            sha = pick.commit.hexsha
+            if record:
+                _record_pick(
+                    app,
+                    sha=sha,
+                    pick_type="next",
+                    strategy=pick.strategy_name,
+                    summary=(
+                        "Raw strategy pick (--next; no gate, no window cap) - "
+                        f"matched strategy `{pick.strategy_name}`."
+                    ),
+                )
+            click.echo(sha)
         # If no prioritized commits, output nothing (success)
         # Users can enable most_recent_fallback in config to get a fallback commit
         return
@@ -1043,6 +1133,37 @@ def merge_pick(
         print_or_page("\n".join(output_lines))
 
 
+@fork.command("show-pick")
+@format_option(default=OutputFormat.TEXT)
+@click.pass_obj
+def show_pick(app: AppContext, format: str):
+    """Render the pick recorded by `merge-pick --record`.
+
+    Reads the merge-pick metadata written to the state store by
+    ``mergai fork merge-pick --record`` and prints it in the selected format
+    (the same summary attached to the note as ``merge_pick`` and rendered into
+    the PR description). Intended to be redirected into a CI job summary, e.g.::
+
+        mergai fork merge-pick --gate --record
+        mergai fork show-pick --format markdown >> "$GITHUB_STEP_SUMMARY"
+
+    Prints nothing and exits 0 when no pick has been recorded, so it is safe to
+    call unconditionally.
+    """
+    from ..utils import formatters
+
+    if not app.state.pick_exists():
+        return
+
+    pick = app.state.load_pick()
+    if format == OutputFormat.JSON.value:
+        click.echo(json.dumps(pick, indent=2))
+    elif format == OutputFormat.MARKDOWN.value:
+        click.echo(formatters.merge_pick_to_markdown(pick))
+    else:
+        click.echo(formatters.merge_pick_to_text(pick))
+
+
 def _merge_pick_plan(
     app: AppContext,
     fork_status,
@@ -1068,12 +1189,46 @@ def _merge_pick_plan(
     print(json.dumps({"action": action, "reason": decision.reason}))
 
 
+def _record_pick(
+    app: AppContext,
+    *,
+    sha: str,
+    pick_type: str,
+    strategy: str | None,
+    summary: str,
+) -> None:
+    """Persist the chosen pick's metadata to the state store.
+
+    Read back by ``mergai context init`` and attached to the note as
+    ``merge_pick``. Keeping the sha/summary inside mergai avoids round-tripping
+    them through the shell between the pick and the init CLI calls.
+    """
+    app.state.save_pick(
+        {
+            "type": pick_type,
+            "sha": sha,
+            "short_sha": git_utils.short_sha(sha),
+            "strategy": strategy,
+            "summary": summary,
+        }
+    )
+
+
+def _strategy_for_sha(sha: str, prioritized: list[MergePickCommit]) -> str | None:
+    """Return the merge-pick strategy that matched ``sha``, if any."""
+    for pc in prioritized:
+        if pc.commit.hexsha == sha:
+            return pc.strategy_name
+    return None
+
+
 def _merge_pick_gate(
     app: AppContext,
     fork_status,
     upstream_ref: str,
     fork_ref: str,
     force: bool,
+    record: bool = False,
 ) -> None:
     """Gate-respecting deterministic pick (token-free), as a bare sha.
 
@@ -1103,6 +1258,18 @@ def _merge_pick_gate(
         click.echo("No candidate commits in the window.", err=True)
         return
 
+    if record:
+        strategy = _strategy_for_sha(sha, prioritized)
+        if strategy:
+            summary = (
+                f"Gate-respecting deterministic pick - matched strategy `{strategy}`."
+            )
+        else:
+            summary = (
+                "Gate-respecting deterministic pick - window tip (no strategy matched)."
+            )
+        _record_pick(app, sha=sha, pick_type="gate", strategy=strategy, summary=summary)
+
     click.echo(sha)
 
 
@@ -1129,6 +1296,7 @@ def _merge_pick_ai(
     next_only: bool,
     force: bool,
     as_json: bool,
+    record: bool = False,
 ) -> None:
     """AI pick: ask the agent which commit to merge to.
 
@@ -1174,6 +1342,19 @@ def _merge_pick_ai(
         ``source`` is ``"ai"`` for an agent pick or ``"deterministic"`` when
         the deterministic fallback produced it.
         """
+        # Record before rendering so every output mode persists the pick. The
+        # recorded type is always "ai" (the mechanism); a fallback is noted in
+        # the summary rather than as a distinct type.
+        if record:
+            strategy = _strategy_for_sha(sha, prioritized)
+            if source == "ai":
+                summary = reasoning or "AI pick (no reasoning provided)."
+            else:
+                summary = "AI pick unavailable; fell back to deterministic pick"
+                summary += f" - matched strategy `{strategy}`." if strategy else "."
+            _record_pick(
+                app, sha=sha, pick_type="ai", strategy=strategy, summary=summary
+            )
         if next_only:
             click.echo(sha)
             return

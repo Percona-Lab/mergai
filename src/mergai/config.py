@@ -72,7 +72,7 @@ class MergeGateConfig:
                     f"'merge_gate.{name}' must be an integer, "
                     f"got {type(value).__name__}"
                 )
-            return value
+            return int(value)
 
         # `null` (key present, value None) falls back to the defaults; an
         # explicit empty list still intentionally disables force strategies. A

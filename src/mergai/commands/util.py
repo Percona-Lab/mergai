@@ -262,6 +262,17 @@ def convert_note_to_text_summary(note: dict) -> str:
         output.append(f"    Merge Commit: {mi.get('merge_commit', 'unknown')[:11]}")
         output.append("")
 
+    # Merge Pick
+    if "merge_pick" in note:
+        mp = note["merge_pick"]
+        output.append("  Merge Pick:")
+        output.append(f"    Type: {mp.get('type', 'unknown')}")
+        if mp.get("strategy"):
+            output.append(f"    Strategy: {mp.get('strategy')}")
+        if mp.get("summary"):
+            output.append(f"    Summary: {mp.get('summary')}")
+        output.append("")
+
     # Merge Context
     if "merge_context" in note:
         mc = note["merge_context"]
@@ -421,6 +432,8 @@ def convert_note(
         if show_merge_info and "merge_info" in note:
             merge_info = MergeInfo.from_dict(note["merge_info"], repo)
             output_str += formatters.merge_info_to_markdown(merge_info) + "\n"
+        if "merge_pick" in note:
+            output_str += formatters.merge_pick_to_markdown(note["merge_pick"]) + "\n"
         if show_merge_context and "merge_context" in note:
             merge_ctx = MergeContext.from_dict(note["merge_context"], repo)
             output_str += formatters.merge_context_to_markdown(merge_ctx) + "\n"

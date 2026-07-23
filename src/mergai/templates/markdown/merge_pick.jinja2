@@ -1,0 +1,7 @@
+## Merge Pick
+
+**Selected by:** `{{ merge_pick.type }}`{% if merge_pick.strategy %} (strategy: `{{ merge_pick.strategy }}`){% endif %}
+
+**Commit:** `{{ merge_pick.short_sha if merge_pick.short_sha else merge_pick.sha }}`
+
+{{ merge_pick.summary }}

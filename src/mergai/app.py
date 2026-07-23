@@ -591,6 +591,8 @@ class AppContext:
                 selective_note["merge_context"] = note_dict["merge_context"]
             elif field == "merge_description" and self.note.has_merge_description:
                 selective_note["merge_description"] = self.note.merge_description
+            elif field == "merge_pick" and self.note.has_merge_pick:
+                selective_note["merge_pick"] = self.note.merge_pick
             elif field == "squashed_commits" and self.note.has_squashed_commits:
                 selective_note["squashed_commits"] = self.note.squashed_commits
 
@@ -755,6 +757,8 @@ class AppContext:
         fields = ["conflict_context", "merge_context"]
         if self.note.has_merge_description:
             fields.append("merge_description")
+        if self.note.has_merge_pick:
+            fields.append("merge_pick")
         self.add_selective_note(self.repo.head.commit.hexsha, fields)
 
     def commit_merge(self):
@@ -777,6 +781,8 @@ class AppContext:
         fields = ["merge_context"]
         if self.note.has_merge_description:
             fields.append("merge_description")
+        if self.note.has_merge_pick:
+            fields.append("merge_pick")
         self.add_selective_note(self.repo.head.commit.hexsha, fields)
 
     def _collect_commits_for_squash(

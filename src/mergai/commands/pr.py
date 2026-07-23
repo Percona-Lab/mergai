@@ -202,6 +202,9 @@ def _build_solutions_pr_body(app: AppContext, skip_commit_list: bool = False) ->
 
     body = formatters.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
+    if app.note.has_merge_pick and app.note.merge_pick is not None:
+        body += formatters.merge_pick_to_markdown(app.note.merge_pick)
+        body += "\n\n"
     if app.note.has_merge_context and app.note.merge_context is not None:
         body += formatters.merge_context_to_markdown(
             app.note.merge_context,
@@ -230,6 +233,9 @@ def _build_merge_pr_body(app: AppContext, skip_commit_list: bool = False) -> str
 
     body = formatters.merge_info_to_markdown(app.note.merge_info, markdown_config)
     body += "\n\n"
+    if app.note.has_merge_pick and app.note.merge_pick is not None:
+        body += formatters.merge_pick_to_markdown(app.note.merge_pick)
+        body += "\n\n"
     if app.note.has_merge_context and app.note.merge_context is not None:
         body += formatters.merge_context_to_markdown(
             app.note.merge_context,
