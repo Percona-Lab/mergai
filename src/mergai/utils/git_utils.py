@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from enum import Enum
 from os import PathLike
 from pathlib import Path
+from typing import cast
 
 import git
 from git import Blob, Commit, Repo
@@ -188,7 +189,7 @@ def branch_exists_on_remote(
         True if the branch exists on the remote, False otherwise.
     """
     try:
-        refs: str = repo.git.ls_remote("--heads", remote, branch_name)
+        refs = cast(str, repo.git.ls_remote("--heads", remote, branch_name))
         return bool(refs.strip())
     except Exception:
         return False
