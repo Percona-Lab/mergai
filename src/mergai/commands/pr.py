@@ -675,32 +675,67 @@ def number(app: AppContext, pr_type: str | None):
     "--allow-missing",
     is_flag=True,
     default=False,
-    help="Warn and exit 0 if no open PR exists for the type, instead of failing.",
+    help="Warn and exit 0 if the target PR does not exist, instead of failing.",
+)
+@click.option(
+    "--pr-number",
+    "-n",
+    type=int,
+    default=None,
+    help=(
+        "Comment on this PR by number regardless of its state (open, closed, "
+        "or merged). Mutually exclusive with PR_TYPE, which only resolves an "
+        "open PR."
+    ),
 )
 @click.argument(
     "pr_type",
     type=click.Choice(["main", "solution", "semantic"], case_sensitive=False),
     required=False,
 )
-def comment(app: AppContext, pr_type: str | None, body: str, allow_missing: bool):
-    """Post a comment on the open PR for a branch type.
+def comment(
+    app: AppContext,
+    pr_type: str | None,
+    body: str,
+    allow_missing: bool,
+    pr_number: int | None,
+):
+    """Post a comment on a mergai PR.
 
-    Resolves the open PR whose head is the branch for PR_TYPE (auto-detected
-    from the current branch when omitted) and posts BODY as a comment. With
-    --allow-missing, a missing PR is a warning + no-op (exit 0) rather than an
-    error -- handy for best-effort cross-PR notifications from CI.
+    By default resolves the *open* PR whose head is the branch for PR_TYPE
+    (auto-detected from the current branch when omitted) and posts BODY as a
+    comment. Pass --pr-number to comment on a specific PR by number regardless
+    of its state -- e.g. a PR that a fast-forward merge has already closed,
+    which the open-PR lookup can no longer resolve. With --allow-missing, a
+    missing target PR is a warning + no-op (exit 0) rather than an error --
+    handy for best-effort cross-PR notifications from CI.
 
     \b
         mergai pr --repo owner/name comment main --body "Fixes opened in #123"
+        mergai pr --repo owner/name comment --pr-number 42 --body "Merged."
     """
-    pr_type = _resolve_pr_type_arg(app, pr_type)
-    pr = _resolve_open_pr_for_type(app, pr_type)
-    if pr is None:
-        msg = f"No open {pr_type} PR found."
-        if allow_missing:
-            click.echo(f"warning: {msg} Skipping comment.", err=True)
-            return
-        raise click.ClickException(msg)
+    if pr_number is not None:
+        if pr_type is not None:
+            raise click.UsageError("Pass either PR_TYPE or --pr-number, not both.")
+        try:
+            pr = app.gh_repo.get_pull(pr_number)
+        except GithubException as e:
+            if allow_missing and e.status == 404:
+                click.echo(
+                    f"warning: PR #{pr_number} not found. Skipping comment.", err=True
+                )
+                return
+            msg = e.data.get("message", str(e)) if isinstance(e.data, dict) else str(e)
+            raise click.ClickException(f"Failed to fetch PR #{pr_number}: {msg}") from e
+    else:
+        pr_type = _resolve_pr_type_arg(app, pr_type)
+        pr = _resolve_open_pr_for_type(app, pr_type)
+        if pr is None:
+            msg = f"No open {pr_type} PR found."
+            if allow_missing:
+                click.echo(f"warning: {msg} Skipping comment.", err=True)
+                return
+            raise click.ClickException(msg)
     pr.create_issue_comment(append_run_footer(body, app.config.run_link.enabled))
     click.echo(f"Commented on PR #{pr.number}: {pr.html_url}")
 
