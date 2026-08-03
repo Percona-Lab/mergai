@@ -9,6 +9,12 @@ jobs:
   pytest:
     name: Pytest
     runs-on: ubuntu-latest
+    permissions:
+      # Needed on push to master so the action can store coverage data and the
+      # badge on its data branch. Pull requests from forks get a read-only
+      # token regardless; the comment is posted by the separate coverage
+      # workflow (coverage.yml).
+      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -21,4 +27,17 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Run pytest
-        run: pytest
+        run: pytest --cov=mergai --cov-report=term-missing
+
+      - name: Coverage comment
+        id: coverage_comment
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
+
+      - name: Store coverage comment for the reporting workflow
+        uses: actions/upload-artifact@v4
+        if: steps.coverage_comment.outputs.COMMENT_FILE_WRITTEN == 'true'
+        with:
+          name: python-coverage-comment-action
+          path: python-coverage-comment-action.txt
