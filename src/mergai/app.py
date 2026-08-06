@@ -790,8 +790,24 @@ class AppContext:
     ) -> list[tuple[git.Commit, dict | None]]:
         """Collect commits from HEAD to target_sha with their notes.
 
-        Iterates from HEAD backwards until reaching target_sha (exclusive),
-        collecting each commit and its mergai git note (if any).
+        Walks the first-parent chain from HEAD down to ``target_sha``
+        (exclusive), collecting each commit and its mergai git note (if any).
+
+        A *solution/review PR merge* on that chain (a merge whose second parent
+        is a review branch rather than the upstream merge commit, e.g. "Merge
+        pull request #N from .../solution") is expanded into the commits it
+        brought in on its second-parent side, so their notes -- and crucially
+        their ``solutions`` -- are collected too. Without this, a conflict
+        resolved via a Conflict Solution PR has its resolution/fix commits
+        stranded on the second parent, and their ``solutions`` are silently
+        dropped from the squashed note -- which later breaks ``mergai rebase``
+        auto-resolution (it finds ``conflict_context`` but no solution to
+        reapply). This mirrors _collect_squashed_commit_entries so the combined
+        note's ``solutions`` and the ``squashed_commits`` record stay consistent.
+
+        The mergai merge commit itself (second parent == the upstream merge
+        commit) is kept as a leaf and never descended into, so upstream history
+        is not pulled in.
 
         Args:
             target_sha: The SHA to stop at (not included in results).
@@ -811,18 +827,51 @@ class AppContext:
                 "Cannot determine commits to squash."
             )
 
-        # Walk first-parent only so we collect commits added on top of
-        # target_branch_sha and don't descend into the second parent of the
-        # mergai merge commit (which would pull in the upstream history).
-        commits_with_notes = []
-        for commit in self.repo.iter_commits(
-            f"{target_sha_full}..HEAD", first_parent=True
-        ):
-            git_note = self.get_note_from_commit(commit.hexsha)
-            commits_with_notes.append((commit, git_note))
+        try:
+            upstream_sha = self.repo.commit(
+                self.note.merge_info.merge_commit_sha
+            ).hexsha
+        except (ValueError, git.exc.BadName, git.exc.BadObject):
+            upstream_sha = None
 
-        # Reverse to get oldest-first order
-        commits_with_notes.reverse()
+        commits_with_notes: list[tuple[git.Commit, dict | None]] = []
+        seen: set[str] = set()
+
+        def add_commit(commit: git.Commit) -> None:
+            if commit.hexsha in seen:
+                return
+            seen.add(commit.hexsha)
+            # A solution/review PR merge (second parent is a review branch, not
+            # the upstream merge commit) contributes the commits it merged in --
+            # the resolution/fix commits that carry the solution notes -- not
+            # itself. Descend into its second-parent side instead.
+            if (
+                len(commit.parents) >= 2
+                and upstream_sha is not None
+                and commit.parents[1].hexsha != upstream_sha
+            ):
+                base = commit.parents[0].hexsha
+                tip = commit.parents[1].hexsha
+                merged = list(
+                    self.repo.iter_commits(f"{base}..{tip}", first_parent=True)
+                )
+                merged.reverse()  # oldest-first
+                for mc in merged:
+                    add_commit(mc)
+                return
+            commits_with_notes.append(
+                (commit, self.get_note_from_commit(commit.hexsha))
+            )
+
+        # Walk first-parent from target..HEAD, oldest-first, expanding any
+        # solution/review PR merges into the commits they brought in.
+        first_parent = list(
+            self.repo.iter_commits(f"{target_sha_full}..HEAD", first_parent=True)
+        )
+        first_parent.reverse()  # oldest-first
+        for commit in first_parent:
+            add_commit(commit)
+
         return commits_with_notes
 
     @staticmethod
@@ -866,7 +915,7 @@ class AppContext:
             upstream_sha = self.repo.commit(
                 self.note.merge_info.merge_commit_sha
             ).hexsha
-        except Exception:
+        except (ValueError, git.exc.BadName, git.exc.BadObject):
             upstream_sha = None
 
         def add(sha: str, message: str) -> None:
