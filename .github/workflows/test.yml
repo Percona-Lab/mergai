@@ -9,6 +9,13 @@ jobs:
   pytest:
     name: Pytest
     runs-on: ubuntu-latest
+    permissions:
+      # contents: write lets the action store coverage data and the badge on
+      # its data branch (on push to master). pull-requests: write lets it post
+      # the coverage comment on pull requests. Note: fork PRs get a read-only
+      # token from GitHub regardless, so they will not receive a comment.
+      contents: write
+      pull-requests: write
     steps:
       - uses: actions/checkout@v4
 
@@ -21,4 +28,9 @@ jobs:
         run: pip install -e ".[dev]"
 
       - name: Run pytest
-        run: pytest
+        run: pytest --cov=mergai --cov-report=term-missing
+
+      - name: Coverage comment
+        uses: py-cov-action/python-coverage-comment-action@v3
+        with:
+          GITHUB_TOKEN: ${{ github.token }}
